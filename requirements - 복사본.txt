@@ -1,0 +1,7 @@
+# PC 지상국 도구 의존성 (scripts/)
+# telemetry_schema.py와 대부분의 tools는 표준 라이브러리만 사용한다.
+# magcal_fit.py와 그 합성 검증은 제약 타원체 선형대수에 NumPy를 사용한다.
+numpy>=1.26
+matplotlib>=3.7
+pandas>=2.0
+pygame>=2.5
