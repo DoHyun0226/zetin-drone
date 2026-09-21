@@ -17,13 +17,16 @@ differential response in g. Probe-state values are 0=WAIT, 1=DIP,
 80% of the requested dip during the sampling interval). Fields 44-55 append
 IMU1 and IMU2 gyro (dps) and accel (g) XYZ values in the same body frame as
 the fused fields. Per-IMU gyro is sampled after its software LPF; per-IMU
-accel has no software LPF. When ``Active_IMUs == 2`` and
-``Fault_Disagree == 0``, each fused gyro/accel axis equals the average of the
-corresponding IMU1 and IMU2 axes within floating-point rounding error.
+accel has no software LPF. Within one control tick, when ``Active_IMUs == 2``
+and ``Fault_Disagree == 0``, the fused gyro/accel axes are the averages of the
+corresponding IMU1 and IMU2 axes. The twelve per-IMU values share a snapshot,
+but the complete ASCII telemetry packet is not an atomic control-tick
+snapshot. Other fields may come from a different tick, so per-row equality
+within rounding error is not a telemetry guarantee.
 Fields 56-58 append the roll, pitch, and yaw target angles. In normal flight,
 ``targetAngleX`` and ``targetAngleY`` are ``constrain(command + trim, ...)``,
 so these setpoints already include ``Trim_Roll``/``Trim_Pitch``; adding the
-trim again double-counts it. During auto-land (``Failsafe_Phase != 0``), the
+trim again double-counts it. During descent (``Failsafe_Phase == 1``), the
 reported targets contain ``trim_roll``, ``trim_pitch``, and ``fs_hold_yaw``:
 the level descent setpoint and held heading. ``TgtAngle_Yaw`` is
 ``yawOuter.target_angle_deg``; when ``Yaw_Hold == 1`` it is the held heading,

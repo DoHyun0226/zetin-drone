@@ -119,8 +119,6 @@ def maintained_markdown_files(repo):
         repo / "docs/firmware_catalog.md",
         repo / "docs/udp_protocol.md",
         repo / "docs/migration_map.md",
-        repo / "docs/oracle_web_hosting.md",
-        repo / "docs/presentations/ai-startup-camp-drone/mobile-lab/README.md",
         repo / "firmware/README.md",
         repo / "scripts/README.md",
         repo / "logs/README.md",

@@ -1200,7 +1200,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         ]
 
     def test_send_trim_sends_once_without_blocking_the_rc_thread(self):
-        # send_trim은 rcr을 50Hz로 보내는 controller_thread에서 호출된다.
+        # send_trim은 rcr을 20Hz로 보내는 controller_thread에서 호출된다.
         # reliable_send는 STOP_RETRIES회 sleep하므로 RC 업링크를 멈춘다.
         self.module.sock = _FakeSocket()
         self.module.trim_roll = 0.4

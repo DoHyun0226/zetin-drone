@@ -1,0 +1,87 @@
+# 발표자료는 lightminn/zetin-drone-presentations 로 분리했다. 이 워크플로는
+# 옛 공개 주소를 살려두기만 한다 — 외부 쇼케이스가 그 주소를 직접 링크하고 있다.
+name: Deploy redirects
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/pages-redirects.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: presentation-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Build redirect site
+        run: |
+          mkdir -p _site/10min
+
+          cat > _site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="ko">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta http-equiv="refresh" content="0; url=https://lightminn.github.io/zetin-drone-presentations/">
+            <link rel="canonical" href="https://lightminn.github.io/zetin-drone-presentations/">
+            <title>발표자료 이동 안내</title>
+          </head>
+          <body>
+            <p>발표자료가 별도 저장소로 옮겨졌습니다</p>
+            <p><a href="https://lightminn.github.io/zetin-drone-presentations/">새 발표자료로 이동</a></p>
+          </body>
+          </html>
+          HTML
+
+          cat > _site/10min/index.html <<'HTML'
+          <!doctype html>
+          <html lang="ko">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta http-equiv="refresh" content="0; url=https://lightminn.github.io/zetin-drone-presentations/10min/">
+            <link rel="canonical" href="https://lightminn.github.io/zetin-drone-presentations/10min/">
+            <title>발표자료 이동 안내</title>
+          </head>
+          <body>
+            <p>발표자료가 별도 저장소로 옮겨졌습니다</p>
+            <p><a href="https://lightminn.github.io/zetin-drone-presentations/10min/">10분 발표자료로 이동</a></p>
+          </body>
+          </html>
+          HTML
+
+          touch _site/.nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

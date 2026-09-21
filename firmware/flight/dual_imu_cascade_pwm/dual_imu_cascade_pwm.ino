@@ -176,12 +176,14 @@ volatile bool yaw_hold_now = false;   // 텔레메트리용: 현재 heading 잠�
 volatile int yaw_authority_state = YAW_AUTH_NORMAL;
 
 const int MAG_THROTTLE_REF_US = 1000;   // 보정 기준(모터 off 근처)
-// 모터 전류 간섭 보정: body-frame ΔB(µT)는 base_throttle에 비례. raw mag에서 뺀다.
+// 모터 전류 간섭 보정: body-frame ΔB(µT)는 base_throttle에 비례한다고 근사한다.
+// hard/soft-iron 보정과 body 축 변환을 거친 mag에서, 틸트 보정 전에 뺀다.
 // mag.x -= mag_comp_x*(base_throttle-REF) 등. µT/µs. 런타임 `magc x y z`. 0=off.
 // 벤치 특성화 2026-07-27 (log 023805, 검증 024330): throttle 간섭 +3.64→+0.02°/100µs.
 // 2026-08-04: soft-iron 행렬 도입으로 이 계수가 사는 좌표계가 바뀌었다. 간섭은
 // raw 축의 물리적 ΔB이고 보정은 선형이므로 새 계수 = W @ 기존계수로 환산했다.
-// ⚠️ 환산은 수학적으로만 정확하다 — 벤치 4단계(모터 간섭) 실측 재검증 미실시.
+// 같은 날 log 032922의 벤치 4단계 재검증 통과 기록이 있다. 방위·배터리 조건을
+// 넓힌 검증이나 현재 하드웨어의 재시험을 뜻하지 않는다. docs/bmm350_yaw_bench_test.md.
 volatile float mag_comp_x =  0.007467272f;  // µT/µs
 volatile float mag_comp_y = -0.001149868f;
 volatile float mag_comp_z = -0.000526263f;
@@ -231,8 +233,8 @@ const float TRIM_MAX_DEG = 10.0f;   // 트림 절대값 상한
 const float MAX_TARGET_RATE_RP  = 300.0f;    // outer-loop 출력 제한 (deg/s)
 const float MAX_TARGET_RATE_YAW = 180.0f;
 // yaw 모드 판정 임계치. 벤치에서 조정한다(설계 문서 §1 참조).
-const float YAW_RATE_DEADZONE   = 3.0f;    // 명령 각속도 절댓값이 이하면 스틱 중립
-const float YAW_HOLD_SETTLE_DPS = 10.0f;   // bodyGz 절댓값이 이하면 정착
+const float YAW_RATE_DEADZONE   = 3.0f;    // 명령 각속도 절댓값이 이 값 미만이면 스틱 중립
+const float YAW_HOLD_SETTLE_DPS = 10.0f;   // bodyGz 절댓값이 이 값 미만이면 새 잠금 진입 가능
 // 250Hz outer loop에서 K=0.001 -> tau ≈ 0.004/K = 4s.
 const float K_MAG = 0.001f;
 const uint32_t MAG_SAMPLE_PERIOD_MS = 20;    // BMM350 read = 50Hz, core 0 only
@@ -296,12 +298,16 @@ const int      FS_PROBE_DIP_MIN_US      = 20;
 const uint32_t FS_PROBE_PERIOD_MS       = 400;
 const uint32_t FS_PROBE_DIP_MS          = 120;
 const uint32_t FS_PROBE_SAMPLE_DELAY_MS = 30;
-// 0.06은 SIL 공중 응답 0.115의 절반으로 잡은 값이었는데, 비행 교란이 공중
-// 분포를 아래로 넓히자 **임계가 그 분포 안에 들어가** 2026-08-01 공중 오판을
-// 냈다(9회 중 4회). 지면 응답은 0.0010~0.0040으로 임계보다 15~60배 작아
-// 아래쪽 여유가 통째로 놀고 있었다. 넓어진 간격의 중앙으로 옮긴다.
-// 이 방향으로 틀리면 확정을 못 해 5초 백스톱 CUT_TIMEOUT — 프로브 도입 전
-// 동작이며 공중 컷보다 훨씬 싸다.
+// ⚠️ 이 값은 **판정에 쓰이지 않는다.** 프로브는 텔레메트리 41~43 기록 전용이고
+// 착지 컷은 시간 기반 백스톱이 한다(아래 FS_MAX_MS, 그리고 하강 블록의
+// `const bool landed = false`).
+//
+// 0.06 → 0.03 변경의 근거는 **철회됐다**(07231eb). 근거였던 "2026-08-01 공중
+// 오판 9회 중 4회"는 20Hz 단일 샘플을 자유낙하로 오독한 것이고, 그 하강은
+// 실제로는 지면에서 났다 — 즉 공중 오판은 일어나지 않았다. 오히려 0.03으로
+// 내린 뒤 015448에서 지면 응답 10회가 전부 임계 위가 되어 확정이 불가능해졌다.
+// 되돌릴 값이지만 프로브가 판정에서 빠진 지금은 무의미하므로 그대로 둔다.
+// 전말은 docs/failsafe_land_research.md.
 constexpr float FS_PROBE_RESPONSE_G    = 0.03f;
 // 응답은 전달 딥에 비례한다. 기존 1.5배 명목 응답 보장에서 80%를 요구하면
 // 임계 대비 1.2배가 남지만, 50% 전달은 임계 아래라 판정 근거가 사라진다.
@@ -320,15 +326,19 @@ static_assert(
         > 1.2f * FS_PROBE_RESPONSE_G,
     "minimum delivered probe must preserve the response margin");
 const float    FS_LAND_ACCEL_TOL_G      = 0.10f;
-// 2026-08-01 실비행: 하강 8회 판정이 전부 공중이었는데 3회가 "지면"으로 나왔고,
-// 2연속이 걸려 공중에서 CUT_LANDED가 났다(컷 직후 |accel| 0.714g → 1.392g 충격).
-// 1kHz 로그로 펌웨어 LPF를 재현해 보니 딥이 없어도 120ms 창의 |accel| 낙폭이
-// 호버에서 p95 0.0904g로 임계 0.06g보다 크다 — 교란만으로 프로브 신호 전체가
-// 나온다. 4로 올리면 오판 2연속(≈19%)이 4연속(≈4%)이 되지만 이는 완화일 뿐
-// 판별력 자체를 회복시키지 못한다. 근본 대책은 docs/failsafe_land_research.md.
+// ⚠️ 이 값도 **판정에 쓰이지 않는다** — 프로브 상태(텔레메트리 41~42)를 계산할
+// 때만 들어간다.
+//
+// 2에서 4로 올린 근거였던 "2026-08-01 공중에서 CUT_LANDED가 났다"는 관측은
+// **철회됐다**(07231eb). 그 컷은 지면에서 났고 정상 동작이었다. 다만 함께
+// 측정한 사실 하나는 유효하다: 딥이 없어도 호버 중 120ms 창의 |accel| 낙폭이
+// p95 0.0904g로 임계 0.06g보다 크다 — 교란만으로 프로브 신호 전체 크기가
+// 나온다. 연속 판정 횟수를 늘려도 판별식이 갖지 못한 정보를 만들 수는 없고,
+// 그래서 프로브 자체가 판정에서 빠졌다. 근본 대책은
+// docs/failsafe_land_research.md (거리계로 착지를 측정하는 쪽).
 const uint8_t  FS_PROBE_CONFIRM_N       = 4;
-// 프로브가 판정에서 빠진 뒤로 이 값은 **하강 예산 그 자체**다. 자동착륙을
-// 거는 최대 고도를 커버하되, 접지 후 프롭이 도는 시간이 그만큼 길어진다.
+// 프로브가 판정에서 빠진 뒤로 이 값은 **하강 시간 예산**이다. 고도나 접지를
+// 확인하지 않으므로 예산이 부족하면 공중에서도 TIMEOUT으로 모터가 꺼진다.
 //
 // 2026-08-01 실측 (접지 충격 임펄스 적분으로 접지 속도를 재고 등가속 모델
 // v=a·t, h=½a·t² 로 역산):
@@ -336,10 +346,10 @@ const uint8_t  FS_PROBE_CONFIRM_N       = 4;
 //   023226  t=0.82s v=1.30m/s → a=1.59   h=0.53m
 //   023904  t=1.76s v=2.11m/s → a=1.20   h=1.86m   ← 환경상 최고 고도
 // 평균 a≈1.24 m/s² (추력 부족 60/290=21%=2.06 m/s² 에서 항력만큼 감소).
-// 하강은 등속이 아니라 가속이므로 커버 고도는 시간의 제곱으로 늘어난다:
+// 아래는 이 평균 가속도를 일정하다고 가정한 외삽이며 실측 고도 한계가 아니다:
 //   2.0s→2.49m  2.5s→3.89m  3.0s→5.60m  3.5s→7.62m
-// 3.0s 는 최고 시험 고도의 3배를 덮고, 아래 static_assert 하한(2720ms)보다
-// 크다 — 2.5s 는 컴파일되지 않는다.
+// 3.0s에서 실제로 5.60m를 내려온다는 보장은 없다. 아래 static_assert는
+// 프로브 시간 배치만 검사한다(2720ms 초과 필요). 2.5s는 컴파일되지 않는다.
 const uint32_t FS_MAX_MS           = 3000;
 const uint32_t FS_RESUME_MAX_MS    = 3U * FS_MAX_MS;
 static_assert(FS_PROBE_DIP_MIN_US < CTRL_MARGIN,
@@ -348,7 +358,8 @@ static_assert(FS_PROBE_SAMPLE_DELAY_MS < FS_PROBE_DIP_MS,
               "probe sample delay must be shorter than the dip");
 static_assert(FS_PROBE_DIP_MS < FS_PROBE_PERIOD_MS,
               "probe dip must finish before the next probe");
-// 실제로 필요한 것은 "접지 후 confirm_n회 연속 무반응이 백스톱 전에 끝날 것"인데
+// 검출기를 제어에 쓰던 당시의 시간 배치 가드다. 현재 반환값은 기록에만 쓴다.
+// 당시 요구는 "접지 후 confirm_n회 연속 무반응이 백스톱 전에 끝날 것"인데
 // 접지 시각은 런타임 값이라 컴파일 타임에 못 쓴다. 대신 필요조건만 건다:
 // 접지 전에 버려지는 공중 프로브를 최소 1회 허용하고도 confirm_n회가 더
 // 들어가야 한다 = 총 confirm_n+1회. 이건 필요조건일 뿐 충분조건이 아니다 —
@@ -378,8 +389,8 @@ const float    HOVER_LEVEL_MAX_DEG    = 10.0f;
 const float    HOVER_ACCEL_TOL_G      = 0.05f;
 const int      HOVER_MIN_THROTTLE_US  = 1150;
 // hover_est 하한이 이 값보다 낮으면 하강값에서 딥을 뺀 스로틀이 1000us
-// 아래가 되어 프로브가 UNAVAILABLE에 고정되고, 자동착륙은 눈먼 5초
-// 타임아웃 컷으로 퇴화한다.
+// 아래가 되어 프로브가 UNAVAILABLE에 고정된다. 현재 컷은 프로브 가용성과
+// 무관하게 FS_MAX_MS 타임아웃을 사용하지만 진단용 딥의 가용성은 유지한다.
 static_assert(
     HOVER_MIN_THROTTLE_US
         >= 1000 + FS_DESCENT_DELTA_US + FS_PROBE_DIP_MIN_US,
@@ -389,7 +400,8 @@ const uint32_t HOVER_VALID_MS         = 1500;
 // 실측 호버는 약 1340us다. 무장 직후 spool-up 로그(041032)는 1100~1190us
 // 구간이 전체 무장 시간의 9.4%였으므로, 지상 즉시컷은 보수적으로 1150us
 // 이하에서만 허용한다. 이보다 높으면 hover_est가 오염됐더라도 자동착륙을
-// 택한다. 최악이 지상 5초 하강이 되게 해 공중 즉시컷보다 안전한 방향이다.
+// 택한다(유효 호버 추정치가 있어야 한다). 지상에서도 FS_MAX_MS 동안 모터가
+// 돌 수 있으며, 이 절대 하한은 고도나 실제 접지를 판별하는 센서가 아니다.
 const int      FS_GROUND_CUT_MAX_US  = 1150;
 const uint32_t PID_WDT_TIMEOUT_MS = 500;     // pid_task 정지 시 강제 재부팅 (1kHz 루프 대비 큰 여유)
 const int32_t  FROZEN_DELTA_RAW   = 1;       // 6축 raw 변화량 합이 이 이하면 정지 의심 (LSB)
@@ -1274,7 +1286,7 @@ void pid_task(void *pv) {
     if (frozen1) fault_imu1 = true;
     if (frozen2) fault_imu2 = true;
 
-    // OFF hot path는 이 bool 검사 하나뿐이다. ON일 때만 micros()와 26B 복사를 한다.
+    // OFF hot path는 이 bool 검사 하나뿐이다. ON일 때만 micros()와 27B 복사를 한다.
     // freeze 판정 직후, 부호/scale/bias/LPF/body 변환 전의 레지스터 원값을 게시한다.
     if (__atomic_load_n(&raw_stream_enabled, __ATOMIC_ACQUIRE)
         && connectionEstablished) {
@@ -1521,8 +1533,8 @@ void pid_task(void *pv) {
       }
     }
 
-    // 하강 중에는 목표를 매 tick 덮어쓴다. 링크가 돌아와도 rc/rcr 파서가 쓴
-    // 값이 무해해지므로 파서 쪽에 failsafe 분기를 넣을 필요가 없다.
+    // 하강 중에는 목표를 매 tick 덮어쓴다. rc/rcr 파서도 하강 중 목표 변경을
+    // 막으며, 링크 복구만으로는 하강을 끝내지 않는다(명시적 resume 필요).
     if (fs_phase == FS_DESCENDING) {
       targetAngleX = trim_roll;
       targetAngleY = trim_pitch;
@@ -1534,21 +1546,19 @@ void pid_task(void *pv) {
       const uint32_t elapsed = nowMs - fs_enter_ms;
       // 프로브는 계속 돌리되 **착지 판정에는 쓰지 않는다.**
       //
-      // 2026-08-01 실기에서 라벨된 두 분포를 처음으로 나란히 얻었다:
-      //   공중(자유낙하로 증명) 0.0070~0.1340g  중앙 0.0800
-      //   지면(접지 확인)       0.0590~0.1930g  중앙 0.1020
-      // 지면 응답이 공중보다 **더 크다** — 판별 방향이 반대이고, 어떤 임계를
-      // 잡아도 오분류가 9/18(동전 던지기)이다. 하강 추력이 호버의 79%라
-      // 발에 실리는 무게가 21%뿐이고, 기체가 다리 위에서 자유롭게 흔들리며
-      // collective 딥에 공중보다 크게 반응하기 때문이다. 즉 "접지하면 추력
-      // 딥에 반응이 없다"는 전제 자체가 이 기체에서 성립하지 않는다.
+      // 2026-08-01의 "010251 공중 CUT_LANDED" 해석은 철회됐다. 20Hz 단일
+      // 샘플을 자유낙하로 오독했으며 1kHz 기록과 조종자 확인은 접지를 지지한다.
+      // 따라서 "지면 응답이 공중보다 큼 / 판별 방향 반대 / 오분류 9/18"도
+      // 근거가 없다. 유효한 실패 관측은 015448의 접지 응답 10회가 임계 0.03
+      // 위여서 착지를 확정하지 못했다는 것이다. 023904의 접지 전 응답 2회만으로
+      // 공중 오검출률을 검증할 수 없어 검출기는 제어에 복귀시키지 않았다.
       //
       // 따라서 자동착륙은 **시간 기반 하강**이다: FS_MAX_MS 동안 내려간 뒤
-      // 백스톱이 자른다. 공중 오판 컷은 원리적으로 불가능해진다(2026-08-01
-      // 010251 에서 실제로 일어났던 실패 모드다). 대가는 접지 후 남은 시간만큼
-      // 프롭이 도는 것이며, 고도 센서가 없는 한 그쪽이 안전한 오차 방향이다.
+      // 백스톱이 자른다. 이 경로는 CUT_LANDED를 선택하지 않지만, 접지 전에
+      // 예산이 끝나면 TIMEOUT 공중 컷은 가능하다. 접지 후에는 남은 시간만큼
+      // 프롭이 돈다. 고도·수직속도 피드백이나 접지 확인은 하지 않는다.
       //
-      // 프로브 자체는 남긴다 — 텔레메트리(41~43)로 계속 기록해야 다음 판별식을
+      // 프로브 딥은 실제 스로틀에 계속 적용된다 — 텔레메트리(41~43)로 기록해 다음 판별식을
       // 오프라인 데이터로 설계할 수 있다. 분석은 docs/failsafe_land_research.md.
       const bool probe_says_landed = updateLandDetector(
           landDet, accelMag, elapsed, descentThrottle,

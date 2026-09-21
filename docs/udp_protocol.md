@@ -1,6 +1,9 @@
 # UDP 제어·텔레메트리 프로토콜
 
-현행 비행 제어 후보와 지상 도구는 이 엔드포인트를 사용한다.
+현행 `dual_imu_cascade_pwm`와 지상 도구의 명령·필드 정본이다.
+저스로틀 yaw 개선 통합 코드 기준이며, 실제 기체의 업로드 빌드는 별도 확인한다.
+운영 순서는 [PC 도구 안내](../scripts/README.md), 링크 상실 진단은
+[지상국 링크 문서](ground_station_link.md)를 먼저 참고한다.
 
 ```text
 전송: UDP
@@ -13,10 +16,16 @@
 펌웨어는 SSID `Drone_Tuning`으로 SoftAP를 운영한다. 주소와 포트는
 [`dual_imu_cascade_pwm.ino`](../firmware/flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)에
 정의돼 있다.
+RC 송신 목표는 `control_dualsense.py`의 20Hz, ASCII 텔레메트리는 약 20Hz,
+raw IMU 생산은 명목 1kHz다. 서로 다른 주기이므로 혼동하지 않는다.
+텔레메트리 수신과 `connect` 응답 목적지 등록은 시동·RC 수락 ACK가 아니다.
+펌웨어는 마지막 UDP 발신자의 IP/포트 하나로 회신하므로 제어·수신 도구를
+동시에 실행하지 않는다.
 보류 트랙인
 [`dual_imu_flix_quat_pwm`](../firmware/flight/dual_imu_flix_quat_pwm/)은 같은
-엔드포인트와 조종 명령을 쓰지만 이 문서와 완전히 일치하지는 않는다. 게인
-명령의 단위가 SI(rad 기반)이고 yaw 각도 부호가 반대(CCW+)이며,
+엔드포인트와 일부 `rc` 절대각 명령을 공유하지만 `rcr`은 지원하지 않는다.
+RC 두절 시 자동착륙 없이 즉시 컷하며 **주력 지상국으로 조종할 수 없다.**
+게인 명령의 단위가 SI(rad 기반)이고 yaw 각도 부호가 반대(CCW+)다.
 `gains`·`mag`·`magcal`을 구현하지 않고 텔레메트리도 `Armed`까지 22필드만
 보낸다. [해당 README](../firmware/flight/dual_imu_flix_quat_pwm/README.md)를
 참조한다.
@@ -24,18 +33,25 @@
 ## 지상국 → 드론
 
 명령은 UTF-8/ASCII 텍스트 데이터그램이다. 인자는 공백으로 구분한다.
+다음은 와이어 명령이며 `control_dualsense.py` stdin에서는 `mag on/off`,
+`raw on/off`를 각각 `mag 1/0`, `raw 1/0`으로 바꿔 보낸다. 그 콘솔의
+`start`·`stop`·`resume`·`th`는 로컬 상태도 갱신하는 전용 경로다.
+일반 명령에는 UDP ACK가 없고, `gains`만 별도 응답을 보낸다. 시리얼의
+거부 메시지와 상태 텔레메트리를 확인해야 실제 적용을 알 수 있다.
 
 ```text
+connect                            # 텔레메트리 목적지 등록용. RC 워치독 갱신 아님
 start
 stop
 resume
 rc <seq> <roll> <pitch> <yaw>
+rc <roll> <pitch> [yaw]             # 무시퀀스 벤치 호환형. 조종용으로 쓰지 않음
 rcr <seq> <roll> <pitch> <yaw_rate>  # yaw_rate는 dps
 th <microseconds>
 trim <roll_deg> <pitch_deg>          # 절대 트림(도), 각 축 ±10°로 클램프
 yaw <0|1>
 mag <0|1>                # 자기계 yaw 드리프트 보정 ON/OFF (기본 OFF)
-magcal <0|1>             # raw 캘리브레이션 캡처 시작/종료 (시동 해제 상태에서만)
+magcal <0|1>             # raw 캡처 시작/종료. 시작은 시동 해제 상태에서만
 magc <x> <y> <z>         # 모터 전류 간섭 보정 계수(µT/µs) 3축. "0 0 0" = 보정 off
 raw <0|1>                # 1kHz dual-IMU 원시 배치 스트림 ON/OFF (기본 ON)
 gains                    # 현재 PID 게인 12개를 1회 응답
@@ -70,12 +86,13 @@ ar|at|ay <value>      # roll / pitch / yaw
   하강 중에도 계속 허용한다.
 - `resume`은 자동착륙 하강 중(`Failsafe_Phase=1`)에만 조종권 복귀를
   요청한다. RC 패킷이 최근 500ms 안에 수신됐고, 과도 기울기가 아니고, 사용
-  가능한 IMU가 하나 이상이며, `Hover_Valid=1`일 때만 수락한다. 수락하면
+  가능한 IMU가 하나 이상이며 두 IMU 동시 freeze·현재 disagree가 없고,
+  `Hover_Valid=1`일 때만 수락한다. 수락하면
   `Failsafe_Phase=0`, `Fault_RC=0`, `base_throttle=round(Hover_Est)`로
   복원하고 스로틀 창도 ±150µs로 다시 잡는다. 조건이 하나라도 맞지 않으면
   시리얼에 `RESUME REFUSED <phase|rc|tilt|imu|hover|cumulative>`를 남기고
   하강을 계속한다. 한 비행의 최초 자동착륙 진입부터
-  `FS_RESUME_MAX_MS = 3 × FS_MAX_MS`(초기 15초)가 지나면 `cumulative`로
+  `FS_RESUME_MAX_MS = 3 × FS_MAX_MS`(현재 9초)가 지나면 `cumulative`로
   거부한다. 이 시각은 앞선 `resume`이 지우지 않으며, 거부 자체는 현재
   자동착륙을 강제 종료하지 않는다. 링크가 돌아온 것만으로 자동 복귀하지
   않으며 명시적 `resume`이 반드시 필요하다.
@@ -83,9 +100,10 @@ ar|at|ay <value>      # roll / pitch / yaw
   0 근처로 줄일 뿐, 이미 쌓인 하강속도는 없애지 않는다. 링크가 돌아오면 즉시
   `resume`하고, 곧바로 스로틀을 올려 고도를 회복해야 한다. 늦게 보낼수록
   잔류 하강속도와 이후 고도 손실이 커진다.
-- RC 스트림이 `RC_TIMEOUT_MS`(500ms) 동안 끊기면 `Fault_RC`를 세운다.
-  - 아직 `Hover_Valid=0`이면 호버한 적이 없어 공중에 있을 수 없다고 보고
-    **즉시 컷**한다. `Failsafe_Phase`는 0에 머문다.
+- RC 스트림이 `RC_TIMEOUT_MS`(500ms)를 초과해 끊기면 `Fault_RC`를 세운다.
+  `connect`·`th`·PID 명령은 이 워치독을 갱신하지 않는다.
+  - 아직 `Hover_Valid=0`이면 사용할 호버 추정치가 없어 **즉시 컷**한다.
+    `Failsafe_Phase`는 0에 머문다. 이 분기는 지상 여부를 직접 측정하지 않는다.
   - `Hover_Valid=1`이어도 `base_throttle ≤ FS_GROUND_CUT_MAX_US`(1150µs)일
     때만 지상 스로틀로 보고 즉시 컷한다. 지상 즉시컷 경계에는 `Hover_Est`를
     쓰지 않으므로, 등속 상승을 잘못 학습한 높은 추정치가 공중 즉시컷을 만들지
@@ -100,26 +118,42 @@ ar|at|ay <value>      # roll / pitch / yaw
   `|accel|`이 1g±0.05g이며, 스로틀이 1150µs를 넘는 샘플만 3초 시정수 LPF로
   추적한다. 해당 샘플 시간이 누적 1.5초가 되면 `Hover_Valid=1`이다. 이
   임계·시간 값은 모두 Stage E-0 벤치 조정 대상이다.
-- 착지 감지는 **능동 스로틀 프로브**로 한다. `FS_MIN_DESCEND_MS`(1초) 뒤부터
-  400ms마다 정상 하강 collective를
+- **자동착륙은 착지를 감지하지 않는다. 시간 기반 하강이다.**
+  `FS_MAX_MS = 3000`ms 동안 하강한 뒤 `Phase=3` 백스톱이 자른다. 즉 정상
+  종료 위상은 항상 3이며, `Phase=2`(착지컷)는 **현재 펌웨어에서 도달하지
+  않는다**(위상 번호는 wire contract라 값 자체는 유지한다).
+  2026-08-01 실기에서 라벨된 하강 4건을 1kHz로 분석한 결과 IMU 기반 판별식
+  6종이 전부 배제됐고, 그중 원래 쓰던 `|accel|` 프로브는 접지 상태에서도
+  응답이 임계 위로 나와 착지를 확정하지 못했다. 공중 오판 컷의 위험을 0으로
+  만드는 쪽을 택했고, 대가는 접지 후 남은 시간만큼 프롭이 도는 것이다.
+  근거와 배제 과정은 [`failsafe_land_research.md`](failsafe_land_research.md).
+- `FS_MAX_MS`는 **하강 예산 그 자체**다. 2026-08-01 접지 충격 임펄스로 역산한
+  하강 가속도 평균 1.24 m/s²에서 3.0초는 5.60m를 덮으며, 이는 실측 최고
+  시험 고도(1.86m)의 3배다. 컴파일 타임 `static_assert` 하한이 2720ms라
+  2.5초는 빌드되지 않는다. 고도 센서로 착지를 **측정**할 수 있게 되기 전에는
+  이 값을 늘리는 것이 곧 접지 후 프롭 회전 시간을 늘리는 것이다.
+  **2026-09-07 해석 보완:** 위 가속도·고도·시간 수치는 당시 시험 조건의
+  기록이다. 앞의 “공중 오판 컷의 위험을 0”은 프로브의 착지 오판 경로를 없앤
+  범위로 한정한다. 시간 기반 컷이 모든 초기 고도·배터리·추정 오차에서 접지 이후에
+  일어남을 보장하지 않는다. 거리계 필드는 추가됐지만 현재 착지컷에는 쓰지 않는다.
+- 능동 스로틀 프로브는 **판정에서 빠졌을 뿐 계속 돈다.** 다음 판별식을
+  오프라인 데이터로 설계하려면 그 기록이 필요하기 때문이며, 결과는 텔레메트리
+  41~43번으로만 나간다(`landed`는 코드에서 상수 `false`다).
+  `FS_MIN_DESCEND_MS`(1초) 뒤부터 400ms마다 정상 하강 collective를
   `round((Hover_Est − 1000) × FS_PROBE_DIP_FRAC)`만큼 낮춰 120ms 유지한다.
   `FS_PROBE_DIP_FRAC=0.118`이며 결과는 20µs 이상,
   `CTRL_MARGIN`(150µs) 미만으로 런타임 clamp된다. 명목
-  `Hover_Est=1340µs`에서는 기존과 같은 40µs이고, clamp가 걸리면 시리얼에
+  `Hover_Est=1340µs`에서는 40µs이고, clamp가 걸리면 시리얼에
   `AUTO-LAND PROBE DIP CLAMPED`가 남는다. 딥 직전과 첫 30ms를 제외한 딥 중
-  5Hz LPF `|accel|` 최솟값의 차분이 0.06g를 넘으면 공중 반응으로 보고 연속
-  무반응 카운트를 지운다. 연속 두 번 무반응이고 LPF `|accel|`이
-  1g±`FS_LAND_ACCEL_TOL_G`(0.10g) 안일 때만 `Phase=2`로 컷한다.
-  1g 근처는 착지의 필요조건일 뿐 충분조건이 아니며, 주 판별은 계속 능동
-  프로브의 연속 무반응이다. 딥 tick에는 collective 하한만 요청 딥만큼
-  넓혀 자세 차동이 딥을 자르지 않게 한다. 그래도 표본 구간의 어느 tick에서든
-  믹서 적용 collective가 요청 딥의 80% 미만이면 프로브 전체를
-  `BLOCKED`(4)로 폐기하고 연속 무반응 카운트를 올리거나 지우지 않는다.
-  이 경고의 시리얼 출력은 하강당 한 번으로 제한한다. 모든 프로브가 막히면
-  조기 착지 확정 대신 `FS_MAX_MS = 5000`의 `Phase=3` 백스톱 컷에 맡긴다.
+  5Hz LPF `|accel|` 최솟값의 차분이 `FS_PROBE_RESPONSE_G`(0.03g)를 넘으면
+  공중 반응으로 보고 연속 무반응 카운트를 지운다.
+  `FS_PROBE_CONFIRM_N`(4)과 `FS_LAND_ACCEL_TOL_G`(0.10g)는 프로브 상태를
+  계산할 때만 쓰이고 컷을 만들지 않는다. 딥 tick에는 collective 하한만 요청
+  딥만큼 넓혀 자세 차동이 딥을 자르지 않게 한다. 그래도 표본 구간의 어느
+  tick에서든 믹서 적용 collective가 요청 딥의 80% 미만이면 프로브 전체를
+  `BLOCKED`(4)로 폐기하고, 시리얼 경고는 하강당 한 번으로 제한한다.
   적용 딥 뒤 collective가 1000µs 미만이면 유효한 프로브를 만들 수 없어
-  상태를 `UNAVAILABLE`로 남기고 같은 백스톱 컷에 맡긴다.
-  `FS_MAX_MS`는 착지 감지기를 벤치 검증한 뒤에만 10000으로 올린다.
+  상태를 `UNAVAILABLE`(3)로 남긴다. 어느 쪽이든 하강 종료는 백스톱이 한다.
 - IMU 전멸·과도 기울기·명시적 `stop`은 계속 즉시 컷이다. 하강 중 이들이
   걸리면 `Phase=4`(중단컷)로 끝난다.
 - `rcr`은 패킷 시퀀스와 목표 roll·pitch 각도, yaw 각속도(dps)를 담는 현행
@@ -130,8 +164,8 @@ ar|at|ay <value>      # roll / pitch / yaw
 - `rc`는 기존 벤치 도구 호환을 위해 그대로 유지되는 roll·pitch·yaw **각도**
   명령이다. roll·pitch 목표는 ±30°로 제한된다. yaw 필드는 벤치 지향
   `yaw 1` heading-hold 오버라이드에서만 사용하는 지원 인터페이스이며, 자동
-  모드 조종에는 `rcr`을 사용한다. 시퀀스가 이전보다 작거나 같은 패킷(지연
-  도착·중복)은 폐기된다.
+  모드 조종에는 `rcr`을 사용한다. 시퀀스의 uint32 정방향 진행만 수락한다
+  (정상 래핑 허용). 지연·중복은 아래 카운터 규칙대로 폐기된다.
 - `th`는 기본 ESC 펄스 폭을 마이크로초 단위로 설정한다. 1000~1900으로
   제한되며, min/max 스로틀 창을 기본값 ±150 마진으로 함께 재설정한다.
 - `trim`은 roll·pitch 트림의 절대값(도)을 설정한다. 각 축은 ±10°로
@@ -151,9 +185,11 @@ ar|at|ay <value>      # roll / pitch / yaw
   OFF**이며, OFF일 때 yaw는 자이로 적분만으로 추정한다. 켜는 순간 현재 추정
   yaw를 기준으로 상대 heading 오프셋을 잡으므로 기수가 자북으로 돌아가지
   않는다(상대 heading 유지 전용, 자북·편각·항법 아님). 보정은 250Hz 바깥
-  루프에서 시정수 약 4초로 천천히 끌어당긴다. `magcal` 진행 중에는 거부된다.
+  루프에서 시정수 약 4초로 천천히 끌어당긴다. `mag 1`은 `magcal` 진행 중과
+  무장 상태의 최초 센서 초기화가 필요한 경우 거부된다. `mag 0`은 수락된다.
   `control_dualsense.py` stdin에서는 `mag on`/`mag off`로 선택하며, 다음
-  `start` 직전에 선택값을 `mag 1`/`mag 0`으로 다시 전송한다.
+  `start` 직전에 선택값을 `mag 1`/`mag 0`으로 다시 전송한다. 지상국 선택
+  기본은 ON이므로 펌웨어 부팅 기본 OFF와 구분한다.
 - `magcal 1`은 hard/soft-iron 캘리브레이션용 raw 캡처를 시작한다(시동
   상태에서는 거부). 첫 유효 raw 샘플부터 `Mag_Cal_Active=1`과 보정 전
   BMM350 raw `Mag_X/Y/Z`를 같은 스냅샷으로 보내므로 지상국 CSV에 회전 전체가
@@ -163,12 +199,19 @@ ar|at|ay <value>      # roll / pitch / yaw
   `MAG_HARD_IRON`/`MAG_SOFT_IRON`과 재환산 `mag_comp`를 얻는다. 전체 절차와
   통과 기준은
   [`bmm350_yaw_bench_test.md`](bmm350_yaw_bench_test.md)를 따른다.
+  `magcal 1`은 yaw 융합을 끄며, `magcal 0`이 자동으로 다시 켜지는 않는다.
+  종료는 무장 여부와 무관하게 처리하고 보정 상수를 자동 저장하지 않는다.
 - `magc x y z`는 모터 전류가 만드는 body-frame 자기 간섭을 보정하는 3축
   계수(µT/µs)를 런타임 설정한다. `mag.{x,y,z} -= k·(base_throttle − 1000)`을
-  틸트보정 전에 적용한다. heading(°)이 아닌 raw XYZ(µT) 도메인에서 빼므로
-  기수 방위에 무관하다. 벤치 특성화로 얻은 기본값이 펌웨어에 박혀 있고
-  (`mag_comp_x/y/z`), `"0 0 0"`으로 보내면 보정을 끈다. 자동착륙 하강
-  중에는 변경을 거부한다.
+  **hard/soft-iron 행렬·body 부호 변환 이후, 틸트보정 이전**에 적용한다.
+  즉 현재 계수는 보정 후 XYZ(µT) 도메인이고 BMM350 raw 계수와 같지 않다.
+  펌웨어 기본 `mag_comp_x/y/z`는 과거 벤치 계수를 행렬로 환산한 값이다.
+  2026-08-04 보정 후 모터 간섭 재검증 기록과 그 수치의 재분석 범위는
+  [`bmm350_yaw_bench_test.md`](bmm350_yaw_bench_test.md)에 남겼다.
+  `magc 0 0 0`은 보정을 끄며, 하강 중 계수 변경은 거부한다.
+  `magcal_fit.py`의 `--mag-comp`는 입력 벡터에 새 행렬을 곱할 뿐 기존 행렬을 역변환하지
+  않는다. 이미 보정된 현행 계수를 그대로 넣어 이중 변환하지 말고, 입력의
+  좌표계를 확인한 뒤 새 보정 기준에서 모터 간섭을 다시 측정한다.
 - `raw 1`은 1kHz 제어 루프에서 읽은 두 IMU의 int16 레지스터 원값을
   `ZIMU` 배치로 보내며 `raw 0`은 중지한다. 기본값은 **ON**이다. 생산자는
   `raw_stream_enabled && connectionEstablished`일 때만 링에 넣으므로, 지상국
@@ -185,6 +228,24 @@ ar|at|ay <value>      # roll / pitch / yaw
 [`receive_telemetry.py`](../scripts/receive_telemetry.py)와
 [`monitor_telemetry.py`](../scripts/monitor_telemetry.py)는 이를 위해 주기적으로
 `connect`를 보낸다.
+
+### RC 순서와 카운터
+
+시퀀스형 `rc`와 `rcr`은 `lastRcSeq`·워치독·카운터를 공유한다. `seq`는 부호
+없는 0~4294967295 정수이며, 정방향 uint32 래핑을 수락한다. 정상 `start`는
+시퀀스 비교 기준과 RC 시각을 초기화하지만 아래 누적 카운터는 지우지 않는다.
+
+| 필드 | 증가 조건 |
+|---|---|
+| `RC_Total_Pkts` | 시퀀스·값 파싱이 유효한 시퀀스형 RC 데이터그램마다 +1. 순서 검사 전에 증가 |
+| `RC_Dropped_Pkts` | 중복/오래된 패킷이면 +1 후 폐기. 정방향 시퀀스 틈이 있으면 빠진 번호 수만큼 추가 |
+
+무시퀀스 벤치형 `rc`는 유효 목표와 워치독을 갱신하지만 위 카운터·시퀀스 기준을
+갱신하지 않는다. 하강 중 수락된 RC도 워치독은 갱신하지만 조종 목표를 바꾸지
+않는다. `resume`은 별도로 필요하다. 카운터의 `Dropped / Total`은 정확한
+무선 유실률이 아니며 100%를 넘을 수도 있다.
+
+게인·트림·mag/raw 선택 등의 런타임 변경은 재부팅 시 펌웨어 기본값으로 돌아간다.
 
 ## 드론 → 지상국
 
@@ -235,19 +296,32 @@ yaw 권한 상태(66~75)를 순서대로 append한다.
 
 | 순서 | 필드 | 타입 | 의미 |
 |---|---|---|---|
+| 1~3 | `Roll`, `Pitch`, `Yaw` | float | 추정 자세(도). yaw는 시동 때 0으로 초기화하는 상대 방위 |
+| 4~6 | `Gyro_X`, `Gyro_Y`, `Gyro_Z` | float | 융합 body-frame 각속도(dps) |
+| 7~9 | `Accel_X`, `Accel_Y`, `Accel_Z` | float | 융합 body-frame 가속도(g), 중력 성분 포함 |
+| 10 | `Throttle` | int | 기본 collective 스로틀(µs). 개별 모터 출력과 다름 |
+| 11 | `Fault_RC` | int | RC 타임아웃 latch. 정상 `start` 또는 수락된 `resume`에서 해제 |
+| 12 | `Fault_Critical` | int | 사용 가능 IMU 0개·과도 기울기 latch·보정 실패 중 하나이면 1 |
+| 13~14 | `RC_Total_Pkts`, `RC_Dropped_Pkts` | int | [RC 카운터](#rc-순서와-카운터). 부팅 후 uint32 누적 |
+| 15~17 | `Fault_IMU1`, `Fault_IMU2`, `Fault_Disagree` | int | 개별 IMU 고장·불일치 이력 latch. 현재 사용 가능 개수와 구분 |
+| 18 | `Active_IMUs` | int | 현재 융합에 사용하는 IMU 개수 |
+| 19 | `Mixer_Scaled` | int | 믹서에서 자세 차동 출력을 축소한 상태 |
+| 20 | `Fault_Attitude` | int | 과도 기울기 fault latch |
+| 21 | `Calibration_OK` | int | 부팅 캘리브레이션 성공 여부 |
+| 22 | `Armed` | int | safety lock이 풀려 있으면 1. 회전수·추력·공중 상태 측정이 아님 |
 | 23~26 | `Motor_M1`~`Motor_M4` | int | 실제 모터 PWM 출력(µs), 시동 해제 시 1000 |
 | 27 | `PID_Loop_Hz` | int | `pid_task`의 실측 루프 주파수(Hz) |
-| 28~30 | `TgtRate_Roll`, `TgtRate_Pitch`, `TgtRate_Yaw` | float | 바깥 각도 루프가 만든 목표 각속도(dps) |
+| 28~30 | `TgtRate_Roll`, `TgtRate_Pitch`, `TgtRate_Yaw` | float | 안쪽 PID가 추종할 목표 각속도(dps). yaw rate 모드는 각도 루프를 우회 |
 | 31 | `MagHeading` | float | BMM350 틸트보정 heading(deg). throttle 간섭 보정 적용값. `mag 0`이면 갱신되지 않는다 |
-| 32~34 | `Mag_X`, `Mag_Y`, `Mag_Z` | float | 같은 패킷의 `Mag_Cal_Active=0`이면 hard/soft-iron·현재 throttle 간섭 보정 후 자기장 성분(µT), 1이면 보정 전 BMM350 raw µT |
+| 32~34 | `Mag_X`, `Mag_Y`, `Mag_Z` | float | 같은 패킷의 `Mag_Cal_Active=0`이면 hard/soft-iron·body 부호·현재 throttle 간섭 보정 후 자기장 성분(µT), 1이면 보정 전 BMM350 raw µT |
 | 35 | `Yaw_Hold` | int | 0=각속도 모드, 1=heading 잠금 |
-| 36 | `Failsafe_Phase` | int | 0=정상, 1=하강 중, 2=착지컷, 3=백스톱컷, 4=중단컷 |
+| 36 | `Failsafe_Phase` | int | 0=정상, 1=하강 중, 2=착지컷(**현재 도달 불가**), 3=백스톱컷(시간 기반 하강의 정상 종료), 4=중단컷 |
 | 37~38 | `Trim_Roll`, `Trim_Pitch` | float | 드론이 적용 중인 roll·pitch 트림(도) |
 | 39 | `Hover_Est` | float | 유효한 호버 후보에서 LPF로 추정한 collective 스로틀(µs) |
 | 40 | `Hover_Valid` | int | 0=미확정, 1=호버 후보 시간이 유효 기준을 충족 |
-| 41 | `Failsafe_Probe_State` | int | 0=WAIT, 1=DIP, 2=EVALUATE, 3=UNAVAILABLE(1000µs 아래 딥 가드), 4=BLOCKED(표본 구간 중 요청 딥의 80% 미만 전달) |
-| 42 | `Failsafe_Probe_NoResponse` | int | 연속 무반응 프로브 수. 공중 반응이면 0으로 초기화 |
-| 43 | `Failsafe_Probe_Response_G` | float | 최근 프로브의 `딥 직전 LPF − 딥 중 LPF 최솟값`(g) |
+| 41 | `Failsafe_Probe_State` | int | 0=WAIT, 1=DIP, 2=EVALUATE, 3=UNAVAILABLE(1000µs 아래 딥 가드), 4=BLOCKED(표본 구간 중 요청 딥의 80% 미만 전달). **기록 전용 — 컷을 만들지 않는다** |
+| 42 | `Failsafe_Probe_NoResponse` | int | 연속 무반응 프로브 수. 공중 반응이면 0으로 초기화. **기록 전용** |
+| 43 | `Failsafe_Probe_Response_G` | float | 최근 프로브의 `딥 직전 LPF − 딥 중 LPF 최솟값`(g). **기록 전용** |
 | 44 | `IMU1_Gyro_X` | float | IMU1 body-frame X 각속도(dps), gyro 소프트웨어 LPF 적용 후 |
 | 45 | `IMU1_Gyro_Y` | float | IMU1 body-frame Y 각속도(dps), gyro 소프트웨어 LPF 적용 후 |
 | 46 | `IMU1_Gyro_Z` | float | IMU1 body-frame Z 각속도(dps), gyro 소프트웨어 LPF 적용 후 |
@@ -290,7 +364,8 @@ yaw 권한 상태(66~75)를 순서대로 append한다.
 `Range_MM`은 모듈이 보낸 값 그대로다. **작동 범위가 80~2000mm 이고 그 밖이면
 음수**인데, iNav 구조체 주석이 `Negative value for out of range` 하나뿐이라
 **너무 가까울 때와 너무 멀 때가 같은 음수**다. 부호만으로 위/아래를 구분할 수
-없으므로, 접지 판정은 직전 유효값이 커지던 중인지 작아지던 중인지를 봐야 한다.
+없다. 현재 이 센서는 기록 전용이며 접지 판정을 수행하지 않는다. 향후 판별식을
+설계하려면 직전 유효 거리·품질·신선도와 독립 접지 근거를 함께 검증해야 한다.
 
 `*_Quality`가 **−1이면 신선한 프레임이 없다**는 뜻이다(펌웨어
 `MSP_SENSOR_STALE_MS`). 거리 값 자체를 센티넬로 못 쓰기 때문에 신선도는 반드시
@@ -312,7 +387,7 @@ size(u16 LE) payload crc8`이 오고, **CRC(crc8_dvb_s2, 다항식 0xD5, 초기�
 - 일반 비행의 `TgtAngle_Roll`/`TgtAngle_Pitch`는
   `constrain(command + trim, ...)` 결과이므로 트림이 이미 합산된 setpoint다.
   `Trim_Roll`/`Trim_Pitch`를 다시 더하면 이중 계산이다.
-- 자동착륙(`Failsafe_Phase != 0`)에서는 `trim_roll`, `trim_pitch`,
+- 자동착륙 하강 중(`Failsafe_Phase == 1`)에는 `trim_roll`, `trim_pitch`,
   `fs_hold_yaw`가 들어간다. 즉 하강 중 수평 setpoint와 유지 방위를 나타낸다.
 - `TgtAngle_Yaw`는 `yawOuter.target_angle_deg`다. `Yaw_Hold=1`이면 유지 중인
   방위이고, `Yaw_Hold=0`이면 현재 heading에 슬레이빙된 값이다.
@@ -320,17 +395,22 @@ size(u16 LE) payload crc8`이 오고, **CRC(crc8_dvb_s2, 다항식 0xD5, 초기�
 `MagHeading`(31번)은 mag를 꺼도 마지막 값이 남으므로 융합 활성 여부를
 판정할 수 없다. 실제 ON/OFF 상태의 유일한 근거는 `Mag_Enabled`(59번)다.
 `Yaw`(3번)와 `MagHeading`의 차이는 융합 거동 분석에만 사용한다.
-`Mag_X`~`Mag_Z`는 모터 전류 간섭 특성화/검증에 쓴다(스로틀 램프 중 값이
-평평하면 간섭 보정이 잘 된 것).
+`Mag_X`~`Mag_Z`는 모터 전류 간섭 특성화/검증에 쓴다. mag가 꺼져 있으면
+정상 도메인 값도 갱신되지 않을 수 있으므로, 스로틀 램프 중 평평한 값만으로
+보정 성공을 판정하지 않는다. 같은 자세·센서 갱신·융합 활성 상태를 확인한다.
 
 IMU별 필드는 융합 `Gyro_*`/`Accel_*`와 동일한 body frame이다.
-`Active_IMUs == 2`이고 `Fault_Disagree == 0`이면 각 축에서 다음 항등식이
-부동소수 반올림 오차 안에서 성립한다.
+동일 제어 tick에서 `Active_IMUs == 2`이고 `Fault_Disagree == 0`이면
+융합 계산은 다음과 같다.
 
 ```text
 Gyro_axis  = (IMU1_Gyro_axis  + IMU2_Gyro_axis)  / 2
 Accel_axis = (IMU1_Accel_axis + IMU2_Accel_axis) / 2
 ```
+
+IMU별 12값 묶음은 별도 스냅샷이지만 ASCII 패킷 전체가 한 tick의 원자적
+스냅샷은 아니다. 다른 필드와 시점이 어긋날 수 있으므로 CSV 행마다 위 식을
+엄격한 등식으로 강제하거나 작은 차이를 센서 고장으로 단정하지 않는다.
 
 이 필드는 1kHz 센서 루프의 원본 스트림이 아니라 20Hz 텔레메트리
 스냅샷이다. Nyquist 주파수는 10Hz이므로 프롭 진동은 앨리어싱되며, 이
@@ -353,7 +433,12 @@ Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw
 계수하지 않는다. `tune_pid.py`는 각 이름과 값을 한 줄로 출력한다.
 
 
-`telemetry_schema.py`는 과거 패킷 길이도 함께 받아들인다.
+`telemetry_schema.py`는 과거 패킷도 받아들인다. 아래 길이는 역사적 확장
+경계이며 허용 길이의 화이트리스트가 아니다. 실제 파서는 **10필드 이상**이면
+알고 있는 앞쪽 75필드를 읽고 더 뒤의 미래 필드는 무시한다. 첫 10필드는
+빈 값 없이 유한수여야 하고 정수 필드는 정수값이어야 한다. 이후 빈 값·없는
+필드는 `None`으로 유지한다. 따라서 파싱 성공만으로 정확한 펌웨어 버전을
+식별할 수 없다.
 
 - 10필드 패킷은 `Throttle`에서 끝난다.
 - 14필드 패킷은 `RC_Dropped_Pkts`에서 끝난다.
@@ -430,7 +515,7 @@ raw 스트림이 켜져 있는 동안 1초에 한 번 보내는 60바이트 리�
 | 오프셋 | 필드 | 타입 | 크기 | 의미 |
 |---:|---|---|---:|---|
 | 0 | `magic` | `char[4]` | 4 | ASCII `ZCAL` |
-| 4 | `version` | `uint8` | 1 | `1` |
+| 4 | `version` | `uint8` | 1 | 현재 `2`. v1·v2 모두 동일한 60바이트 레이아웃이며 디코더가 둘 다 지원 |
 | 5 | `reserved` | `uint8[3]` | 3 | 모두 `0` |
 | 8 | `gyro_bias1` | `float[3]` | 12 | IMU1 부팅 보정 bias(dps) |
 | 20 | `gyro_bias2` | `float[3]` | 12 | IMU2 부팅 보정 bias(dps), IMU1 센서축 기준 |
@@ -446,7 +531,6 @@ raw 스트림이 켜져 있는 동안 1초에 한 번 보내는 60바이트 리�
 분기해야 한다. 그 외 데이터그램만 ASCII/`GAINS` 파서로 넘긴다.
 
 하드웨어 LPF는 gyro 121Hz, accel 25Hz로 설정돼 있다
-(`inv_imu_set_gyro_ln_bw`, `inv_imu_set_accel_ln_bw`). 따라서 1kHz로
-기록해도 accel에는 25Hz 위의 진동 정보가 없다. 이 로그로 accel 프롭 진동
-스펙트럼을 해석하면 안 된다. 기록 주파수를 올리는 것은 센서 ODR이나 하드웨어
-LPF 대역을 바꾸지 않는다.
+(`inv_imu_set_gyro_ln_bw`, `inv_imu_set_accel_ln_bw`). 대역 밖 성분은 감쇠하며
+1kHz로 기록한다고 소실·감쇠된 원래 진동 스펙트럼이 복원되지는 않는다.
+기록 주파수를 올리는 것은 센서 ODR이나 하드웨어 LPF 대역을 바꾸지 않는다.

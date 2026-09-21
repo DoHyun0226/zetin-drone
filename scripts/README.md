@@ -1,172 +1,214 @@
-# PC tools
+# PC 지상국·분석 도구
 
-현행 ESP32-S3 펌웨어의 UDP 제어, 텔레메트리 수신, 모니터링과 로그 분석
-도구다. 아래 명령은 저장소 루트에서 실행한다.
+현행 `dual_imu_cascade_pwm`용 조종·텔레메트리 수집·오프라인 분석 도구다.
+처음 시작하면 [전원 인가 벤치 절차](../docs/power_on_bench_procedure.md)를
+먼저 읽고, USB로 연결한 DualSense와 `control_dualsense.py`를 사용한다.
+이 문서는 저스로틀 yaw 개선이 통합된 저장소 코드 기준이며 현재 기체에 올라간 빌드나 실기
+통과 여부를 뜻하지 않는다. 명령·필드 순서·단위의 정본은
+[UDP 프로토콜](../docs/udp_protocol.md)이다.
 
-```bash
-python scripts/control_dualsense.py [--no-raw] [--no-mag]
-python scripts/tune_pid.py
-python scripts/receive_telemetry.py
-python scripts/monitor_telemetry.py
-python scripts/analyze_flight_log.py [optional-log.csv]
-python scripts/analyze_probe_response.py <csv> [<csv> ...] [--label ground|air]
-python scripts/decode_imu_raw.py <input.bin> [output.csv]
-python scripts/receive_dual_imu_debug.py
-python scripts/test_dualsense_input.py
-```
+## 무엇을 실행할까
 
-`receive_telemetry.py`와 `monitor_telemetry.py`는 모두 UDP 4210을 사용하고
-수신 내용을 `logs/`에 기록한다. 두 도구는
-[`telemetry_schema.py`](telemetry_schema.py)의 동일한 필드 정의와 파서를
-공유하므로 10개부터 65개까지의 append-only 레거시 텔레메트리와 현행 75개
-필드 패킷을 같은 고정 스키마로 해석한다. 필드 44~55는
-body frame의 `IMU1_Gyro_X/Y/Z`, `IMU1_Accel_X/Y/Z`,
-`IMU2_Gyro_X/Y/Z`, `IMU2_Accel_X/Y/Z`다. gyro는 소프트웨어 LPF 적용
-후 값이고 accel에는 소프트웨어 LPF가 없다. 필드 56~65는 목표 각도,
-`Mag_Enabled`, 거리·광류 수신값, `Mag_Cal_Active`다. 필드 66~75는
-`Mixer_RP_Scale`, `Mixer_Yaw_Scale`, `Mixer_Collective_US`, 축별 PID/I 기여와
-`Yaw_Authority_State`다. `Mag_Z`에서 끝나는 34필드,
-`Yaw_Hold`에서 끝나는 35필드, `Trim_Pitch`에서 끝나는 38필드 패킷도
-레거시로 받아들인다. `Hover_Valid`에서 끝나는 40필드도 프로브 진단 도입 전
-패킷으로 수락하며, `Failsafe_Probe_Response_G`에서 끝나는 43필드는 IMU별
-텔레메트리 도입 전 패킷으로 수락한다. `IMU2_Accel_Z`에서 끝나는 55필드도
-목표 각도 텔레메트리 도입 전 패킷으로 수락하고, `TgtAngle_Yaw`에서 끝나는
-58필드는 mag 상태 텔레메트리 도입 전 패킷으로 수락하며, `Mag_Enabled`에서
-끝나는 59필드는 3901-L0X 텔레메트리 도입 전 패킷으로 수락한다. 필드 60~64는
-`Range_MM`, `Range_Quality`, `Flow_X`, `Flow_Y`, `Flow_Quality`이고 65는
-`Mag_Cal_Active`다. 과거 패킷에 없는 뒤쪽 값은 빈 셀로 남고, 현행 CSV는 PC
-수신 시각 `Timestamp`까지 포함해 76개 열을 쓴다.
+아래 명령은 저장소 루트에서, 필요한 패키지가 설치된 Python 환경으로 실행한다.
+의존성은 [requirements.txt](../requirements.txt)에 있다. `motor_serial.py`는
+추가로 `pyserial`이 필요하다.
 
-`analyze_probe_response.py`는 Stage E-4a용으로 프로브 판정 이벤트와
-`Hover_Est` 일관성을 확인하고, 지면/공중 응답 분포 및 1.5배 여유를 판정한다.
-두 로그를 비교할 때는
-`python scripts/analyze_probe_response.py ground.csv air.csv --label ground --label air`
-처럼 CSV 순서대로 `--label`을 반복한다. 같은 라벨의 CSV만 여러 개 분석할
-때는 `--label`을 한 번만 주면 모든 입력에 적용된다. `--plot`을 지정할 때만
-matplotlib을 불러오므로 터미널 요약에는 matplotlib이 필요 없다.
+| 목적 | 도구 | 실행 조건과 출력 |
+|---|---|---|
+| 조종·stdin 명령·CSV·raw 기록 | `control_dualsense.py` | 현행 기본 지상국. 게임패드 USB 연결, `Drone_Tuning` 접속 |
+| 축·버튼 번호 확인 | `gamepad_probe.py` | 드론에 명령을 보내지 않음. 처음 0.7초 손을 떼고 각 입력을 하나씩 확인 |
+| 입력값 연속 표시 | `test_dualsense_input.py` | 로컬 입력 진단. 화면의 RX/RY/L2 라벨은 예시 매핑이므로 축 번호를 실측 |
+| 게임패드 없는 수동 UDP 콘솔 | `tune_pid.py` | 명령 1회 송신과 상태 표시. RC 자동 송신·CSV 기록·종료 시 자동 `stop` 없음 |
+| 텍스트 수신·CSV 기록 | `receive_telemetry.py` | 단독 수신 전용. 조종·정지 명령 없음 |
+| 실시간 그래프·CSV 기록 | `monitor_telemetry.py` | GUI 필요. 조종·정지 명령 없음 |
+| 비행 CSV 요약·그래프 | `analyze_flight_log.py` | 오프라인. 대상 `flight_log_*.csv` 경로를 명시 |
+| 프로브 분포 분석 | `analyze_probe_response.py` | 오프라인 연구용. 결과가 현행 착지컷에 연결되지는 않음 |
+| raw 바이너리 → CSV | `decode_imu_raw.py` | 오프라인. 원본 `.bin` 보존, 출력 CSV 생성/덮어쓰기 |
+| 자기계 보정 상수 계산 | `magcal_fit.py` | 보정용 raw CSV에서 상수를 출력. 펌웨어를 자동 수정하거나 업로드하지 않음 |
+| dual-IMU 루프 진단 | `receive_dual_imu_debug.py` | 전용 `icm42670_dual_loop_debug` 펌웨어·`DUAL_IMU_DEBUG` AP용 |
+| 모터 식별용 시리얼 조작 | `motor_serial.py` | 전용 `motor_id_single` 펌웨어, 프로펠러 제거·PSU 전류 제한. 지정 시리얼 포트 확인 |
 
-`control_dualsense.py`는 정상 조종·벤치 작업에서 쓰는 **유일한 대화형
-지상국**이다. DualSense RC 스트리밍, stdin 명령·PID 조정, `gains` 확인,
-상태/고장 표시와 CSV 기록을 한 프로세스에서 처리한다.
-자기계 yaw 융합 선택은 기본 **ON**이다(BMM350 벤치 검증 완료, 자이로 단독은
-`YAW_DEADZONE` 이하 회전을 되돌릴 수단이 없다 → `docs/bmm350_yaw_bench_test.md`).
-stdin의 `mag on`/`mag off`가 선택을 바꾸고 드론에 즉시 `mag 1`/`mag 0`을
-보내며, 다음 시동에서도 지상국이 그 선택을 `start`보다 먼저 다시 보낸다.
-꺼진 상태로 시작하려면 `python scripts/control_dualsense.py --no-mag`를
-사용한다. `[STATUS]`의
-`Mag=`는 지상국 선택이 아니라 텔레메트리 `Mag_Enabled`이므로 명령 거부·유실도
-드러나며, 구형 패킷에서는 `-`다.
-`AGL=`은 Matek 3901-L0X 거리계다. `1.23m/q200` 형식이고, 범위 밖이면
-`OOR/q<품질>`, 신선한 프레임이 없으면 `-`다. 거리 원값이 범위 밖에서 음수라
-숫자를 그대로 보여주면 오해를 만들기 때문에 품질로 신선도를 먼저 판단한다.
-현행 비행 제어에는 사용 가능한 optical-flow 수평 위치 폐루프가 없다. `Flow_*`
-필드는 수신·기록용일 뿐이며, 중립 스틱에서도 생기는 수평 드리프트 보정은
-조종자가 수동으로 해야 한다.
-무장 중 `[DIAG]` 줄의 `dG`는 세 body-frame gyro 축에서 계산한
-`max(|IMU1 − IMU2|)`를 소수 한 자리로 표시한다. 구형 패킷처럼 IMU별
-12필드 중 하나라도 없으면 `dG=-`로 표시하며, CSV에는 수신한 12개 원본값을
-모두 기록한다. 같은 줄의 `eR`/`eP`는 각각
-`TgtAngle_Roll − Roll`/`TgtAngle_Pitch − Pitch` 각도 추종 오차다. 목표 각도가
-없는 구형 패킷은 `-`로 표시한다. yaw 목표 각도는 래핑과 `Yaw_Hold` 상태를
-함께 봐야 하므로 `[DIAG]`에서 오차로 요약하지 않고 CSV에만 기록한다.
-같은 `[DIAG]`의 `RP_Scale`, `Yaw_Scale`, `Yaw_Authority`는 펌웨어
-`Armed=1`일 때만 현재 값으로 표시한다. 상태 이름은 `NORMAL(0)`,
-`LIMITED(1)`, `RECOVERING(2)`이며 구형·미시동 패킷은 `-`다.
-`analyze_flight_log.py`는 RP/Yaw scale의 min·p05, LIMITED 진입 횟수와 누적
-시간, 축별 PID/I 절댓값 최댓값을 요약한다. 필드가 없는 레거시 CSV는
-`legacy/unknown`으로 명시하며 0으로 꾸미지 않는다.
+**드론에 UDP를 보내는 도구는 한 번에 하나만 실행한다.** 펌웨어는 마지막
+발신자의 IP/포트를 텔레메트리 목적지로 삼는다. 포트 충돌을 피했더라도
+`tune_pid.py`나 수신기의 `connect`가 조종 지상국의 데이터를 가져갈 수 있다.
+DualSense 조종 중 상태 확인과 로그 기록도 같은 `control_dualsense.py`에서 한다.
 
-IMU별 값도 20Hz 스냅샷이므로 Nyquist 주파수는 10Hz다. 프롭 진동은
-앨리어싱되며, 이 값이나 `dG`만으로 진동·순간 disagree·freeze를 판정할 수
-없다. 느린 bias/scale 드리프트와 정상상태 오프셋 관찰에만 사용한다.
+`receive_telemetry.py`와 `monitor_telemetry.py`는 현재 raw 바이너리 분기가
+없다. 펌웨어 raw가 켜져 있으면 `ZIMU`·`ZCAL`을 불량 텔레메트리로 집계하며
+저장하지 않는다. raw까지 받을 세션은 `control_dualsense.py`를 사용한다.
+독립 수신기만 사용할 벤치에서는 모터를 정지한 채 기존 콘솔에서 `raw off`
+(`tune_pid.py`에서는 `raw 0`)를 보내고 그 콘솔을 종료한 뒤 수신기를 실행한다.
+이 설정은 드론 재부팅 후 유지되지 않는다.
 
-1kHz 원시 스트림은 펌웨어에서 기본 ON이다. 첫 `ZIMU` 또는 `ZCAL`
-데이터그램을 받을 때만 기존 flight log와 같은 타임스탬프의
-`logs/imuraw_<timestamp>.bin`을 lazy-open하므로, raw 패킷을 받지 않은
-세션에는 빈 `.bin`이 남지 않는다. `[STATUS]`의
-`Raw=<batches>b/<dropped>d`는 받은 `ZIMU` 배치 수와 펌웨어 생산자 누적
-드롭을 뜻한다. stdin의 `raw on`/`raw off`로 런타임 게이트를 그대로 바꿀 수
-있다.
-
-지상국을 종료하면 `.bin`을 닫은 뒤 같은 이름의 `.csv`로 자동 변환하고,
-`batches`, `samples`, `wireless_lost`, `producer_dropped`,
-`average_sample_rate_hz`, `dt_us_min`, `dt_us_max`를 요약한다. 변환 전에
-진행 안내를 출력하며, 실측 비용은 기록 시간의 약 2%라 10분 세션은 약
-12초가 걸린다. 변환이 실패해도 경고만 출력하고 정상 종료하며 원본 `.bin`은
-그대로 남긴다.
-
-`.bin`은 실시간으로 파싱하지 않고 데이터그램 바이트를 그대로 이어 쓴 와이어
-포맷 원본이다. 자동 변환과 별개로 다음처럼 언제든 다시 디코딩할 수 있다.
+## DualSense 시작·조종·정지
 
 ```bash
-python scripts/decode_imu_raw.py logs/imuraw_2026-07-30_120000.bin
-python scripts/decode_imu_raw.py logs/imuraw_2026-07-30_120000.bin /tmp/imu.csv
+python scripts/gamepad_probe.py
+python scripts/control_dualsense.py
 ```
 
-출력을 생략하면 입력과 같은 경로의 `.csv`를 만든다. 디코더는 원시 int16
-12축과, `ZCAL`이 있으면 bias/scale 및 IMU2 부호를 적용한 IMU1 센서 프레임
-dps/g 12축을 기록한다. stderr 요약의 `wireless_lost_batches`는
-`batch_seq` 구멍, `producer_dropped`는 링 포화이며 서로 다른 결측이다.
-`ZCAL`이 없으면 원시 컬럼만 만들고 경고한다. 잘린/알 수 없는/미지원 버전
-레코드는 건너뛰되 각각 개수를 보고한다.
+첫 명령을 종료한 다음 두 번째 명령을 실행한다. 실행만으로 시동하지 않는다.
+`[STATUS]`의 자세·`Armed`·`Faults`를 확인하고 벤치 절차의 시동 조건을 따른다.
+게임패드 없이 시작하면 조종 스레드는 종료하지만 stdin·수신은 남는다. 이때
+stdin `start`만으로 주기적인 RC가 생기지는 않으므로 비행 조종에 사용하지 않는다.
 
-저장 공간이나 RF 부하 때문에 세션 단위로 raw를 쓰지 않으려면
-`python scripts/control_dualsense.py --no-raw`로 시작한다. 시작 시 드론에
-`raw 0`을 반복 전송하고, 수신된 raw 데이터그램도 기록하지 않으므로 해당
-세션에는 `.bin`과 raw `.csv`가 생기지 않는다. 기본 인자 없는 동작은 raw
-기록과 종료 시 자동 변환이다.
+| 입력 | 현행 동작 |
+|---|---|
+| X | 지상국이 무장 상태로 보면 `stop`, 아니면 `start` 요청 |
+| △ | 자동착륙 하강 중 명시적 `resume` 시도 |
+| 왼쪽 스틱 | roll/pitch 목표 각도, 최대 ±15° |
+| 오른쪽 스틱 좌우 | yaw 각속도, 최대 ±90°/s. 상하는 사용하지 않음 |
+| R2 / L2 | 눌림으로 판정된 동안 스로틀 증가/감소, 일정한 200µs/s |
+| R1 / L1 | 누름 엣지마다 스로틀 +1 / −1µs |
+| D-pad | roll/pitch 트림 0.2°씩 변경, 각 축 ±10° 제한 |
+| PS | 트림을 0으로 초기화 |
+| stdin `stop` | 지상국의 무장 추정과 무관하게 `stop` 반복 전송 |
+| Ctrl+C | 지상국이 무장 상태로 보는 경우 `stop` 후 종료·로그 닫기 |
 
-하드웨어 LPF는 gyro 121Hz, accel 25Hz다. 1kHz raw 파일이라도 accel에는
-25Hz 위 내용이 없으므로 accel 진동 스펙트럼 분석에는 사용할 수 없다. 이
-기능은 제어 루프, FreeRTOS tick, 센서 ODR, 하드웨어 LPF 설정을 바꾸지 않는다.
+RC `rcr` 송신 목표는 **20Hz**(`CTRL_LOOP_HZ=20`)다. 스로틀과 트림 입력은
+RC 송신 중에만 처리된다. 버튼 번호는 OS/연결 방식에 따라 확인해야 하며,
+현재 코드는 X=b0, △=b3, PS=b12, R1=b5, L1=b4, R2=a5, L2=a2를 쓴다.
 
-`control_dualsense.py`는 yaw 스틱을 상태 없는 `rcr` 각속도 명령으로 보내며,
-`YAW_RATE_MAX_DPS = 90.0`에 따라 최대 편향을 ±90dps로 제한한다. 펌웨어의
-±180dps 하드 제한과는 별도의 지상국 조종감 상수다.
-무장 중 `[DIAG]`의 `Trim=<roll>/<pitch>`는 **드론이 실제로 들고 있는**
-`Trim_Roll`/`Trim_Pitch`다. 지상국의 D-pad 값과 다르면 끝에 `!`가 붙는다
-(`Trim=+0.0/+1.2!`) — 명령이 아직 반영되지 않았다는 뜻이고, 지상국이
-0.2초 간격으로 다시 보내 곧 사라진다. 구형 패킷은 `-`다. 이 값을 지상국
-변수로 표시하면 유실·거부가 성공과 똑같이 보이므로 텔레메트리만 쓴다.
+stdin에는 [프로토콜의 명령](../docs/udp_protocol.md#지상국--드론)을 입력한다.
+`start`·`stop`·`resume`·`th`는 지상국 상태도 함께 갱신하는 별도 경로다.
+자기계와 raw 토글은 이 콘솔에서 **`mag on/off`, `raw on/off`**로 입력한다.
+그 외 PID 게인, `gains`, `yaw`, `magcal`, `magc` 등은 UDP로 전달된다.
+무장 요청은 `ARMING`으로 시작하며, 펌웨어 `Armed=1`을 수신한 뒤에만
+`ARMED 확인`을 출력하고 RC 송신을 시작한다. 거부·확인 시간 초과는 성공이
+아니다. 다른 명령도 전송 메시지만으로 적용을 판단하지 말고 `Mag_Enabled`,
+`Trim_*`, `GAINS` 응답 등 해당 텔레메트리로 확인한다.
 
-roll·pitch 트림은 `trim <roll> <pitch>` 절대값 명령으로 드론에 저장된다.
-D-pad 전송은 **블로킹하지 않는다.** 예전에는 `reliable_send`로 5회
-재전송하며 `time.sleep`을 돌았는데, 그 호출이 `rcr`을 50Hz로 보내는
-스레드에서 일어나 누를 때마다 RC 업링크가 100ms 멈췄다(RC 타임아웃은
-500ms). 지금은 한 번만 보내고, 유실은 텔레메트리와 비교해 다시 보내는
-닫힌 루프로 메운다 — `trim`이 증분이 아닌 절대값이라 재전송이 안전하다.
-지상국은 **시동할 때 트림을 보내지 않는다** — 스크립트를 재시작하면 지역
-변수가 0이라 그 전송이 드론에 저장된 트림을 지워버리기 때문이다. 대신 첫
-텔레메트리의 `Trim_Roll`/`Trim_Pitch`를 읽어 지역 값을 맞추고, 조종자가
-D-pad로 실제로 바꿨을 때만 전송한다. 드론이 재부팅했다면 그 트림은 0이고
-지상국도 0을 채택한다.
+## 링크가 끊겼을 때
 
-⚠️ 벤치 스크립트(`bench_*.py`)는 `rc <seq> 0 0 0`을 "수평 유지"로 쓰지만
-펌웨어가 여기에 트림을 더하므로, 세 스크립트 모두 시작 시 `trim 0 0`을
-보내 드론의 트림을 지운다. 조종용 트림을 유지한 채 벤치를 돌릴 수는 없다.
+게임패드 분리, 유효 텔레메트리 1.5초 미수신, `Fault_RC` 상승 엣지는
+**RC 송신만 중단**한다. 로컬 스로틀은 초기화하지만 `th 1000`이나 `stop`을
+자동으로 보내지 않는다. 펌웨어는 자체 RC 타임아웃 조건에 따라 즉시 컷 또는
+시간 기반 하강을 수행한다. 하강은 착지를 감지하지 않으며 자세한 조건과
+시간 예산은 [프로토콜](../docs/udp_protocol.md)에 있다.
 
-주요 의존성은 `pygame`, `pandas`, `matplotlib`이며 저장소 루트의
-`requirements.txt`에 정리돼 있다. 가상환경 기준 설치 방법:
+수신·패드 연결이 돌아와도 RC가 자동 재개되지는 않는다. 같은 지상국 세션이
+드론을 무장 상태로 보고 있고, 최신 `Failsafe_Phase=1`과 유효한 `Hover_Est`가
+있을 때 △ 또는 stdin `resume`으로 복구를 요청한다. 지상국은 RC 송신을 먼저
+재개하고, 카운터로 RC 수락을 확인한 뒤 `resume`을 보낸다. 이후 추가 RC
+수락과 `Failsafe_Phase=0`을 확인해야 성공을 출력하고 로컬 스로틀을 호버
+추정치에 맞춘다. **복귀는 고도·하강속도 복구를 보장하지 않는다.**
+
+확인 시간 초과 메시지는 성공을 뜻하지 않는다. 해당 실패 처리만으로는
+재개했던 RC 송신이 꺼지지 않을 수 있으며, 실제 phase를 다시 봐야 한다.
+킬이나 재상실은 진행 중 복구를 취소한다. 펌웨어가 이미 컷한 뒤에는
+`resume`할 수 없다. 지상국을 재시작하면 로컬 무장 추정도 초기화되므로
+비행 중 프로세스 재시작을 복구 절차로 사용하지 않는다.
+
+수동 킬은 stdin `stop`·X·Ctrl+C 경로다. 단 X는 로컬 무장 추정에 따른
+토글이므로 **항상 정지만 요청하려면 stdin `stop`**을 사용한다.
+드론의 `Armed=0` 확인(시동 직후 유예 제외)이나 `Fault_Critical` 상승 엣지도
+지상국 무장 추정이 남아 있으면 `stop`을 보낸다. 자세한 링크 진단은
+[지상국 링크 문서](../docs/ground_station_link.md)를 따른다.
+
+## 상태·트림·자기계 읽기
+
+`[STATUS]`는 수신된 상태를 약 1초마다, 무장 중 `[DIAG]`는 약 5Hz로 표시한다.
+하강 중 `[AUTO-LAND]`는 매 텔레메트리 샘플을 표시하고 종료 phase는 전이 때
+한 번 출력한다. 없는 구형 필드는 `-` 또는 `legacy/unknown`이며 정상값 0이 아니다.
+
+- `Mag=`는 지상국 선택이 아닌 실제 `Mag_Enabled`다. 펌웨어 부팅 기본은 OFF,
+  지상국 선택 기본은 ON이다. 시동 요청 전에 선택값을 다시 보낸다.
+  OFF 선택으로 시작하려면 `--no-mag`를 쓴다. 기존 벤치 결과와 현재 보정 후
+  재검증 범위는 [BMM350 문서](../docs/bmm350_yaw_bench_test.md)에서 확인한다.
+- `AGL=`은 거리계 표시다. 신선도 없음은 `-`, 음수 거리 원값은 `OOR/q<품질>`,
+  그 외는 `1.23m/q200`처럼 표시한다. 거리·광류는 현재 기록용이며 자동 고도
+  제어·착지 판정에 사용하지 않는다. optical-flow 수평 위치 폐루프도 없으며,
+  `Flow_*`는 수신·기록용이다. 중립 스틱에서 생기는 드리프트는 조종자가 수동 보정한다.
+- `eR/eP`는 목표 각도에서 측정 각도를 뺀 값이다. 목표에는 트림이 이미 포함된다.
+  `dG`는 두 IMU의 축별 gyro 차이 중 최댓값이다. 이 20Hz 스냅샷으로 빠른
+  프롭 진동·순간 센서 고장을 확정할 수 없다.
+- `[DIAG]`의 `RP_Scale`·`Yaw_Scale`·`Yaw_Authority`는 펌웨어 `Armed=1`일 때만
+  수신값을 표시한다. 상태는 `NORMAL(0)`·`LIMITED(1)`·`RECOVERING(2)`이며,
+  해당 값이 없는 구형 패킷이나 미시동 패킷은 `-`로 표시한다.
+- `Trim=`은 드론이 보내온 값이다. 로컬 값과 다르면 `!`가 붙고 0.2초 이상
+  간격으로 재전송한다. 유실·거부가 계속되면 표시도 남는다. 첫 완전한 트림
+  텔레메트리를 한 번 채택한 뒤에는 로컬 값을 유지하므로 **stdin `trim`이나
+  드론 재부팅으로 바뀐 값을 다시 덮어쓸 수 있다.** 같은 세션의 트림 변경은
+  D-pad·PS를 사용한다. `start`는 트림을 따로 보내지 않는다.
+
+## 로그 저장과 오프라인 분석
+
+공유 `telemetry_schema.py`의 현행 패킷은 **75필드**, PC 수신 시각
+`Timestamp`를 앞에 붙인 CSV는 **76열**이다. 수신·모니터 도구도 같은 파서를
+쓴다. 10~74필드의 레거시 패킷은 없는 뒤쪽 값을 빈 셀로 기록하고, 75필드를
+넘는 미래 패킷은 알려진 앞쪽만 읽는다. 첫 10필드는 비어 있지 않은 유한수,
+정수 필드는 정수값이어야 한다. 역사적 확장 경계와 단위는
+[UDP 프로토콜](../docs/udp_protocol.md#드론--지상국)을 따른다.
+
+추가 진단 필드의 순서는 다음과 같다.
+
+| 번호 | 필드 | 의미 |
+|---|---|---|
+| 66 | `Mixer_RP_Scale` | roll·pitch 전달 비율 |
+| 67 | `Mixer_Yaw_Scale` | yaw 전달 비율 |
+| 68 | `Mixer_Collective_US` | 실제 배분한 collective(µs) |
+| 69~71 | `PID_Roll_US`, `PID_Pitch_US`, `PID_Yaw_US` | 축별 PID 기여(µs) |
+| 72~74 | `I_Roll_US`, `I_Pitch_US`, `I_Yaw_US` | 축별 적분 기여(µs) |
+| 75 | `Yaw_Authority_State` | yaw 권한 상태 |
+
+기본 지상국은 `logs/flight_log_<timestamp>.csv`를 기록한다. raw를 처음
+받았을 때 같은 타임스탬프의 `imuraw_<timestamp>.bin`을 열고 데이터그램을
+그대로 이어 쓴다. 종료 시 `.bin`을 닫고 같은 이름의 `.csv`로 변환한다.
+변환 실패는 경고하며 원본 `.bin`은 남는다. 시간은 로그 크기와 실행 환경에
+따라 달라진다. 코드의 “10분 세션 약 12초”는 안내값이다.
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+python scripts/control_dualsense.py --no-raw --no-mag
+python scripts/analyze_flight_log.py logs/flight_log_YYYY-MM-DD_HHMMSS.csv --no-plot
+python scripts/decode_imu_raw.py logs/imuraw_YYYY-MM-DD_HHMMSS.bin /tmp/imu.csv
+python scripts/analyze_probe_response.py ground.csv air.csv --label ground --label air
+python scripts/magcal_fit.py capture.csv
 ```
 
-`tune_pid.py`와 `monitor_telemetry.py`는 게임패드가 없는 상황이나 수동 UDP
-확인에 쓰는 독립 보조 도구다. 두 도구 중 하나라도
-`control_dualsense.py`와 **동시에 실행하면 안 된다.** 펌웨어는 들어온 모든
-UDP 패킷의 발신자 IP/포트로 텔레메트리 목적지를 다시 지정하므로, 보조 도구가
-명령을 보내는 순간 텔레메트리를 가져간다. 20Hz RC를 보내는
-`control_dualsense.py`와 다른 대화형 도구는 구조적으로 공존할 수 없다.
-DualSense 조종 중 텔레메트리 확인과 로그 기록은 `control_dualsense.py` 하나로
-수행한다. `receive_telemetry.py`도 같은 UDP 4210을 쓰는 독립 수신 도구이므로
-동시에 실행하지 않는다.
+각 명령은 서로 별도 용도다. `--no-raw`는 시작 시 `raw 0`을 반복 전송하며
+세션 내 raw 파일 기록을 막는다. 이후 `raw on`은 펌웨어 게이트만 켜므로
+`--no-raw`로 시작한 세션의 기록을 다시 켜지는 않는다. 기본 실행도 `raw 1`을
+자동 재전송하지 않으므로 이전 세션이 껐다면 `raw on`을 직접 입력한다.
 
-⚠️ `control_dualsense.py`로 조종할 때 **게임패드는 USB로 연결한다.** 블루투스
-패드는 노트북 WiFi와 무선부를 공유해 드론으로 가는 업링크를 수백 ms씩 막고,
-비행 중 RC 타임아웃(자동착륙)을 유발한다. 근거와 진단법은
-[`docs/ground_station_link.md`](../docs/ground_station_link.md) 참조.
+`analyze_flight_log.py`의 `--no-plot`은 창을 생략하지만 matplotlib은 여전히
+필요하다. 파일을 생략하면 `logs/*.csv` 중 수정시각이 가장 최근인 파일을
+선택하므로, raw CSV를 고르지 않도록 경로를 명시한다. 요약에는 RP/Yaw scale의
+최솟값·p05(5백분위수), LIMITED 진입 횟수·누적 시간, roll/pitch/yaw별
+PID·I 기여의 절댓값 최댓값이 포함된다. 필요한 진단값이 없는 레거시 CSV는
+해당 항목을 `legacy/unknown`으로 표시한다. LIMITED 시간은 `Timestamp`로
+계산하며, 시간 자료가 없으면 `duration unavailable`, 상태·시간 결측이 있으면
+`incomplete: unknown state/time gap`을 표시한다.
 
-오래된 GPS/TCP 실험 도구는 [`archive/README.md`](archive/README.md)에서만
-찾을 수 있으며 현행 지원 범위가 아니다.
+프로브 분석은 실행 시 현재 `.ino`에서 임계를 읽는다. 과거 비행 당시 임계와
+같다는 뜻은 아니다. 20Hz에서 관측된 상태 전이 또는 응답값 변화로 이벤트를
+추출하므로 일부 이벤트를 놓칠 수 있다. `BLOCKED`·0 응답을 제외하고,
+표본 부족·`Hover_Est` 혼합은 판정을 보류한다. 종료코드 0은 분석 실행 성공이며
+분포 “통과”를 뜻하지 않는다. `--plot`일 때만 matplotlib을 불러온다.
+
+`magcal_fit.py`는 기본적으로 `Mag_Cal_Active=1`인 raw 행만 사용한다.
+`--all`은 보정 전 raw만 따로 추린 파일임을 확인했을 때만 사용한다. 출력의
+`95p |B| radial residual`은 자기장 크기 피팅 잔차로, heading 정확도가 아니다.
+스로틀 간섭 계수 환산은 입력 좌표계가 맞아야 하며 새 보정 후 모터 벤치로
+재검증한다. 로그 좌표계·시간축·결측 해석은 [logs/README.md](../logs/README.md).
+
+## 자동 벤치 스크립트의 실행 범위
+
+`bench_sign_test.py`·`bench_yaw_test.py`·`bench_thrust_ramp.py`는 이전 벤치의
+자동화 도구다. 세 스크립트 모두 **WiFi 전환, `trim 0 0`, `start`, 주기적 RC,
+종료 시 `stop`**을 실행한다. 출력 경로와 복귀 SSID가 코드에 고정되어 있고
+WiFi 복귀 성공을 충분히 확인하지 않은 채 완료를 출력한다. 새 환경에서
+그대로 실행하는 첫 진입점으로 사용하지 말고
+[현행 벤치 절차](../docs/power_on_bench_procedure.md)와 설정을 먼저 대조한다.
+
+- `bench_sign_test.py`·`bench_yaw_test.py`: 모터 전원 차단·프로펠러 제거 상태의
+  텔레메트리 부호 확인용이다. 이 전제를 코드가 물리적으로 확인하지 않는다.
+- `bench_thrust_ramp.py`: 프로펠러가 회전하는 고정 시험용이다. EOF에서도
+  확인 입력을 통과하고, 종료 램프는 고정 `1200 → 1100 → 1000`이어서 지정한
+  `cap_us`가 1200보다 작아도 그 값을 넘을 수 있다. 20Hz 모터 명령 분산에
+  근거한 “진동 없음”·다음 시험 권고 출력은 기계 진동·실제 추력·비행 안전의
+  검증으로 취급하지 않는다. 이 제한을 해결하기 전에는 초보자 실행 경로에서
+  제외한다.
+
+공유 모듈은 `telemetry_schema.py`(파싱·CSV 정규화)와
+`failsafe_telemetry.py`(phase·probe 이름과 표시)다. 이들은 실행 도구가 아니다.
+[archive/](archive/README.md)의 GPS/TCP 도구는 현행 비행 펌웨어용이 아니다.

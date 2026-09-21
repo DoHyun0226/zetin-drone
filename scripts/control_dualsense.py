@@ -200,7 +200,7 @@ def send_trim():
     """트림을 절대값으로 드론에 한 번 보낸다.
 
     reliable_send를 쓰면 안 된다. 그것은 STOP_RETRIES회 sleep하며 도는데,
-    이 함수는 rcr을 50Hz로 보내는 controller_thread에서 호출되므로 그 동안
+    이 함수는 rcr을 20Hz로 보내는 controller_thread에서 호출되므로 그 동안
     RC 업링크가 통째로 멈춘다. 유실 대비는 블로킹 재시도가 아니라
     텔레메트리의 Trim_Roll/Trim_Pitch와 비교해 다시 보내는 닫힌 루프로
     처리한다(telemetry_thread). trim은 증분이 아니라 절대값 명령이라

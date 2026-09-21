@@ -155,12 +155,14 @@ static inline void recordLandDetectorProbeDelivery(
   }
 }
 
-// 매 tick 호출. 검출기가 대기→딥→판정을 전부 소유하고 착지 확정 시 true다.
-// pid_task는 반환값과 landDetectorProbeActive()만 제어에 사용한다.
+// 매 tick 호출. 검출기가 대기→딥→후보 판정을 소유하고 후보 조건 충족 시 true다.
+// 현재 pid_task는 반환값을 착지 컷에 쓰지 않는다(landed=false). 상태/응답은
+// 기록하고 landDetectorProbeActive()로 실제 스로틀 딥을 계속 구동한다.
 //
 // LPF는 min_descend 게이트보다 먼저 항상 갱신한다. 딥 직전값과 딥 중 최솟값의
-// 차분을 쓰므로 5Hz 아래 저주파 진동은 400ms 프로브 안에서 공통모드로
-// 상쇄된다. 반응(response_g 초과)은 공중, 연속 confirm_n회 무반응은 지면이다.
+// 차분을 쓴다. 딥 전후 일정한 성분은 줄지만 저주파 운동도 120ms 동안 변하므로
+// 완전 상쇄를 보장하지 않는다. response_g와 confirm_n은 후보 판정 기준이며,
+// 실제 지면/공중 분리 성능은 검증되지 않았다. docs/failsafe_land_research.md.
 static inline bool updateLandDetector(
     LandDetector &det, float accel_magnitude_g, uint32_t elapsed_ms,
     int base_throttle_us, const LandProbeConfig &config) {
@@ -218,8 +220,8 @@ static inline bool updateLandDetector(
   det.last_response_g = det.pre_dip_g - det.dip_min_g;
   if (!det.probe_delivery_valid) {
     det.probe_state = FS_PROBE_BLOCKED;
-    // 일어나지 않은 프로브는 카운트를 올리거나 지우지 않는다. 전부 막히면
-    // 착지 확정 대신 FS_MAX_MS 백스톱이 자르는 것이 공중 조기컷보다 안전하다.
+    // 전달이 부족한 프로브는 카운트를 올리거나 지우지 않는다. 현재 pid_task는
+    // 프로브 결과와 무관하게 FS_MAX_MS 백스톱으로 컷한다.
     return false;
   }
   det.probe_state = FS_PROBE_EVALUATE;
@@ -230,8 +232,8 @@ static inline bool updateLandDetector(
   }
   // 과거의 폐기된 방식은 1g 복귀를 착지의 충분조건으로 썼다. 여기서는 능동
   // 프로브 연속 무반응이 여전히 주 판별이며, 지면에 정지하면 반드시 1g라는
-  // 사실만 이용해 1g 근처를 착지 확정의 필요조건으로 추가한다. 1g만으로는
-  // 절대로 착지를 선언하지 않는다.
+  // 사실만 이용해 1g 근처를 후보 판정의 필요조건으로 추가한다. 1g만으로는
+  // true를 반환하지 않으며, true도 현재 pid_task에서는 착지 확정이 아니다.
   const bool near_stationary_1g =
       fabsf(det.filt - 1.0f) <= config.ground_accel_tol_g;
   return det.no_response_count >= config.confirm_n && near_stationary_1g;
