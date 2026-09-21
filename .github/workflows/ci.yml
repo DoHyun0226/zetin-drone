@@ -18,12 +18,35 @@ jobs:
       # 의존성 전체를 필요로 하므로, 목록이 갈라지지 않게 선언된 파일을 쓴다.
       - name: Install ground station dependencies
         run: python -m pip install -r requirements.txt
+      # tools/ 의 네이티브 시험은 ESP32 와 같은 정수·포인터 폭을 쓰려고 g++ -m32
+      # 로 빌드한다. multilib 이 없으면 링크가 실패하고 테스트는 예외 대신
+      # skipTest 로 빠진다 — 그래서 CI 가 녹색인데 아무것도 검증하지 않는다.
+      # 2026-09-07 실행(34104011215)이 failsafe land·attitude SIL·control math
+      # 컴파일 가드·BMM350 SIL·MSP 센서·yaw 명령 7개를 건너뛰고 OK 로 끝났다.
+      - name: Install 32-bit toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib
       - name: Byte-compile PC tools
         run: python -m py_compile scripts/*.py
       - name: Repository layout checks
         run: python tools/check_repo_layout.py
+      # skip 은 실패가 아니다. 그래서 툴체인이 빠지면 네이티브 시험이 통째로
+      # 건너뛰어지는데도 CI 는 녹색으로 끝난다 — 2026-09-07 까지 실제로 그랬다.
+      # tools/ 의 skip 은 전부 툴체인 부재 조건이므로, 하나라도 건너뛰면
+      # 검증을 못 한 것이고 따라서 실패로 본다.
       - name: Unit tests
-        run: python -m unittest discover -s tools -p "test_*.py" -v
+        run: |
+          python - <<'PY'
+          import sys
+          import unittest
+
+          suite = unittest.defaultTestLoader.discover("tools", pattern="test_*.py")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          for test, reason in result.skipped:
+              print(f"::error::skipped {test}: {reason}")
+          sys.exit(0 if result.wasSuccessful() and not result.skipped else 1)
+          PY
 
   firmware:
     runs-on: ubuntu-latest
