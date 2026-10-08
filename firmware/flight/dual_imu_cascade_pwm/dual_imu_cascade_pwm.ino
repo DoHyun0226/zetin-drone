@@ -20,7 +20,15 @@ static const uint8_t IMU_RAW_BATCH_MAX = 50;
 // v2: ImuRawSample 에 failsafe_phase 추가. 디코더는 v1 도 계속 읽는다.
 static const uint8_t IMU_RAW_VERSION = 2;
 
-struct __attribute__((packed)) ImuRawSample {
+
+/*
+GCC/Clang 컴파일러 확장 문법
+기본 형태 
+void foo(void) __attribute__((속성));
+int x __attribute__((속성)) = 0;
+*/
+
+struct __attribute__((packed)) ImuRawSample { 
   uint16_t dt_us;
   int16_t imu1_gyro[3];
   int16_t imu1_accel[3];
