@@ -2254,6 +2254,84 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertEqual(self.module.current_throttle, 1000)
         self.assertIn("시간 초과", output.getvalue())
 
+    def test_armed_telemetry_after_the_deadline_aborts_instead_of_confirming(self):
+        # 수신 루프는 recvfrom() 전에 deadline을 검사한다. 그 검사(11.99)와
+        # 패킷 처리(12.05) 사이에 deadline(12.00)이 지나면 Armed=1 패킷이
+        # 늦게 도착해도 성공으로 처리되면 안 된다.
+        commands = []
+        self.module.reliable_send = commands.append
+        self.module.is_armed = False
+        self.module.is_streaming = False
+        self._prime_prearm_telemetry()
+        with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
+            self.assertTrue(self.module.arm())
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.module.check_arm_timeout(now=11.99)
+            self.module.advance_arm_attempt(
+                _telemetry_sample(
+                    Armed=1,
+                    Calibration_OK=1,
+                    Fault_Critical=0,
+                    Failsafe_Phase=0,
+                ),
+                now=12.05,
+            )
+
+        self.assertEqual(commands, ["mag 1", "start", "stop"])
+        self.assertEqual(self.module.arm_state, "idle")
+        self.assertFalse(self.module.is_armed)
+        self.assertFalse(self.module.is_streaming)
+        self.assertEqual(self.module.current_throttle, 1000)
+        self.assertIn("시간 초과", output.getvalue())
+        self.assertNotIn("ARMED 확인", output.getvalue())
+
+    def test_receive_loop_judges_arm_deadline_at_decision_time_not_receipt(self):
+        # 패킷은 deadline(12.00) 전인 11.99에 받았지만, 트림 재전송 등으로
+        # 판정이 12.05까지 밀리면 수신 시각이 아니라 판정 시각으로 본다.
+        commands = []
+        self.module.reliable_send = commands.append
+        self.module.is_armed = False
+        self.module.is_streaming = False
+        self._prime_prearm_telemetry()
+        with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
+            self.assertTrue(self.module.arm())
+
+        self.module.trim_synced = True
+        self.module.trim_roll = 1.0
+        self.module.trim_pitch = 0.0
+        self.module.last_trim_resend = 0.0
+        clock = {"now": 11.99}
+
+        def send_cmd(command):
+            if command.startswith("trim "):
+                clock["now"] = 12.05
+
+        with (
+            mock.patch.object(
+                self.module.time, "monotonic", side_effect=lambda: clock["now"],
+            ),
+            mock.patch.object(self.module, "send_cmd", side_effect=send_cmd),
+        ):
+            output = self._run_telemetry([
+                _telemetry_sample(
+                    Armed=1,
+                    Calibration_OK=1,
+                    Fault_Critical=0,
+                    Failsafe_Phase=0,
+                    Trim_Roll=0.0,
+                    Trim_Pitch=0.0,
+                ),
+            ])
+
+        self.assertEqual(commands, ["mag 1", "start", "stop"])
+        self.assertEqual(self.module.arm_state, "idle")
+        self.assertFalse(self.module.is_armed)
+        self.assertFalse(self.module.is_streaming)
+        self.assertIn("시간 초과", output)
+        self.assertNotIn("ARMED 확인", output)
+
     def test_disarmed_telemetry_retries_start_at_a_bounded_cadence(self):
         reliable_commands = []
         direct_commands = []

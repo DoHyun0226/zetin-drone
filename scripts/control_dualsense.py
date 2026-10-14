@@ -455,12 +455,14 @@ def advance_arm_attempt(sample, now=None):
     global arm_state, arm_next_retry, is_armed, is_streaming
     global current_throttle, throttle_f
 
-    if now is None:
-        now = time.monotonic()
     success = False
     failure = None
     retry = False
     with safety_cmd_lock:
+        if now is None:
+            # 패킷 수신 시각이 아니라 락을 얻은 판정 시각이다. 수신 뒤 트림
+            # 전송·출력·락 대기로 밀린 시간도 deadline에 들어가야 한다.
+            now = time.monotonic()
         if arm_state != "arming":
             return
 
@@ -471,6 +473,11 @@ def advance_arm_attempt(sample, now=None):
             failure = f"Calibration_OK={calibration_ok!r}"
         elif fault_critical != 0:
             failure = f"Fault_Critical={fault_critical!r}"
+        # deadline을 성공 판정보다 먼저 본다: 수신 루프의 check_arm_timeout()은
+        # recvfrom() 전에 돌기 때문에, 마감 직후 처리되는 Armed=1을 여기서 막지
+        # 않으면 이미 포기했어야 할 무장이 성공으로 바뀐다.
+        elif now >= arm_deadline:
+            failure = "펌웨어 Armed=1 확인 시간 초과"
         elif firmware_armed == 1:
             arm_state = "armed"
             is_armed = True
@@ -481,8 +488,6 @@ def advance_arm_attempt(sample, now=None):
             success = True
         elif firmware_armed != 0:
             failure = f"Armed={firmware_armed!r}"
-        elif now >= arm_deadline:
-            failure = "펌웨어 Armed=1 확인 시간 초과"
         elif now >= arm_next_retry:
             send_cmd("start")
             arm_next_retry = now + ARM_RETRY_PERIOD_SEC
@@ -948,7 +953,7 @@ def telemetry_thread():
 
         # start를 보낸 것만으로 로컬 무장으로 간주하지 않는다. 펌웨어가 같은
         # 텔레메트리 샘플에서 건강 상태와 Armed=1을 확인한 뒤에만 RC를 연다.
-        advance_arm_attempt(sample, now=received_at)
+        advance_arm_attempt(sample)
 
         now_str = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
         csv_writer.writerow(sample_to_csv_row(now_str, sample))
