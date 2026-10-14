@@ -1,7 +1,7 @@
 # UDP 제어·텔레메트리 프로토콜
 
 현행 `dual_imu_cascade_pwm`와 지상 도구의 명령·필드 정본이다.
-2026-09-07 저장소 코드 기준이며, 실제 기체의 업로드 빌드는 별도 확인한다.
+저스로틀 yaw 개선 통합 코드 기준이며, 실제 기체의 업로드 빌드는 별도 확인한다.
 운영 순서는 [PC 도구 안내](../scripts/README.md), 링크 상실 진단은
 [지상국 링크 문서](ground_station_link.md)를 먼저 참고한다.
 
@@ -249,7 +249,7 @@ ar|at|ay <value>      # roll / pitch / yaw
 
 ## 드론 → 지상국
 
-텔레메트리는 다음 65개 필드를 정확한 순서로 담은 쉼표 구분 데이터그램이다.
+텔레메트리는 다음 75개 필드를 정확한 순서로 담은 쉼표 구분 데이터그램이다.
 
 ```text
 Roll, Pitch, Yaw,
@@ -276,7 +276,11 @@ IMU2_Accel_X, IMU2_Accel_Y, IMU2_Accel_Z,
 TgtAngle_Roll, TgtAngle_Pitch, TgtAngle_Yaw,
 Mag_Enabled,
 Range_MM, Range_Quality, Flow_X, Flow_Y, Flow_Quality,
-Mag_Cal_Active
+Mag_Cal_Active,
+Mixer_RP_Scale, Mixer_Yaw_Scale, Mixer_Collective_US,
+PID_Roll_US, PID_Pitch_US, PID_Yaw_US,
+I_Roll_US, I_Pitch_US, I_Yaw_US,
+Yaw_Authority_State
 ```
 
 기존 21개 필드 뒤에 `Armed`(22), Tier 1 관측 필드(23~30), `MagHeading`(31),
@@ -284,7 +288,8 @@ Mag_Cal_Active
 `Trim_Roll`/`Trim_Pitch`(37~38), `Hover_Est`(39), `Hover_Valid`(40),
 프로브 진단(41~43), IMU1 gyro/accel(44~49), IMU2 gyro/accel(50~55)을
 차례로 append하고 목표 roll/pitch/yaw 각도(56~58), 실제 mag 융합 상태(59),
-3901-L0X 상태(60~64), 캘리브레이션 활성 상태(65)를 순서대로 append한다.
+3901-L0X 상태(60~64), 캘리브레이션 활성 상태(65), allocator·PID·적분기·
+yaw 권한 상태(66~75)를 순서대로 append한다.
 
 - `Armed`는 펌웨어 safety lock의 반전값이다. `start`가 거부되거나
   펌웨어가 스스로 시동을 해제한 것을 지상국이 이 필드로 감지한다.
@@ -339,6 +344,20 @@ Mag_Cal_Active
 | 63 | `Flow_Y` | int | 광류 `motionY` |
 | 64 | `Flow_Quality` | int | 0~255, **−1 = 신선한 프레임 없음** |
 | 65 | `Mag_Cal_Active` | int | 같은 패킷의 32~34번 도메인 식별자. 0=보정 후, 1=보정 전 raw. 시작 시 첫 raw와 함께 1이 되고 종료 시 보정값 복원과 함께 0이 된다 |
+| 66 | `Mixer_RP_Scale` | float | 합성 roll·pitch 차동의 실제 전달 비율. RP 자체가 모터 span을 넘을 때만 1보다 작다 |
+| 67 | `Mixer_Yaw_Scale` | float | RP 배정 뒤 남은 motor span에 들어간 yaw 차동 전달 비율 |
+| 68 | `Mixer_Collective_US` | float | 차동을 보존하도록 allocator가 실제 적용한 collective(µs) |
+| 69~71 | `PID_Roll_US`, `PID_Pitch_US`, `PID_Yaw_US` | float | 해당 1kHz tick에서 allocator에 입력한 축별 PID 모터 기여(µs) |
+| 72~74 | `I_Roll_US`, `I_Pitch_US`, `I_Yaw_US` | float | 같은 tick PID 계산에 사용한, conditional update 이전 축별 적분 기여(µs) |
+| 75 | `Yaw_Authority_State` | int | 0=NORMAL, 1=LIMITED, 2=RECOVERING |
+
+필드 66~75는 한 PID tick의 같은 스냅샷이다. 잠금·시동 해제·IMU 전멸
+경로에서는 scale 1, collective 1000µs, PID/I 0, 상태 NORMAL로 초기화된다.
+`Mixer_Yaw_Scale≤0.5`가 150ms 이어지면 수동 비행의 상태가 LIMITED로
+들어가 heading을 현재 yaw에 양보하고 `TgtRate_Yaw=0`을 명령한다. scale이
+0.9 이상이고 `|Gyro_Z|<10dps`인 회복 조건을 만족하면 RECOVERING으로 들어가며,
+500ms 연속 회복 뒤 NORMAL로 돌아간다. yaw 스틱 입력, failsafe, 잠금 또는 새
+무장은 상태와 타이머를 초기화한다.
 
 ### 3901-L0X 필드 해석 (필드 60~64)
 
@@ -351,6 +370,10 @@ Mag_Cal_Active
 `*_Quality`가 **−1이면 신선한 프레임이 없다**는 뜻이다(펌웨어
 `MSP_SENSOR_STALE_MS`). 거리 값 자체를 센티넬로 못 쓰기 때문에 신선도는 반드시
 quality로 판단한다 — 얼어붙은 센서가 마지막 값으로 유효해 보이면 안 된다.
+
+필드 수신 코드와 텔레메트리가 있어도 현행 비행 제어에는 사용 가능한
+**optical-flow 수평 위치 폐루프가 없다.** `Flow_X/Y`는 기록값일 뿐 제어 입력이
+아니며, 수평 드리프트는 조종자가 수동으로 보정해야 한다.
 
 프로토콜은 INAV MSPv2다. `'$' 'X' <dir>` 뒤에 `flags(u8) cmd(u16 LE)
 size(u16 LE) payload crc8`이 오고, **CRC(crc8_dvb_s2, 다항식 0xD5, 초기값 0)는
@@ -412,7 +435,7 @@ Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw
 
 `telemetry_schema.py`는 과거 패킷도 받아들인다. 아래 길이는 역사적 확장
 경계이며 허용 길이의 화이트리스트가 아니다. 실제 파서는 **10필드 이상**이면
-알고 있는 앞쪽 65필드를 읽고 더 뒤의 미래 필드는 무시한다. 첫 10필드는
+알고 있는 앞쪽 75필드를 읽고 더 뒤의 미래 필드는 무시한다. 첫 10필드는
 빈 값 없이 유한수여야 하고 정수 필드는 정수값이어야 한다. 이후 빈 값·없는
 필드는 `None`으로 유지한다. 따라서 파싱 성공만으로 정확한 펌웨어 버전을
 식별할 수 없다.
@@ -432,9 +455,10 @@ Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw
 - 58필드 패킷은 `TgtAngle_Yaw`에서 끝난다 (mag 상태 텔레메트리 도입 이전 펌웨어).
 - 59필드 패킷은 `Mag_Enabled`에서 끝난다 (3901-L0X 텔레메트리 도입 이전 펌웨어).
 - 64필드 패킷은 `Flow_Quality`에서 끝난다 (`Mag_Cal_Active` 도입 이전 펌웨어).
+- 65필드 패킷은 `Mag_Cal_Active`에서 끝난다 (allocator 진단 도입 이전 펌웨어).
 - 과거 패킷에 없는 값은 정규화된 CSV에서 빈 셀이 된다.
 - `Timestamp`는 드론이 보내지 않는다. 지상 도구가 CSV의 첫 열로 추가하므로
-  현행 CSV는 66개 열이 된다.
+  현행 CSV는 76개 열이 된다.
 
 공유 구현은
 [`telemetry_schema.py`](../scripts/telemetry_schema.py)에 있다.
@@ -501,7 +525,7 @@ raw 스트림이 켜져 있는 동안 1초에 한 번 보내는 60바이트 리�
 | 44 | `accel_scale` | `float` | 4 | `ACCEL_SCALE` |
 | 48 | `imu2_sign` | `float[3]` | 12 | `IMU2_SIGN_X/Y/Z` |
 
-`ZIMU`, `ZCAL`, 현행 65필드 ASCII 텔레메트리는 모두 **같은 UDP 포트
+`ZIMU`, `ZCAL`, 현행 75필드 ASCII 텔레메트리는 모두 **같은 UDP 포트
 4210, 같은 `laptopIP`/`laptopPort` 목적지**로 온다. 지상국은 UTF-8
 디코드보다 먼저 첫 4바이트를 검사해 `ZIMU`/`ZCAL`을 바이너리 로그로
 분기해야 한다. 그 외 데이터그램만 ASCII/`GAINS` 파서로 넘긴다.

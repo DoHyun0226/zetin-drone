@@ -61,6 +61,8 @@ STOP_INTERVAL = 0.02         # 재전송 간격 (초)
 THREAD_JOIN_TIMEOUT_SEC = 2.0
 RESUME_RC_TIMEOUT_SEC = 2.0   # 새 RC가 드론에 수락됐음을 기다리는 시간
 RESUME_RESULT_TIMEOUT_SEC = 1.0  # resume 후 phase=0 확인 대기
+ARM_CONFIRM_TIMEOUT_SEC = 2.0  # start 뒤 펌웨어 Armed=1 확인 대기
+ARM_RETRY_PERIOD_SEC = 0.25    # 확인 전 start 단일 패킷 재시도 주기
 
 # --- 고장진단 상수 ---
 TELEM_TIMEOUT_SEC = 1.5
@@ -109,6 +111,9 @@ last_trim_resend = 0.0
 is_armed         = False
 is_streaming     = False
 last_arm_time    = 0.0      # 드론 Armed 필드와 대조할 grace 기준 시각
+arm_state        = "idle"  # idle | arming | armed
+arm_deadline     = 0.0
+arm_next_retry   = 0.0
 
 # [FIX] RC 시퀀스 번호 — 지연 도착한 낡은 패킷을 드론 측에서 폐기할 수 있도록
 rc_seq = 0
@@ -125,6 +130,9 @@ telem_angle_y     = 0.0
 telem_throttle    = 0
 fault_rc_drone    = False
 fault_critical_drone = False   # Fault_Critical: IMU 상실/과도 기울기/캘리브레이션 실패
+telem_fault_critical = None
+telem_calibration_ok = None
+telem_armed = None
 telem_total_pkts  = 0
 telem_dropped_pkts = 0
 telem_failsafe_phase = None
@@ -170,9 +178,11 @@ def reliable_send(cmd: str):
 
 
 def disarm(reason: str = "수동"):
-    global is_armed, is_streaming, current_throttle, throttle_f
+    global is_armed, is_streaming, current_throttle, throttle_f, arm_state
     with safety_cmd_lock:
         cancelled_resume = _invalidate_resume_attempt()
+        cancelled_arm = arm_state == "arming"
+        arm_state        = "idle"
         is_armed         = False
         is_streaming     = False
         with telem_lock:
@@ -181,6 +191,8 @@ def disarm(reason: str = "수동"):
         reliable_send("stop")
     if cancelled_resume:
         print(f"\n[RESUME] 실패: {reason}으로 복구 시도 취소")
+    if cancelled_arm:
+        print(f"\n[ARM] 실패: {reason}으로 무장 시도 취소")
     print(f"\n>>> [SYSTEM] DISARMED ({reason})")
 
 
@@ -412,23 +424,138 @@ def advance_resume_attempt(sample, now=None):
         print(f"[RESUME] 실패: {failure}")
 
 
+def _reset_arm_attempt_locked():
+    """safety_cmd_lock 보유자가 로컬 무장 시도를 안전 상태로 되돌린다."""
+    global arm_state, is_armed, is_streaming
+    global current_throttle, throttle_f
+    arm_state = "idle"
+    is_armed = False
+    is_streaming = False
+    with telem_lock:
+        current_throttle = 1000
+        throttle_f = 1000.0
+
+
+def check_arm_timeout(now=None):
+    """새 텔레메트리가 없어도 무장 확인 deadline을 집행한다."""
+    if now is None:
+        now = time.monotonic()
+    expired = False
+    with safety_cmd_lock:
+        if arm_state == "arming" and now >= arm_deadline:
+            _reset_arm_attempt_locked()
+            reliable_send("stop")
+            expired = True
+    if expired:
+        print("\n[ARM] 실패: 펌웨어 Armed=1 확인 시간 초과, stop 전송")
+
+
+def advance_arm_attempt(sample, now=None):
+    """펌웨어 상태로 무장을 확정하거나 제한된 start 재시도를 수행한다."""
+    global arm_state, arm_next_retry, is_armed, is_streaming
+    global current_throttle, throttle_f
+
+    success = False
+    failure = None
+    retry = False
+    with safety_cmd_lock:
+        if now is None:
+            # 패킷 수신 시각이 아니라 락을 얻은 판정 시각이다. 수신 뒤 트림
+            # 전송·출력·락 대기로 밀린 시간도 deadline에 들어가야 한다.
+            now = time.monotonic()
+        if arm_state != "arming":
+            return
+
+        calibration_ok = sample.get("Calibration_OK")
+        fault_critical = sample.get("Fault_Critical")
+        firmware_armed = sample.get("Armed")
+        if calibration_ok != 1:
+            failure = f"Calibration_OK={calibration_ok!r}"
+        elif fault_critical != 0:
+            failure = f"Fault_Critical={fault_critical!r}"
+        # deadline을 성공 판정보다 먼저 본다: 수신 루프의 check_arm_timeout()은
+        # recvfrom() 전에 돌기 때문에, 마감 직후 처리되는 Armed=1을 여기서 막지
+        # 않으면 이미 포기했어야 할 무장이 성공으로 바뀐다.
+        elif now >= arm_deadline:
+            failure = "펌웨어 Armed=1 확인 시간 초과"
+        elif firmware_armed == 1:
+            arm_state = "armed"
+            is_armed = True
+            is_streaming = True
+            with telem_lock:
+                current_throttle = 1100
+                throttle_f = 1100.0
+            success = True
+        elif firmware_armed != 0:
+            failure = f"Armed={firmware_armed!r}"
+        elif now >= arm_next_retry:
+            send_cmd("start")
+            arm_next_retry = now + ARM_RETRY_PERIOD_SEC
+            retry = True
+
+        if failure is not None:
+            _reset_arm_attempt_locked()
+            reliable_send("stop")
+
+    if success:
+        mag_state = "ON" if mag_enabled_choice else "OFF"
+        print(f"\n>>> [SYSTEM] ARMED 확인 (시동 ON, mag {mag_state})")
+    elif failure is not None:
+        print(f"\n[ARM] 실패: {failure}, stop 전송")
+    elif retry:
+        print("[ARM] 펌웨어 확인 대기: start 재전송")
+
+
 def arm():
     global is_armed, is_streaming, last_arm_time
+    global arm_state, arm_deadline, arm_next_retry
     global current_throttle, throttle_f
+
+    failure = None
     with safety_cmd_lock:
-        last_arm_time    = time.monotonic()
-        is_armed         = True
-        is_streaming     = True
+        now = time.monotonic()
         with telem_lock:
-            current_throttle = 1100
-            throttle_f       = 1100.0
-        # 조종자가 선택한 mag 상태를 start '전에' 보낸다: armed 상태에선 최초
-        # mag init이 거부되므로 아직 disarmed인 이때 보내야 부팅 후 첫 arm에서도
-        # init이 통과한다.
-        reliable_send(f"mag {1 if mag_enabled_choice else 0}")
-        reliable_send("start")
-        mag_state = "ON" if mag_enabled_choice else "OFF"
-        print(f"\n>>> [SYSTEM] ARMED (시동 ON, mag {mag_state})")
+            if arm_state == "arming":
+                failure = "이미 무장 확인 대기 중"
+            elif is_armed or arm_state == "armed":
+                failure = "지상국이 이미 무장 상태임"
+            elif (last_telem_time <= 0
+                    or now - last_telem_time > TELEM_TIMEOUT_SEC):
+                failure = "마지막 텔레메트리가 너무 오래됨"
+            elif telem_calibration_ok != 1:
+                failure = f"Calibration_OK={telem_calibration_ok!r}"
+            elif telem_fault_critical != 0 or fault_critical_drone:
+                failure = f"Fault_Critical={telem_fault_critical!r}"
+            elif telem_armed != 0:
+                failure = f"Armed={telem_armed!r}, 펌웨어 disarmed 확인 필요"
+
+            if failure is None:
+                last_arm_time = now
+                arm_state = "arming"
+                arm_deadline = now + ARM_CONFIRM_TIMEOUT_SEC
+                arm_next_retry = now + ARM_RETRY_PERIOD_SEC
+                is_armed = False
+                is_streaming = False
+                current_throttle = 1000
+                throttle_f = 1000.0
+
+        if failure is None:
+            # 조종자가 선택한 mag 상태를 start '전에' 보낸다: armed 상태에선 최초
+            # mag init이 거부되므로 아직 disarmed인 이때 보내야 부팅 후 첫 arm에서도
+            # init이 통과한다.
+            reliable_send(f"mag {1 if mag_enabled_choice else 0}")
+            reliable_send("start")
+
+    if failure is not None:
+        print(f"\n[ARM] 거부: {failure}")
+        return False
+
+    mag_state = "ON" if mag_enabled_choice else "OFF"
+    print(
+        f"\n>>> [SYSTEM] ARMING (mag {mag_state}, "
+        "펌웨어 Armed=1 확인 대기)"
+    )
+    return True
 
 
 def deadzone(v: float, dz: float = 0.05) -> float:
@@ -591,6 +718,18 @@ def _format_binary_flag(value):
     return str(flag) if flag in (0, 1) else "-"
 
 
+def _format_yaw_authority(value):
+    state = phase_number(value)
+    if state is None:
+        return "-"
+    name = {
+        0: "NORMAL",
+        1: "LIMITED",
+        2: "RECOVERING",
+    }.get(state, "UNKNOWN")
+    return f"{name}({state})"
+
+
 def format_autoland_telemetry(sample):
     """Return the non-decimated Stage E status line, or None outside failsafe."""
     phase = phase_number(sample.get("Failsafe_Phase"))
@@ -692,7 +831,8 @@ def _format_gyro_disagreement(sample):
 def telemetry_thread():
     global last_telem_time
     global telem_angle_x, telem_angle_y, telem_throttle
-    global fault_rc_drone, fault_critical_drone
+    global fault_rc_drone, fault_critical_drone, telem_fault_critical
+    global telem_calibration_ok, telem_armed
     global telem_total_pkts, telem_dropped_pkts
     global telem_failsafe_phase, telem_hover_est, telem_hover_valid
     global trim_roll, trim_pitch, trim_synced, last_trim_resend
@@ -709,6 +849,7 @@ def telemetry_thread():
     telemetry_lost = False
 
     while not shutdown_event.is_set():
+        check_arm_timeout()
         check_resume_timeout()
         # 시동 전에도 텔레메트리를 받도록 주기적으로 목적지를 등록한다.
         now = time.monotonic()
@@ -777,6 +918,9 @@ def telemetry_thread():
             telem_throttle     = sample["Throttle"] or 0
             fault_rc_drone     = sample["Fault_RC"] == 1
             fault_critical_drone = sample["Fault_Critical"] == 1
+            telem_fault_critical = sample["Fault_Critical"]
+            telem_calibration_ok = sample["Calibration_OK"]
+            telem_armed = sample["Armed"]
             telem_total_pkts   = sample["RC_Total_Pkts"] or 0
             telem_dropped_pkts = sample["RC_Dropped_Pkts"] or 0
             telem_failsafe_phase = sample["Failsafe_Phase"]
@@ -806,6 +950,10 @@ def telemetry_thread():
         if telemetry_lost:
             print("[OK] 텔레메트리 수신 복구")
             telemetry_lost = False
+
+        # start를 보낸 것만으로 로컬 무장으로 간주하지 않는다. 펌웨어가 같은
+        # 텔레메트리 샘플에서 건강 상태와 Armed=1을 확인한 뒤에만 RC를 연다.
+        advance_arm_attempt(sample)
 
         now_str = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
         csv_writer.writerow(sample_to_csv_row(now_str, sample))
@@ -843,6 +991,19 @@ def telemetry_thread():
                 az = sample["Yaw"] or 0.0
                 cw = m[0] + m[1]   # M1(FL)+M2(RR) = CW 대각쌍
                 ccw = m[2] + m[3]  # M3(FR)+M4(RL) = CCW 대각쌍 (차이 = yaw축)
+                firmware_armed = phase_number(sample.get("Armed"))
+                if firmware_armed == 1:
+                    rp_scale = _format_optional_float(
+                        sample.get("Mixer_RP_Scale"), 2
+                    )
+                    yaw_scale = _format_optional_float(
+                        sample.get("Mixer_Yaw_Scale"), 2
+                    )
+                    yaw_authority = _format_yaw_authority(
+                        sample.get("Yaw_Authority_State")
+                    )
+                else:
+                    rp_scale = yaw_scale = yaw_authority = "-"
                 print(f" [DIAG] M1(FL)={m[0]} M2(RR)={m[1]} M3(FR)={m[2]} M4(RL)={m[3]} "
                       f"[yaw축 CW-CCW={cw - ccw:+d}] | "
                       f"aX={sample['Roll']:+5.1f} aY={sample['Pitch']:+5.1f} aZ={az:+6.1f} | "
@@ -852,6 +1013,10 @@ def telemetry_thread():
                       f"Trim={_format_drone_trim(sample)} "
                       f"AGL={_format_agl(sample)} "
                       f"Yaw_Hold={_format_binary_flag(sample.get('Yaw_Hold'))} "
+                      f"FW_Armed={_format_binary_flag(sample.get('Armed'))} "
+                      f"RP_Scale={rp_scale} "
+                      f"Yaw_Scale={yaw_scale} "
+                      f"Yaw_Authority={yaw_authority} "
                       f"tR={tr:+5.1f} tP={tp:+5.1f} tY={ty:+6.1f} "
                       f"th={sample['Throttle']} "
                       f"Hover_Est={_format_optional_float(sample.get('Hover_Est'), 1)} "
@@ -945,7 +1110,9 @@ def controller_thread():
 
         # --- 컨트롤러 분리 감지: RC 송신을 중단하고 자동착륙에 맡김 ---
         if pygame.joystick.get_count() == 0:
-            if is_streaming:
+            if arm_state == "arming":
+                disarm("무장 확인 중 컨트롤러 분리")
+            elif is_streaming:
                 stop_streaming_only("컨트롤러 분리")
             print("\n[ERR] 컨트롤러 분리됨 - 재연결 대기 중...")
             while (
@@ -965,7 +1132,7 @@ def controller_thread():
         # --- 시동 토글 ---
         btn_start = joy.get_button(0)
         if btn_start and not last_btn_start:
-            if is_armed:
+            if is_armed or arm_state == "arming":
                 disarm()
             else:
                 arm()
@@ -1133,7 +1300,7 @@ try:
             if msg:
                 handle_stdin_command(msg)
         except KeyboardInterrupt:
-            if is_armed:
+            if is_armed or arm_state == "arming":
                 disarm("키보드 인터럽트")
             break
 finally:

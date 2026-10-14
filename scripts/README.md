@@ -3,7 +3,7 @@
 현행 `dual_imu_cascade_pwm`용 조종·텔레메트리 수집·오프라인 분석 도구다.
 처음 시작하면 [전원 인가 벤치 절차](../docs/power_on_bench_procedure.md)를
 먼저 읽고, USB로 연결한 DualSense와 `control_dualsense.py`를 사용한다.
-이 문서는 2026-09-07 저장소 코드 기준이며 현재 기체에 올라간 빌드나 실기
+이 문서는 저스로틀 yaw 개선이 통합된 저장소 코드 기준이며 현재 기체에 올라간 빌드나 실기
 통과 여부를 뜻하지 않는다. 명령·필드 순서·단위의 정본은
 [UDP 프로토콜](../docs/udp_protocol.md)이다.
 
@@ -73,8 +73,10 @@ stdin에는 [프로토콜의 명령](../docs/udp_protocol.md#지상국--드론)�
 `start`·`stop`·`resume`·`th`는 지상국 상태도 함께 갱신하는 별도 경로다.
 자기계와 raw 토글은 이 콘솔에서 **`mag on/off`, `raw on/off`**로 입력한다.
 그 외 PID 게인, `gains`, `yaw`, `magcal`, `magc` 등은 UDP로 전달된다.
-명령 전송 메시지나 `ARMED` 배너는 ACK가 아니다. 실제 적용은 `Armed`,
-`Mag_Enabled`, `Trim_*`, `GAINS` 응답 등 해당 텔레메트리로 확인한다.
+무장 요청은 `ARMING`으로 시작하며, 펌웨어 `Armed=1`을 수신한 뒤에만
+`ARMED 확인`을 출력하고 RC 송신을 시작한다. 거부·확인 시간 초과는 성공이
+아니다. 다른 명령도 전송 메시지만으로 적용을 판단하지 말고 `Mag_Enabled`,
+`Trim_*`, `GAINS` 응답 등 해당 텔레메트리로 확인한다.
 
 ## 링크가 끊겼을 때
 
@@ -115,10 +117,14 @@ stdin에는 [프로토콜의 명령](../docs/udp_protocol.md#지상국--드론)�
   재검증 범위는 [BMM350 문서](../docs/bmm350_yaw_bench_test.md)에서 확인한다.
 - `AGL=`은 거리계 표시다. 신선도 없음은 `-`, 음수 거리 원값은 `OOR/q<품질>`,
   그 외는 `1.23m/q200`처럼 표시한다. 거리·광류는 현재 기록용이며 자동 고도
-  제어·착지 판정에 사용하지 않는다.
+  제어·착지 판정에 사용하지 않는다. optical-flow 수평 위치 폐루프도 없으며,
+  `Flow_*`는 수신·기록용이다. 중립 스틱에서 생기는 드리프트는 조종자가 수동 보정한다.
 - `eR/eP`는 목표 각도에서 측정 각도를 뺀 값이다. 목표에는 트림이 이미 포함된다.
   `dG`는 두 IMU의 축별 gyro 차이 중 최댓값이다. 이 20Hz 스냅샷으로 빠른
   프롭 진동·순간 센서 고장을 확정할 수 없다.
+- `[DIAG]`의 `RP_Scale`·`Yaw_Scale`·`Yaw_Authority`는 펌웨어 `Armed=1`일 때만
+  수신값을 표시한다. 상태는 `NORMAL(0)`·`LIMITED(1)`·`RECOVERING(2)`이며,
+  해당 값이 없는 구형 패킷이나 미시동 패킷은 `-`로 표시한다.
 - `Trim=`은 드론이 보내온 값이다. 로컬 값과 다르면 `!`가 붙고 0.2초 이상
   간격으로 재전송한다. 유실·거부가 계속되면 표시도 남는다. 첫 완전한 트림
   텔레메트리를 한 번 채택한 뒤에는 로컬 값을 유지하므로 **stdin `trim`이나
@@ -126,6 +132,24 @@ stdin에는 [프로토콜의 명령](../docs/udp_protocol.md#지상국--드론)�
   D-pad·PS를 사용한다. `start`는 트림을 따로 보내지 않는다.
 
 ## 로그 저장과 오프라인 분석
+
+공유 `telemetry_schema.py`의 현행 패킷은 **75필드**, PC 수신 시각
+`Timestamp`를 앞에 붙인 CSV는 **76열**이다. 수신·모니터 도구도 같은 파서를
+쓴다. 10~74필드의 레거시 패킷은 없는 뒤쪽 값을 빈 셀로 기록하고, 75필드를
+넘는 미래 패킷은 알려진 앞쪽만 읽는다. 첫 10필드는 비어 있지 않은 유한수,
+정수 필드는 정수값이어야 한다. 역사적 확장 경계와 단위는
+[UDP 프로토콜](../docs/udp_protocol.md#드론--지상국)을 따른다.
+
+추가 진단 필드의 순서는 다음과 같다.
+
+| 번호 | 필드 | 의미 |
+|---|---|---|
+| 66 | `Mixer_RP_Scale` | roll·pitch 전달 비율 |
+| 67 | `Mixer_Yaw_Scale` | yaw 전달 비율 |
+| 68 | `Mixer_Collective_US` | 실제 배분한 collective(µs) |
+| 69~71 | `PID_Roll_US`, `PID_Pitch_US`, `PID_Yaw_US` | 축별 PID 기여(µs) |
+| 72~74 | `I_Roll_US`, `I_Pitch_US`, `I_Yaw_US` | 축별 적분 기여(µs) |
+| 75 | `Yaw_Authority_State` | yaw 권한 상태 |
 
 기본 지상국은 `logs/flight_log_<timestamp>.csv`를 기록한다. raw를 처음
 받았을 때 같은 타임스탬프의 `imuraw_<timestamp>.bin`을 열고 데이터그램을
@@ -148,7 +172,12 @@ python scripts/magcal_fit.py capture.csv
 
 `analyze_flight_log.py`의 `--no-plot`은 창을 생략하지만 matplotlib은 여전히
 필요하다. 파일을 생략하면 `logs/*.csv` 중 수정시각이 가장 최근인 파일을
-선택하므로, raw CSV를 고르지 않도록 경로를 명시한다.
+선택하므로, raw CSV를 고르지 않도록 경로를 명시한다. 요약에는 RP/Yaw scale의
+최솟값·p05(5백분위수), LIMITED 진입 횟수·누적 시간, roll/pitch/yaw별
+PID·I 기여의 절댓값 최댓값이 포함된다. 필요한 진단값이 없는 레거시 CSV는
+해당 항목을 `legacy/unknown`으로 표시한다. LIMITED 시간은 `Timestamp`로
+계산하며, 시간 자료가 없으면 `duration unavailable`, 상태·시간 결측이 있으면
+`incomplete: unknown state/time gap`을 표시한다.
 
 프로브 분석은 실행 시 현재 `.ino`에서 임계를 읽는다. 과거 비행 당시 임계와
 같다는 뜻은 아니다. 20Hz에서 관측된 상태 전이 또는 응답값 변화로 이벤트를
