@@ -30,7 +30,8 @@
 빈 셀은 “알 수 없음”이며 `Fault=0`, `Armed=0`, `Failsafe_Phase=0`을 뜻하지 않는다.
 `Timestamp`는 패킷에 포함되지 않으며 자정·PC 시계 변경도 고려해야 한다.
 
-- `Armed`는 드론 safety lock 상태이며 콘솔의 `ARMED` 요청 배너와 구분한다.
+- `Armed`는 드론 safety lock 상태다. 콘솔의 `ARMING`은 요청·확인 대기이고,
+  `ARMED 확인`은 마감 전에 받은 펌웨어 `Armed=1`을 확인한 결과다.
 - `Failsafe_Phase=1`은 하강 중, 3은 시간 기반 컷, 4는 중단컷이다. 현행
   비행 코드에서 2는 도달 불가지만 과거 기록과 도구에는 이름이 남아 있다.
   GUI의 `AUTO-LAND ACTIVE` 경고는 종료 phase에도 남으므로 숫자와 `Armed`를
@@ -42,7 +43,8 @@
   `analyze_flight_log.py`의 드롭 비율 출력은 마지막 누적값의 비율이며 그 파일
   구간의 무선 유실률이 아니다. [링크 진단](../docs/ground_station_link.md)을 참고한다.
 - 목표 roll/pitch 각도에는 트림이 포함된다. `Motor_M1`~`Motor_M4`는 모터
-  PWM 명령이며 RPM·추력 측정값이 아니다. 배터리 전압·PID 항별 기여 열은 없다.
+  PWM 명령이며 RPM·추력 측정값이 아니다. 배터리 전압과 P·D 개별 항 열은 없고,
+  축별 PID 합계(`PID_*_US`)와 적분 기여(`I_*_US`)는 기록된다.
 
 ```bash
 python scripts/analyze_flight_log.py logs/flight_log_YYYY-MM-DD_HHMMSS.csv --no-plot
