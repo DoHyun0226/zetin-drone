@@ -16,7 +16,7 @@
 
 | 수명주기 | 대상 MCU | 센서 | 모터 프로토콜 | 안전/빌드 메모 | 링크 |
 |---|---|---|---|---|---|
-| 현행·**주력** | ESP32-S3 | 듀얼 ICM42670 + BMM350 + 3901-L0X | PWM | 65필드 텔레메트리·RC 감시·자동착륙 상태기계 포함. BMM350 yaw 융합은 기본 OFF, 3901-L0X는 기록 전용. 실비행 기록과 자동착륙 한계는 아래 근거 참조 | [`dual_imu_cascade_pwm`](../firmware/flight/dual_imu_cascade_pwm/) |
+| 현행·**주력** | ESP32-S3 | 듀얼 ICM42670 + BMM350 + 3901-L0X | PWM | 75필드 텔레메트리·RC 감시·자동착륙 상태기계 포함. BMM350 yaw 융합은 기본 OFF, 3901-L0X는 기록 전용. 실비행 기록과 자동착륙 한계는 아래 근거 참조 | [`dual_imu_cascade_pwm`](../firmware/flight/dual_imu_cascade_pwm/) |
 | **보류** | ESP32-S3 | 듀얼 ICM42670 | PWM | flix 기반 쿼터니언 후보. 컴파일 대상이지만 실기 검증 미완료. 22필드, `rcr`·`gains`·자동착륙 미지원, 게인 단위·yaw 부호 차이 → README 참조 | [`dual_imu_flix_quat_pwm`](../firmware/flight/dual_imu_flix_quat_pwm/) |
 | 현행 | ESP32-S3 | 없음 | PWM | ESP32Servo 50Hz. **부팅 7초 후 네 모터 자동 램프(최대 1300µs), 시리얼 정지 명령 없음** | [`motor_pwm_bench`](../firmware/diagnostics/motor_pwm_bench/) |
 | 현행 | ESP32-S3 | 없음 | PWM | 수동 단일 모터 식별, 상한 1250µs, 자동 시작 없음. 벤치 Stage A. **비행 펌웨어와 같은 LEDC 400Hz** 사용. 이 기체에서 기록된 ESP32Servo 채널 묶임 문제를 피하는 경로 | [`motor_id_single`](../firmware/diagnostics/motor_id_single/) |

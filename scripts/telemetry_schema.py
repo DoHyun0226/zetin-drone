@@ -44,6 +44,9 @@ otherwise those three fields retain their corrected-domain flight meaning.
 ``MagHeading`` (field 31) retains its last value while magnetic fusion is off,
 so it cannot establish whether fusion is active; ``Mag_Enabled`` is the sole
 source of truth for that state.
+Fields 66-75 append allocator scale/collective, the PID and integral terms
+used for that control tick, and yaw-authority state (0=NORMAL, 1=LIMITED,
+2=RECOVERING).
 """
 
 import math
@@ -115,6 +118,16 @@ TELEMETRY_FIELDS = (
     "Flow_Y",
     "Flow_Quality",
     "Mag_Cal_Active",
+    "Mixer_RP_Scale",
+    "Mixer_Yaw_Scale",
+    "Mixer_Collective_US",
+    "PID_Roll_US",
+    "PID_Pitch_US",
+    "PID_Yaw_US",
+    "I_Roll_US",
+    "I_Pitch_US",
+    "I_Yaw_US",
+    "Yaw_Authority_State",
 )
 
 TELEMETRY_FIELD_TYPES = {
@@ -183,6 +196,16 @@ TELEMETRY_FIELD_TYPES = {
     "Flow_Y": int,
     "Flow_Quality": int,
     "Mag_Cal_Active": int,
+    "Mixer_RP_Scale": float,
+    "Mixer_Yaw_Scale": float,
+    "Mixer_Collective_US": float,
+    "PID_Roll_US": float,
+    "PID_Pitch_US": float,
+    "PID_Yaw_US": float,
+    "I_Roll_US": float,
+    "I_Pitch_US": float,
+    "I_Yaw_US": float,
+    "Yaw_Authority_State": int,
 }
 
 GAIN_FIELDS = (
@@ -219,11 +242,11 @@ def _parse_integer(raw, name):
 
 
 def parse_telemetry_packet(line):
-    """Parse a legacy or current (65-field) packet into a fixed-schema dict.
+    """Parse a legacy or current (75-field) packet into a fixed-schema dict.
 
     Fields unavailable in legacy packets are returned as ``None`` so CSV
     files retain the full header without inventing healthy/fault values. Extra
-    future fields are ignored after the known 65 fields. The first
+    future fields are ignored after the known 75 fields. The first
     ``REQUIRED_FIELD_COUNT`` fields must be non-empty: consumers format and
     do arithmetic on them, so a blank there is a malformed packet, not a
     legacy one.
