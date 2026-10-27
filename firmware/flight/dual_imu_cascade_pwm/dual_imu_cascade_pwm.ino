@@ -179,13 +179,25 @@ static uint32_t latLastSummaryMs = 0;
 // ==========================================================
 // 1. 튜닝 파라미터
 // ==========================================================
+// [Cascade 제어 정리] 두 겹으로 겹친 제어기
+//  목표 각도 ─▶ [Outer: Kp_Angle_*] ─▶ 목표 각속도 ─▶ [Inner: K*_Rate_*] ─▶ 모터 출력 차이
+//     (°)          250Hz                  (dps)            1kHz               (µs)
+//  Kp_Angle_* : 각도 오차를 보고 "목표 각속도"를 정할 때 사용 (예: 5° 틀어짐 → 30dps로 돌아가라)
+//  K*_Rate_*  : 목표 각속도와 실제 각속도의 차이를 보고, 그걸 따라가도록 "모터 출력(µs)"을 정할 때 사용
+//               (예: 30dps로 돌아야 하는데 지금 10dps → 모터 출력 차이를 이만큼 더 벌려라)
+//  바깥 루프가 목표 각속도를 만들고, 안쪽 루프가 그 각속도를 실제로 만들어 낸다
+
 // [Outer] 각도 P: 각도 오차 -> 목표 각속도(dps)
 // 비행 중 노트북에서 같은 UDP 명령으로 실시간으로 바꿀 수 있고, pid_task가 매 tick 읽기 때문에 volatile로 선언
-volatile float Kp_Angle_Roll  = 6.0f; //  
+volatile float Kp_Angle_Roll  = 6.0f; // 단위 dps/° : 각도 오차 1°당 목표 각속도 6dps
 volatile float Kp_Angle_Pitch = 6.0f;
-volatile float Kp_Angle_Yaw   = 3.0f;
+volatile float Kp_Angle_Yaw   = 3.0f; // heading은 천천히 맞춰도 되고, 급하게 돌리면 모터 여유를 많이 먹어 절반
 
 // [Inner] 각속도 PID: 각속도 오차 -> 모터 파워
+//  Kp_Rate (µs/dps)     : 지금 각속도 오차에 비례해 즉시 반응
+//  Ki_Rate (µs/(dps·s)) : 오래 남는 오차를 쌓아서 제거 (CG 치우침, 모터 편차)
+//  Kd_Rate (µs/(dps/s)) : 각속도가 급하게 변하면 제동 → 오버슈트 감소
+//  yaw는 반토크라는 약한 힘으로 돌아서 Kp가 3배(1.5), 원래 둔하게 움직여 D항은 노이즈만 키우므로 0
 // Ki_Rate_Roll/Pitch: 0.005 -> 0.05 (호스트 SIL 근거, commit 735f77d). 0.005는
 // 일정 CG 치우침 외란에서 10초 후 ±50µs 클램프의 ~1.4%만 써 적분기가 사실상
 // 비활성이었다(파라미터 무관하게 강건한 결론). 0.05는 적분기를 활성화하되
@@ -294,7 +306,7 @@ const float YAW_HOLD_SETTLE_DPS = 10.0f;   // bodyGz 절댓값이 이 값 미만
 // 250Hz outer loop에서 K=0.001 -> tau ≈ 0.004/K = 4s.
 const float K_MAG = 0.001f;                  // angleZ를 나침반 방향으로 끌어당기는 비율 (작을수록 천천히)
 const uint32_t MAG_SAMPLE_PERIOD_MS = 20;    // BMM350 read = 50Hz, core 0 only
-const uint32_t MAG_STALE_MS = 100;           // 이보다 오래된 자기계 값은 융합에 쓰지 않음
+const uint32_t MAG_STALE_MS = 100;           // 이보다 오래된 자기계 값은 융합에 쓰지 않음(ms)
 
 // scripts/magcal_fit.py 출력값을 아래 두 상수에 붙여 넣는다.
 // 2026-08-04 캘리브 (log flight_log_2026-08-04_023840.csv, 1255샘플 중 inlier
@@ -310,7 +322,9 @@ const float MAG_SOFT_IRON[3][3] = {
   {0.998555071f, 0.005825468f, 0.018437852f},
   {0.005825468f, 0.976739944f, 0.006050833f},
   {0.018437852f, 0.006050833f, 1.026752877f},
-};
+}; 
+
+// 여기까지 읽음 --> 다음에 어디까지 읽었는 지 질문할 때 해당 줄 번호 반환할 것
 
 // BMM350 축이 기체 축과 다르면 벤치 sign test 뒤 여기만 바꾼다.
 const float MAG_BODY_SIGN_X = 1.0f;
