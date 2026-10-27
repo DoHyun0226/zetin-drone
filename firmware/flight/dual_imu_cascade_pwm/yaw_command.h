@@ -13,8 +13,8 @@
 // hold=false 인 동안 setpoint를 현재 heading으로 계속 슬레이빙하므로
 // setpoint가 stale해질 수 없고, 어떤 전환도 정의상 bumpless다.
 struct YawOuter {
-  float target_angle_deg;
-  bool  hold;
+  float target_angle_deg;   // 목표 heading (°). 잠금 중이면 고정, 아니면 현재 heading(angleZ)과 같음
+  bool  hold;               // true = heading 잠금(각도 유지 모드), false = 스틱 각속도 모드
 };
 
 static inline YawOuter updateYawOuter(
