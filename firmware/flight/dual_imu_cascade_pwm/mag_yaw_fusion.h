@@ -10,6 +10,7 @@ struct MagSnapshot {
   uint32_t sample_ms;
 };
 
+// 각도를 -180° 이상 +180° 미만으로 감싼다. 두 heading의 차이(오차)를 구할 때 짧은 방향으로 돌게 하려고 쓴다
 static inline float wrapDeg(float angle_deg) {
   float wrapped = fmodf(angle_deg + 180.0f, 360.0f);
   if (wrapped < 0.0f) wrapped += 360.0f;
