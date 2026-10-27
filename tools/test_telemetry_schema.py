@@ -57,6 +57,19 @@ TARGET_ANGLE_TELEMETRY_NAMES = (
     "TgtAngle_Yaw",
 )
 
+ALLOCATION_TELEMETRY_NAMES = (
+    "Mixer_RP_Scale",
+    "Mixer_Yaw_Scale",
+    "Mixer_Collective_US",
+    "PID_Roll_US",
+    "PID_Pitch_US",
+    "PID_Yaw_US",
+    "I_Roll_US",
+    "I_Pitch_US",
+    "I_Yaw_US",
+    "Yaw_Authority_State",
+)
+
 EXPECTED_TELEMETRY_FIELDS = (
     "Roll",
     "Pitch",
@@ -110,6 +123,7 @@ EXPECTED_TELEMETRY_FIELDS = (
     "Flow_Y",
     "Flow_Quality",
     "Mag_Cal_Active",
+    *ALLOCATION_TELEMETRY_NAMES,
 )
 
 
@@ -331,6 +345,53 @@ class TelemetryCompatibilityTest(unittest.TestCase):
                 self.assertEqual(expected, sample["Mag_Cal_Active"])
                 self.assertIs(type(sample["Mag_Cal_Active"]), int)
 
+    def test_75_field_packet_appends_allocation_values_with_exact_types(self):
+        allocation_values = (
+            "0.75", "0.50", "1325.25",
+            "12.50", "-8.25", "3.75",
+            "1.50", "-2.25", "0.50", "1",
+        )
+        current_packet = packet(65) + "," + ",".join(allocation_values)
+
+        sample = parse_telemetry_packet(current_packet)
+
+        expected = (0.75, 0.50, 1325.25, 12.50, -8.25, 3.75,
+                    1.50, -2.25, 0.50, 1)
+        for name, value in zip(ALLOCATION_TELEMETRY_NAMES[:-1], expected[:-1]):
+            self.assertEqual(value, sample[name])
+            self.assertIs(type(sample[name]), float)
+        self.assertEqual(1, sample["Yaw_Authority_State"])
+        self.assertIs(type(sample["Yaw_Authority_State"]), int)
+
+    def test_65_field_and_legacy_packets_leave_allocation_values_unknown(self):
+        for field_count in (65, 43, 10):
+            with self.subTest(field_count=field_count):
+                sample = parse_telemetry_packet(packet(field_count))
+                for name in ALLOCATION_TELEMETRY_NAMES:
+                    self.assertIsNone(sample[name])
+
+    def test_current_csv_row_has_timestamp_plus_75_wire_fields(self):
+        sample = parse_telemetry_packet(
+            packet(65) + ",0.9,0.8,1300,1,2,3,4,5,6,2"
+        )
+
+        row = sample_to_csv_row("12:34:56.789", sample)
+
+        self.assertEqual(76, len(CSV_FIELDS))
+        self.assertEqual(76, len(row))
+        self.assertEqual("12:34:56.789", row[0])
+        self.assertEqual(0.9, row[CSV_FIELDS.index("Mixer_RP_Scale")])
+        self.assertEqual(2, row[CSV_FIELDS.index("Yaw_Authority_State")])
+
+    def test_malformed_required_value_is_rejected_for_current_packet(self):
+        fields = (packet(65) + ",0.9,0.8,1300,1,2,3,4,5,6,2").split(",")
+        fields[0] = "not-a-number"
+
+        with self.assertRaises(ValueError):
+            parse_telemetry_packet(",".join(fields))
+
+        self.assertEqual(9, parse_telemetry_packet(packet(10))["Throttle"])
+
     def test_55_field_packet_leaves_target_angles_unknown(self):
         sample = parse_telemetry_packet(",".join(["1"] * 55))
 
@@ -381,6 +442,7 @@ class TelemetryCompatibilityTest(unittest.TestCase):
             "Failsafe_Probe_NoResponse",
             "Mag_Enabled",
             "Mag_Cal_Active",
+            "Yaw_Authority_State",
         ):
             self.assertIs(telemetry_schema.TELEMETRY_FIELD_TYPES[name], int)
         for name in (
@@ -397,6 +459,7 @@ class TelemetryCompatibilityTest(unittest.TestCase):
             "Failsafe_Probe_Response_G",
             *IMU_TELEMETRY_NAMES,
             *TARGET_ANGLE_TELEMETRY_NAMES,
+            *ALLOCATION_TELEMETRY_NAMES[:-1],
         ):
             self.assertIs(telemetry_schema.TELEMETRY_FIELD_TYPES.get(name), float)
 

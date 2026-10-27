@@ -413,7 +413,7 @@ int runFusionTests() {
     startMagCalibration();
 
     std::vector<std::string> fields = sendTelemetryFields();
-    CHECK(fields.size() == 65U);
+    CHECK(fields.size() == 75U);
     CHECK_NEAR(std::stof(fields.at(31)), 1.25f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(32)), -2.50f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(33)), 3.75f, 0.01f);
@@ -464,7 +464,7 @@ int runFusionTests() {
     stopMagCalibration();
 
     const std::vector<std::string> fields = sendTelemetryFields();
-    CHECK(fields.size() == 65U);
+    CHECK(fields.size() == 75U);
     CHECK_NEAR(std::stof(fields.at(31)), 1.25f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(32)), -2.50f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(33)), 3.75f, 0.01f);

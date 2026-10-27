@@ -6,6 +6,7 @@
 #include <string>
 
 #include "yaw_command.h"
+#include "yaw_authority.h"
 
 static int g_failures = 0;
 
@@ -163,10 +164,27 @@ int main() {
               1e-4f, "큰 오차 하드 실링");
   });
 
+  runCase("authority 제한은 yaw override가 만든 heading 명령도 억제한다", [] {
+    const YawOuter normal = updateYawOuter(
+        0.0f, 40.0f, -30.0f, 120.0f, true, true, kDead, kSettle);
+    CHECK(normal.hold);
+    checkNear(yawTargetRateDps(normal, 0.0f, -30.0f, 3.0f, 180.0f),
+              180.0f, 1e-4f, "override 복원 명령");
+
+    const YawAuthorityCommand limited = applyYawAuthority(
+        YAW_AUTH_LIMITED, -30.0f, normal.target_angle_deg,
+        yawTargetRateDps(normal, 0.0f, -30.0f, 3.0f, 180.0f), normal.hold);
+    CHECK(!limited.hold);
+    checkNear(limited.target_angle_deg, -30.0f, 1e-4f,
+              "제한 상태 heading 슬레이빙");
+    checkNear(limited.target_rate_dps, 0.0f, 1e-4f,
+              "제한 상태 yaw rate 감쇠");
+  });
+
   if (g_failures != 0) {
     std::cerr << g_failures << " yaw-command case(s) failed\n";
     return 1;
   }
-  std::cout << "13/13 yaw-command cases passed\n";
+  std::cout << "14/14 yaw-command cases passed\n";
   return 0;
 }

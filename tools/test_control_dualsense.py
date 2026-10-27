@@ -195,6 +195,7 @@ def _telemetry_sample(**overrides):
         "Mag_Enabled": 0,
         "Fault_RC": 0,
         "Fault_Critical": 0,
+        "Calibration_OK": 1,
         "RC_Total_Pkts": 0,
         "RC_Dropped_Pkts": 0,
         "Armed": 1,
@@ -236,6 +237,17 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module, self.startup_socket = self._load_module()
         self.module.shutdown_event.clear()
         self.module.last_telem_time = self.module.time.monotonic()
+
+    def _prime_prearm_telemetry(self, **overrides):
+        values = {
+            "telem_calibration_ok": 1,
+            "telem_armed": 0,
+            "telem_fault_critical": 0,
+            "fault_critical_drone": False,
+        }
+        values.update(overrides)
+        for name, value in values.items():
+            setattr(self.module, name, value)
 
     def _load_module(self, argv=(), module_name="_control_dualsense_under_test"):
         sys.modules.pop(module_name, None)
@@ -1111,6 +1123,76 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertIn("Hover_Est=1423.6", diag_lines[0])
         self.assertIn("Hover_Valid=1", diag_lines[0])
 
+    def test_armed_diag_line_reports_axis_scales_and_yaw_authority(self):
+        self.module.is_armed = True
+        sample = _telemetry_sample(
+            Failsafe_Phase=0,
+            Mixer_RP_Scale=0.75,
+            Mixer_Yaw_Scale=0.5,
+            Yaw_Authority_State=1,
+        )
+
+        output = self._run_telemetry([sample] * 4)
+
+        diag = [line for line in output.splitlines() if "[DIAG]" in line][0]
+        self.assertIn("FW_Armed=1", diag)
+        self.assertIn("RP_Scale=0.75", diag)
+        self.assertIn("Yaw_Scale=0.50", diag)
+        self.assertIn("Yaw_Authority=LIMITED(1)", diag)
+
+    def test_local_armed_diag_does_not_present_disarmed_reset_values_as_healthy(self):
+        self.module.is_armed = True
+        self.module.last_arm_time = self.module.time.monotonic()
+        sample = _telemetry_sample(
+            Armed=0,
+            Mixer_RP_Scale=1.0,
+            Mixer_Yaw_Scale=1.0,
+            Yaw_Authority_State=0,
+        )
+
+        output = self._run_telemetry([sample] * 4)
+
+        diag = [line for line in output.splitlines() if "[DIAG]" in line][0]
+        self.assertIn("FW_Armed=0", diag)
+        self.assertIn("RP_Scale=-", diag)
+        self.assertIn("Yaw_Scale=-", diag)
+        self.assertIn("Yaw_Authority=-", diag)
+        self.assertNotIn("Yaw_Authority=NORMAL(0)", diag)
+
+    def test_local_armed_legacy_diag_labels_firmware_armed_unknown(self):
+        self.module.is_armed = True
+        sample = _telemetry_sample(
+            Armed=None,
+            Mixer_RP_Scale=1.0,
+            Mixer_Yaw_Scale=1.0,
+            Yaw_Authority_State=0,
+        )
+
+        output = self._run_telemetry([sample] * 4)
+
+        diag = [line for line in output.splitlines() if "[DIAG]" in line][0]
+        self.assertIn("FW_Armed=-", diag)
+        self.assertIn("RP_Scale=-", diag)
+        self.assertIn("Yaw_Scale=-", diag)
+        self.assertIn("Yaw_Authority=-", diag)
+        self.assertNotIn("Yaw_Authority=NORMAL(0)", diag)
+
+    def test_armed_diag_line_renders_missing_allocation_values_as_dash(self):
+        self.module.is_armed = True
+        sample = _telemetry_sample(
+            Failsafe_Phase=0,
+            Mixer_RP_Scale=None,
+            Mixer_Yaw_Scale=None,
+            Yaw_Authority_State=None,
+        )
+
+        output = self._run_telemetry([sample] * 4)
+
+        diag = [line for line in output.splitlines() if "[DIAG]" in line][0]
+        self.assertIn("RP_Scale=-", diag)
+        self.assertIn("Yaw_Scale=-", diag)
+        self.assertIn("Yaw_Authority=-", diag)
+
     def _trim_datagrams(self):
         return [
             data.decode() for data, _addr in self.module.sock.sent
@@ -1744,20 +1826,22 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertEqual(direct_commands, [])
         self.assertEqual(reliable_commands, [])
 
-    def test_stdin_start_uses_arm_and_starts_local_rc_streaming(self):
+    def test_stdin_start_waits_for_firmware_armed_before_rc_streaming(self):
         direct_commands = []
         reliable_commands = []
         self.module.send_cmd = direct_commands.append
         self.module.reliable_send = reliable_commands.append
         self.module.is_armed = False
         self.module.is_streaming = False
+        self._prime_prearm_telemetry()
 
         self.module.handle_stdin_command("  start  ")
 
-        self.assertTrue(self.module.is_armed)
-        self.assertTrue(self.module.is_streaming)
-        self.assertEqual(self.module.current_throttle, 1100)
-        self.assertEqual(self.module.throttle_f, 1100.0)
+        self.assertFalse(self.module.is_armed)
+        self.assertFalse(self.module.is_streaming)
+        self.assertEqual(self.module.current_throttle, 1000)
+        self.assertEqual(self.module.throttle_f, 1000.0)
+        self.assertEqual(getattr(self.module, "arm_state", None), "arming")
         self.assertEqual(reliable_commands, ["mag 1", "start"])
         self.assertEqual(
             direct_commands,
@@ -2078,13 +2162,203 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.rc_seq = 73
         self.module.is_armed = False
         self.module.is_streaming = False
+        self._prime_prearm_telemetry()
 
-        self.module.arm()
+        accepted = self.module.arm()
 
+        self.assertTrue(accepted)
         self.assertEqual(commands, ["mag 1", "start"])
         self.assertEqual(self.module.rc_seq, 73)
+        self.assertFalse(self.module.is_armed)
+        self.assertFalse(self.module.is_streaming)
+        self.assertEqual(getattr(self.module, "arm_state", None), "arming")
+
+    def test_arm_rejects_unhealthy_or_stale_prearm_telemetry(self):
+        cases = (
+            ("stale", {"last_telem_time": 1.0}, "오래됨"),
+            ("calibration", {"telem_calibration_ok": 0}, "Calibration_OK"),
+            ("critical", {"fault_critical_drone": True}, "Fault_Critical"),
+            ("firmware armed", {"telem_armed": 1}, "Armed"),
+        )
+        for name, overrides, expected_reason in cases:
+            with self.subTest(name=name):
+                commands = []
+                self.module.reliable_send = commands.append
+                self.module.is_armed = False
+                self.module.is_streaming = False
+                self.module.arm_state = "idle"
+                self.module.last_telem_time = 9.5
+                self._prime_prearm_telemetry()
+                for key, value in overrides.items():
+                    setattr(self.module, key, value)
+                output = io.StringIO()
+
+                with (
+                    mock.patch.object(
+                        self.module.time, "monotonic", return_value=10.0
+                    ),
+                    contextlib.redirect_stdout(output),
+                ):
+                    accepted = self.module.arm()
+
+                self.assertFalse(accepted)
+                self.assertEqual(commands, [])
+                self.assertFalse(self.module.is_armed)
+                self.assertFalse(self.module.is_streaming)
+                self.assertEqual(self.module.arm_state, "idle")
+                self.assertIn(expected_reason, output.getvalue())
+
+    def test_firmware_armed_telemetry_confirms_arm_and_starts_streaming(self):
+        commands = []
+        self.module.reliable_send = commands.append
+        self.module.is_armed = False
+        self.module.is_streaming = False
+        self._prime_prearm_telemetry()
+        self.assertTrue(self.module.arm())
+
+        output = self._run_telemetry([
+            _telemetry_sample(
+                Armed=1,
+                Calibration_OK=1,
+                Fault_Critical=0,
+                Failsafe_Phase=0,
+            ),
+        ])
+
+        self.assertEqual(self.module.arm_state, "armed")
         self.assertTrue(self.module.is_armed)
         self.assertTrue(self.module.is_streaming)
+        self.assertEqual(self.module.current_throttle, 1100)
+        self.assertEqual(self.module.throttle_f, 1100.0)
+        self.assertIn("ARMED 확인", output)
+
+    def test_arm_confirmation_timeout_aborts_with_reliable_stop(self):
+        commands = []
+        self.module.reliable_send = commands.append
+        self.module.is_armed = False
+        self.module.is_streaming = False
+        self._prime_prearm_telemetry()
+        with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
+            self.assertTrue(self.module.arm())
+
+        check_timeout = getattr(self.module, "check_arm_timeout", None)
+        self.assertIsNotNone(check_timeout, "arming needs a wall-clock deadline")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            check_timeout(now=12.1)
+
+        self.assertEqual(commands, ["mag 1", "start", "stop"])
+        self.assertEqual(self.module.arm_state, "idle")
+        self.assertFalse(self.module.is_armed)
+        self.assertFalse(self.module.is_streaming)
+        self.assertEqual(self.module.current_throttle, 1000)
+        self.assertIn("시간 초과", output.getvalue())
+
+    def test_armed_telemetry_after_the_deadline_aborts_instead_of_confirming(self):
+        # 수신 루프는 recvfrom() 전에 deadline을 검사한다. 그 검사(11.99)와
+        # 패킷 처리(12.05) 사이에 deadline(12.00)이 지나면 Armed=1 패킷이
+        # 늦게 도착해도 성공으로 처리되면 안 된다.
+        commands = []
+        self.module.reliable_send = commands.append
+        self.module.is_armed = False
+        self.module.is_streaming = False
+        self._prime_prearm_telemetry()
+        with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
+            self.assertTrue(self.module.arm())
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.module.check_arm_timeout(now=11.99)
+            self.module.advance_arm_attempt(
+                _telemetry_sample(
+                    Armed=1,
+                    Calibration_OK=1,
+                    Fault_Critical=0,
+                    Failsafe_Phase=0,
+                ),
+                now=12.05,
+            )
+
+        self.assertEqual(commands, ["mag 1", "start", "stop"])
+        self.assertEqual(self.module.arm_state, "idle")
+        self.assertFalse(self.module.is_armed)
+        self.assertFalse(self.module.is_streaming)
+        self.assertEqual(self.module.current_throttle, 1000)
+        self.assertIn("시간 초과", output.getvalue())
+        self.assertNotIn("ARMED 확인", output.getvalue())
+
+    def test_receive_loop_judges_arm_deadline_at_decision_time_not_receipt(self):
+        # 패킷은 deadline(12.00) 전인 11.99에 받았지만, 트림 재전송 등으로
+        # 판정이 12.05까지 밀리면 수신 시각이 아니라 판정 시각으로 본다.
+        commands = []
+        self.module.reliable_send = commands.append
+        self.module.is_armed = False
+        self.module.is_streaming = False
+        self._prime_prearm_telemetry()
+        with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
+            self.assertTrue(self.module.arm())
+
+        self.module.trim_synced = True
+        self.module.trim_roll = 1.0
+        self.module.trim_pitch = 0.0
+        self.module.last_trim_resend = 0.0
+        clock = {"now": 11.99}
+
+        def send_cmd(command):
+            if command.startswith("trim "):
+                clock["now"] = 12.05
+
+        with (
+            mock.patch.object(
+                self.module.time, "monotonic", side_effect=lambda: clock["now"],
+            ),
+            mock.patch.object(self.module, "send_cmd", side_effect=send_cmd),
+        ):
+            output = self._run_telemetry([
+                _telemetry_sample(
+                    Armed=1,
+                    Calibration_OK=1,
+                    Fault_Critical=0,
+                    Failsafe_Phase=0,
+                    Trim_Roll=0.0,
+                    Trim_Pitch=0.0,
+                ),
+            ])
+
+        self.assertEqual(commands, ["mag 1", "start", "stop"])
+        self.assertEqual(self.module.arm_state, "idle")
+        self.assertFalse(self.module.is_armed)
+        self.assertFalse(self.module.is_streaming)
+        self.assertIn("시간 초과", output)
+        self.assertNotIn("ARMED 확인", output)
+
+    def test_disarmed_telemetry_retries_start_at_a_bounded_cadence(self):
+        reliable_commands = []
+        direct_commands = []
+        self.module.reliable_send = reliable_commands.append
+        self.module.send_cmd = direct_commands.append
+        self.module.is_armed = False
+        self.module.is_streaming = False
+        self._prime_prearm_telemetry()
+        with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
+            self.assertTrue(self.module.arm())
+
+        advance = getattr(self.module, "advance_arm_attempt", None)
+        self.assertIsNotNone(advance, "arming needs telemetry-driven confirmation")
+        waiting = _telemetry_sample(
+            Armed=0,
+            Calibration_OK=1,
+            Fault_Critical=0,
+            Failsafe_Phase=0,
+        )
+        advance(waiting, now=10.10)
+        advance(waiting, now=10.25)
+        advance(waiting, now=10.30)
+        advance(waiting, now=10.50)
+
+        self.assertEqual(reliable_commands, ["mag 1", "start"])
+        self.assertEqual(direct_commands, ["start", "start"])
+        self.assertEqual(self.module.arm_state, "arming")
 
     def test_arm_uses_latest_mag_choice_for_on_and_off(self):
         for choice_command, expected_mag_command in (
@@ -2098,6 +2372,8 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
                 self.module.handle_stdin_command(choice_command)
                 self.module.is_armed = False
                 self.module.is_streaming = False
+                self.module.arm_state = "idle"
+                self._prime_prearm_telemetry()
 
                 self.module.arm()
 
@@ -2120,6 +2396,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.reliable_send = controlled_reliable_send
         self.module.is_armed = False
         self.module.is_streaming = False
+        self._prime_prearm_telemetry()
 
         arm_thread = threading.Thread(target=self.module.arm)
         arm_thread.start()
@@ -2142,11 +2419,12 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertFalse(self.module.is_armed)
         self.assertFalse(self.module.is_streaming)
 
-    def test_arm_updates_grace_time_before_publishing_armed(self):
+    def test_arm_updates_grace_time_before_publishing_arming(self):
         armed_state_seen_by_clock = []
         self.module.reliable_send = lambda _command: None
         self.module.is_armed = False
         self.module.is_streaming = False
+        self._prime_prearm_telemetry()
 
         def observe_armed_state():
             armed_state_seen_by_clock.append(self.module.is_armed)
@@ -2161,7 +2439,8 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
 
         self.assertEqual(armed_state_seen_by_clock, [False])
         self.assertEqual(self.module.last_arm_time, 123.0)
-        self.assertTrue(self.module.is_armed)
+        self.assertFalse(self.module.is_armed)
+        self.assertEqual(getattr(self.module, "arm_state", None), "arming")
 
     def test_first_complete_telemetry_trim_is_adopted_once(self):
         self.module.trim_roll = 0.0

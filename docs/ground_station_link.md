@@ -23,7 +23,7 @@
 | 상황 | `control_dualsense.py`의 동작 | 드론 상태 확인 |
 |---|---|---|
 | 게임패드 분리·텔레메트리 1.5초 미수신·`Fault_RC` 상승 엣지 | RC 송신만 중단. `stop`·`th 1000` 미전송 | 수신이 있으면 `Armed`와 `Failsafe_Phase`를 함께 확인 |
-| X·stdin `stop`·Ctrl+C | 수동 `stop` 경로. X와 Ctrl+C는 로컬 무장 추정에 따름 | 전송 자체는 컷 완료 ACK가 아님 |
+| X·stdin `stop`·Ctrl+C | 수동 `stop` 경로. X와 Ctrl+C는 로컬 무장 추정 또는 무장 확인 대기(`ARMING`)일 때 `stop` | 전송 자체는 컷 완료 ACK가 아님 |
 | 연결 복구 | RC 자동 재개 없음 | 하강 중 조건을 충족하면 △·stdin `resume` 요청 |
 | `resume` 요청 | RC 수락 확인 → `resume` 전송 → 추가 RC 수락과 phase 0 확인 | 성공 메시지 전까지 복귀를 확정하지 않음 |
 

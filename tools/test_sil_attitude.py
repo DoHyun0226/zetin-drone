@@ -115,7 +115,7 @@ class SilAttitudeTest(unittest.TestCase):
                     f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
                 )
             for line in completed.stdout.splitlines():
-                if line.startswith("[R1]"):
+                if line.startswith("[R1]") or line.startswith("[SIL] S2b"):
                     print(line)
 
 
