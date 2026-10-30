@@ -1365,15 +1365,17 @@ static inline AllocationTelemetrySample readAllocationTelemetrySnapshot() {
 //  5) 안전 검사(과도 기울기, resume, RC 끊김 → 자동착륙) → 잠금이면 모터 끄고 다음 tick
 //  6) 바깥 루프(250Hz): 각도 오차 → 목표 각속도 / yaw 잠금·권한 감시
 //  7) 안쪽 루프(1kHz): 각속도 PID → allocator로 모터 분배 → 조건부 적분 → PWM 출력
-void pid_task(void *pv) {
+void pid_task(void *pv) { // 26.10.30 기준 여기까지 읽음 -> 26.10.30보다 이후의 날짜가 주석으로 달려있지 않고 사용자가 어디까지 읽었는지 요청할 경우 이 부분을 기준으로 답변
   // 모터 정지 수단(stopMotors, RC timeout 검사)이 모두 이 태스크 안에 있으므로,
   // SPI 행업 등으로 태스크가 블로킹되면 모터가 마지막 PWM으로 고정된다.
   // 태스크 워치독이 panic 재부팅을 강제하고, 재부팅 후 ESC는 PWM 신호
   // 소실로 정지하며 setup()의 stopMotors()가 정지 신호를 복원한다.
   esp_task_wdt_add(NULL);
 
-  const TickType_t period = pdMS_TO_TICKS(1);   // vTaskDelayUntil 기반 (busy-wait 제거)
-  TickType_t wake = xTaskGetTickCount();
+  // TickType_t: FreeRTOS가 시간을 tick 수로 저장하는 정수 타입. ESP32에서는 uint32_t, Arduino 기본 설정에서 1 tick = 1ms
+  // xTaskGetTickCount(): 스케줄러 시작 후 지난 tick 수를 돌려준다. millis()와 비슷하며 정밀도는 1 tick (ISR 안에서는 FromISR 버전 사용)
+  const TickType_t period = pdMS_TO_TICKS(1);   // vTaskDelayUntil 기반 (busy-wait 제거). pdMS_TO_TICKS: ms → tick 변환
+  TickType_t wake = xTaskGetTickCount();        // 다음 기상 시각을 계산할 기준. vTaskDelayUntil이 매번 갱신한다
   const float dt = 0.001f;
 
   // 아래 변수들은 이 태스크 안에서만 쓰는 지역 상태 (while 루프 동안 계속 유지된다)
@@ -1405,7 +1407,8 @@ void pid_task(void *pv) {
   while (true) {
     vTaskDelayUntil(&wake, period);   // 직전 기상 시각 + 1ms까지 잠든다 → 실행 시간과 무관하게 일정한 1kHz
     esp_task_wdt_reset();             // 워치독에 "살아 있음" 보고. 500ms 동안 못 하면 재부팅
-    TickType_t afterWake = xTaskGetTickCount();
+    TickType_t afterWake = xTaskGetTickCount();   // 실제로 깨어난 시각. wake(예정 시각)와의 차이가 지연 시간
+    // 부호 없는 정수 뺄셈이라 tick 카운터가 약 49.7일 만에 0으로 돌아가도 경과 tick이 맞게 나온다
     if ((TickType_t)(afterWake - wake) > period) {
       // 큰 지연 뒤 밀린 tick을 연속 실행하지 않는다(센서 stale read/D항 spike 방지).
       wake = afterWake;
@@ -2569,10 +2572,12 @@ void setup() {
   if (!esc_ok) while (1) { Serial.println("[FAULT] ESC attach FAIL"); delay(1000); }
   stopMotors();
 
-  if (IMU1.begin() < 0) while (1) { Serial.println("[FAULT] IMU1 FAIL"); delay(1000); }
+  if (IMU1.begin() < 0) while (1) { Serial.println("[FAULT] IMU1 FAIL"); delay(1000); } 
   if (IMU2.begin() < 0) while (1) { Serial.println("[FAULT] IMU2 FAIL"); delay(1000); }
   // IMU 설정: 출력 1600Hz, 가속도 ±16g, 자이로 ±2000dps (GYRO_SCALE/ACCEL_SCALE과 짝) + 하드웨어 LPF
   // 실패 코드를 |=로 모아 하나라도 실패하면 0이 아니게 된다
+  // IMUx.begin(): starts communication with the ICM42670
+  // 초기화 성공 -> return 0, 실패 -> return < 0
   int sensorStartStatus = 0;
   sensorStartStatus |= IMU1.startAccel(1600, 16);
   sensorStartStatus |= IMU1.startGyro(1600, 2000);
