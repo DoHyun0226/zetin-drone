@@ -324,8 +324,6 @@ const float MAG_SOFT_IRON[3][3] = {
   {0.018437852f, 0.006050833f, 1.026752877f},
 }; 
 
-// 여기까지 읽음 --> 다음에 어디까지 읽었는 지 질문할 때 해당 줄 번호 반환할 것
-
 // BMM350 축이 기체 축과 다르면 벤치 sign test 뒤 여기만 바꾼다.
 const float MAG_BODY_SIGN_X = 1.0f;
 const float MAG_BODY_SIGN_Y = 1.0f;
@@ -488,6 +486,9 @@ const int      FS_GROUND_CUT_MAX_US  = 1150;     // RC 끊김 시 스로틀이 �
 const uint32_t PID_WDT_TIMEOUT_MS = 500;     // pid_task 정지 시 강제 재부팅 (1kHz 루프 대비 큰 여유)
 const int32_t  FROZEN_DELTA_RAW   = 1;       // 6축 raw 변화량 합이 이 이하면 정지 의심 (LSB)
 const uint32_t IMU_FROZEN_MS      = 300;     // 그 상태가 이만큼 지속되면 freeze 확정
+// [IMU 불일치 판정] x, y, z 중 한 축이라도 각속도 차이가 15dps를 넘는 상태가 150ms 계속되면 fault_disagree를 켠다
+//  단위는 각도(°)가 아니라 각속도(°/s). 중간에 한 tick이라도 15dps 이하로 돌아오면 시간 측정을 처음부터 다시 한다 (순간 튐 무시)
+//  fault가 켜지면 어느 IMU가 틀렸는지 알 수 없으므로 두 값을 모두 쓰지 않고 시동을 끈다
 const float    GYRO_DISAGREE_DPS  = 15.0f;   // 두 IMU 각속도 차이 임계 (deg/s)
 const uint32_t IMU_DISAGREE_MS    = 150;     // 불일치 지속 시간
 
@@ -515,7 +516,7 @@ class LowPassFilter {
 public:
   float alpha, last = 0.0f;   // alpha: 반영 비율, last: 직전 출력(필터 상태)
   LowPassFilter(float cutoff_hz, float dt) {
-    float rc = 1.0f / (2.0f * PI * cutoff_hz);
+    float rc = 1.0f / (2.0f * PI * cutoff_hz); // cutoff_hz를 설정했을 때 RC 회로의 시정수(계산해보면 나옴)
     alpha = dt / (rc + dt);
   }
   float update(float in) { last += alpha * (in - last); return last; }   // 새 입력을 넣고 필터 출력을 돌려준다
@@ -831,6 +832,12 @@ float iTermRoll = 0.0f, iTermPitch = 0.0f, iTermYaw = 0.0f;  // 적분 기여 (�
 float gyro_bias1[3] = {0,0,0};   // 부팅 캘리브레이션으로 구한 자이로 영점 오차 (dps). 매 샘플에서 뺀다
 float gyro_bias2[3] = {0,0,0};
 // 두 센서의 gain 오차는 독립이고 단일-IMU 폴백도 있으므로 각각 보정한다.
+// [accel_scale] 정지 시 |a|가 1g가 되도록 맞추는 부팅 보정 배율 (단위 없음, 약 1.0). 예) 측정 평균 0.98g → 1/0.98 ≈ 1.020
+//  - 1.0은 "오차 없음"이 아니라 "보정 안 함": 부팅 전 초기값이고, 캘리브레이션 실패나 평균이 0.8~1.2g 밖일 때도 1.0으로 남는다
+//  - ACCEL_SCALE(1/2048, LSB → g 단위 변환)과 다른 값이다. accel_scale을 곱해도 값은 아직 LSB 단위
+//  - 필요한 이유: compute_alpha()와 착지 감지가 |accel|과 1g의 차이를 기준으로 판단하고, 두 IMU 평균도 스케일이 맞아야 한다
+//  - 한계: 3축 공통 배율 하나라 전체 크기만 맞춘다. 축별 오프셋/스케일 오차는 보정하지 못한다
+//  - 구조체 ImuCalDatagram에 같은 이름의 멤버가 있지만 별개의 변수다. sendImuCalibration()이 이 값을 패킷에 복사한다
 float accel_scale1 = 1.0f;
 float accel_scale2 = 1.0f;
 
@@ -1365,12 +1372,15 @@ static inline AllocationTelemetrySample readAllocationTelemetrySnapshot() {
 //  5) 안전 검사(과도 기울기, resume, RC 끊김 → 자동착륙) → 잠금이면 모터 끄고 다음 tick
 //  6) 바깥 루프(250Hz): 각도 오차 → 목표 각속도 / yaw 잠금·권한 감시
 //  7) 안쪽 루프(1kHz): 각속도 PID → allocator로 모터 분배 → 조건부 적분 → PWM 출력
-void pid_task(void *pv) { // 26.10.30 기준 여기까지 읽음 -> 26.10.30보다 이후의 날짜가 주석으로 달려있지 않고 사용자가 어디까지 읽었는지 요청할 경우 이 부분을 기준으로 답변
+void pid_task(void *pv) {
   // 모터 정지 수단(stopMotors, RC timeout 검사)이 모두 이 태스크 안에 있으므로,
   // SPI 행업 등으로 태스크가 블로킹되면 모터가 마지막 PWM으로 고정된다.
   // 태스크 워치독이 panic 재부팅을 강제하고, 재부팅 후 ESC는 PWM 신호
   // 소실로 정지하며 setup()의 stopMotors()가 정지 신호를 복원한다.
-  esp_task_wdt_add(NULL);
+  // [비행 중 발동 시] 모터가 멈춰 기체는 그대로 떨어진다. 재부팅 후에도 safety_lock=true로 시작하고
+  // 비행 상태를 복구하는 로직이 없어 자동착륙도 하지 않는다. 멈춘 태스크를 살리는 장치가 아니라
+  // 제어 없이 모터가 계속 도는 것을 막는 안전장치다. 설정은 setup()의 wdt_config 참고
+  esp_task_wdt_add(NULL);   // 현재 태스크(NULL = 자기 자신)를 감시 대상으로 등록. 루프의 esp_task_wdt_reset()이 500ms 끊기면 발동
 
   // TickType_t: FreeRTOS가 시간을 tick 수로 저장하는 정수 타입. ESP32에서는 uint32_t, Arduino 기본 설정에서 1 tick = 1ms
   // xTaskGetTickCount(): 스케줄러 시작 후 지난 tick 수를 돌려준다. millis()와 비슷하며 정밀도는 1 tick (ISR 안에서는 FromISR 버전 사용)
@@ -1439,10 +1449,15 @@ void pid_task(void *pv) { // 26.10.30 기준 여기까지 읽음 -> 26.10.30보�
     if (realDt < 0.0002f || realDt > 0.01f) realDt = dt;
 
     // ---------- 센서 읽기 ----------
+    // 측정값은 참조 매개변수 e1/e2에 저장되고, 반환값(int)은 상태 코드다 (0 = 성공, 그 외 = 오류)
+    // 단 라이브러리의 spi_read()는 항상 0을 반환하므로 SPI 통신이 끊겨도 readStatus는 0이다
+    // → readStatus는 로그 출력용이고, 실질적인 통신 감시는 아래 checkFreeze()가 맡는다
     int readStatus1 = IMU1.getDataFromRegisters(e1);
     int readStatus2 = IMU2.getDataFromRegisters(e2);
 
     // 읽기 오류 시 event가 갱신되지 않으므로 동일 프레임으로 취급되어 freeze로 귀결된다.
+    //  - 데이터 준비 비트가 0 (MISO 0 고정 포함): event 갱신 안 됨 → 같은 값 반복
+    //  - MISO 1 고정 (모든 바이트 0xFF): event가 전부 -1로 갱신됨 → 역시 같은 값 반복
     // fault는 비행 중 자동 복구하지 않고 다음 수동 start 때만 재평가/해제한다.
     bool frozen1 = checkFreeze(fm1, e1, nowMs);
     bool frozen2 = checkFreeze(fm2, e2, nowMs);
@@ -1470,14 +1485,18 @@ void pid_task(void *pv) { // 26.10.30 기준 여기까지 읽음 -> 26.10.30보�
     float g2[3] = {
       IMU2_SIGN_X*e2.gyro[0]*GYRO_SCALE - gyro_bias2[0],
       IMU2_SIGN_Y*e2.gyro[1]*GYRO_SCALE - gyro_bias2[1],
-      IMU2_SIGN_Z*e2.gyro[2]*GYRO_SCALE - gyro_bias2[2] };
+      IMU2_SIGN_Z*e2.gyro[2]*GYRO_SCALE - gyro_bias2[2] }; 
+    // 여기까지는 원시값 그대로. 이후는 LPF, body 변환, 융합, 자세 추정 등에서 쓰인다.
+
+
     // 소프트웨어 LPF. 제어와 IMU 불일치 판정 모두 필터된 각속도를 쓴다.
     // (진동으로 순간 차이가 15dps를 넘어 비행 중 disagree 컷이 나는 것을 방지)
     for (int k = 0; k < 3; k++) {
-      g1[k] = lpfG1[k].update(g1[k]);
-      g2[k] = lpfG2[k].update(g2[k]);
+      g1[k] = lpfG1[k].update(g1[k]); // LPF 적용 후 g1[k]에 갱신
+      g2[k] = lpfG2[k].update(g2[k]); // LPF 적용 후 g2[k]에 갱신
     }
     // 가속도는 아직 LSB 단위 (× 부팅 배율 보정만). g 변환(ACCEL_SCALE)은 body 변환할 때 한다
+    //  accel_scale은 약 1.0인 단위 없는 배율이라 곱해도 LSB 단위가 유지된다. a2에는 축 부호(IMU2_SIGN)도 함께 곱한다
     float a1[3] = {
       (float)e1.accel[0] * accel_scale1,
       (float)e1.accel[1] * accel_scale1,
@@ -1497,6 +1516,7 @@ void pid_task(void *pv) { // 26.10.30 기준 여기까지 읽음 -> 26.10.30보�
     bool disagreeSample = false;
     if (!frozen1 && !frozen2) {
       for (int k = 0; k < 3; k++) {
+        // fabsf: float 절댓값 (<math.h>). 어느 IMU가 더 크든 차이의 크기만 비교한다
         if (fabsf(g1[k] - g2[k]) > GYRO_DISAGREE_DPS) disagreeSample = true;
       }
     }
@@ -1504,7 +1524,7 @@ void pid_task(void *pv) { // 26.10.30 기준 여기까지 읽음 -> 26.10.30보�
 
     // latch된 센서는 비행 중 값이 다시 움직여도 자동 재투입하지 않는다.
     bool h1 = !fault_imu1, h2 = !fault_imu2;   // h = healthy (사용 가능)
-
+ // 여기까지 읽었어
     // ---------- IMU 융합 (진짜 redundancy) ----------
     // 둘 다 정상: 불일치 검사 후 평균 / 하나만 정상: 그것만 / 중재 불가: fault
     if (h1 && h2) {
@@ -2590,6 +2610,9 @@ void setup() {
   }
   delay(500);
 
+  // [공중에서 재부팅된 경우] 움직임이 감지되어 3번 모두 실패하기 쉽고, 실패하면 calibration_ok=false라 start가 거부된다.
+  // pid_task는 이 뒤에 생성되므로 그동안(최소 4.5초) 자세 추정도 제어도 돌지 않는다.
+  // 시도 도중 바닥에 멈추면 통과할 수 있으므로, 추락 후에는 기체를 점검하고 전원을 다시 넣는다
   calibration_ok = calibrate_bias();   // 약 4초 이상 (IMU 2개 × 2초). 이때 기체를 움직이면 안 된다
 
   // pid_task 전용 태스크 워치독. idle task는 감시하지 않고, timeout 시
