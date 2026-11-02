@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pygame
 
-from decode_imu_raw import decode_file
+from ground.imu_raw import decode_file
 from ground.failsafe_telemetry import (
     FAILSAFE_PHASE_NAMES,
     FAILSAFE_PROBE_STATE_NAMES,

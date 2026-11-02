@@ -40,14 +40,14 @@
   hard/soft-iron·body 부호·스로틀 간섭 보정 후 도메인이다. mag가 꺼져 있으면
   값이 갱신되지 않을 수 있으므로 0을 신선도 보장으로 해석하지 않는다.
 - `RC_Total_Pkts`·`RC_Dropped_Pkts`는 부팅 이후 누적 카운터다.
-  `analyze_flight_log.py`의 드롭 비율 출력은 마지막 누적값의 비율이며 그 파일
+  `drone_logs.py flight`의 드롭 비율 출력은 마지막 누적값의 비율이며 그 파일
   구간의 무선 유실률이 아니다. [링크 진단](../docs/ground_station_link.md)을 참고한다.
 - 목표 roll/pitch 각도에는 트림이 포함된다. `Motor_M1`~`Motor_M4`는 모터
   PWM 명령이며 RPM·추력 측정값이 아니다. 배터리 전압과 P·D 개별 항 열은 없고,
   축별 PID 합계(`PID_*_US`)와 적분 기여(`I_*_US`)는 기록된다.
 
 ```bash
-python scripts/analyze_flight_log.py logs/flight_log_YYYY-MM-DD_HHMMSS.csv --no-plot
+python scripts/drone_logs.py flight logs/flight_log_YYYY-MM-DD_HHMMSS.csv --no-plot
 ```
 
 파일을 생략하면 `logs/*.csv` 중 수정시각이 가장 최근인 것을 고른다. raw
@@ -62,7 +62,7 @@ CSV를 비행 CSV로 오인하지 않도록 경로를 지정한다. 위 도구�
 없으면 보존된 바이너리를 다음처럼 다시 디코딩한다.
 
 ```bash
-python scripts/decode_imu_raw.py logs/imuraw_YYYY-MM-DD_HHMMSS.bin /tmp/imu-decoded.csv
+python scripts/drone_logs.py imuraw logs/imuraw_YYYY-MM-DD_HHMMSS.bin /tmp/imu-decoded.csv
 ```
 
 출력 경로를 생략하면 입력 옆 `.csv`를 생성/덮어쓴다. `ZIMU` v2는

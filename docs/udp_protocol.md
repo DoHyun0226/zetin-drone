@@ -199,7 +199,7 @@ ar|at|ay <value>      # roll / pitch / yaw
   BMM350 raw `Mag_X/Y/Z`를 같은 스냅샷으로 보내므로 지상국 CSV에 회전 전체가
   남는다. 모든 방향으로 회전한 뒤
   `magcal 0`을 보내면 시리얼에는 샘플 수와 축별 span만 출력된다. CSV에
-  `scripts/magcal_fit.py`를 실행해 Li & Griffiths 제약 타원체 + MAD 클리핑으로
+  `scripts/drone_logs.py magcal`을 실행해 Li & Griffiths 제약 타원체 + MAD 클리핑으로
   `MAG_HARD_IRON`/`MAG_SOFT_IRON`과 재환산 `mag_comp`를 얻는다. 전체 절차와
   통과 기준은
   [`bmm350_yaw_bench_test.md`](bmm350_yaw_bench_test.md)를 따른다.
@@ -213,7 +213,7 @@ ar|at|ay <value>      # roll / pitch / yaw
   2026-08-04 보정 후 모터 간섭 재검증 기록과 그 수치의 재분석 범위는
   [`bmm350_yaw_bench_test.md`](bmm350_yaw_bench_test.md)에 남겼다.
   `magc 0 0 0`은 보정을 끄며, 하강 중 계수 변경은 거부한다.
-  `magcal_fit.py`의 `--mag-comp`는 입력 벡터에 새 행렬을 곱할 뿐 기존 행렬을 역변환하지
+  `drone_logs.py magcal`의 `--mag-comp`는 입력 벡터에 새 행렬을 곱할 뿐 기존 행렬을 역변환하지
   않는다. 이미 보정된 현행 계수를 그대로 넣어 이중 변환하지 말고, 입력의
   좌표계를 확인한 뒤 새 보정 기준에서 모터 간섭을 다시 측정한다.
 - `raw 1`은 1kHz 제어 루프에서 읽은 두 IMU의 int16 레지스터 원값을

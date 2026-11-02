@@ -39,7 +39,7 @@ alone cannot say whether the ground is too close or too far. ``Range_Quality``
 and ``Flow_Quality`` are 0-255 from the module, or **-1 when no fresh frame
 has arrived**, which is the only way to tell a frozen sensor from a valid
 reading. Field 65 appends ``Mag_Cal_Active``. While it is 1, ``Mag_X/Y/Z``
-are the uncalibrated BMM350 raw µT values selected by ``magcal_fit.py``;
+are the uncalibrated BMM350 raw µT values selected by ``ground.magcal``;
 otherwise those three fields retain their corrected-domain flight meaning.
 ``MagHeading`` (field 31) retains its last value while magnetic fusion is off,
 so it cannot establish whether fusion is active; ``Mag_Enabled`` is the sole

@@ -58,7 +58,7 @@ SIL은 융합 수학만 검증한다. 이 절차가 실센서·실간섭을 검�
    `Mag_Cal_Active == 1` 행만 자동 선택한다.
 
    ```bash
-   python scripts/magcal_fit.py logs/flight_log_YYYY-MM-DD_HHMMSS.csv
+   python scripts/drone_logs.py magcal logs/flight_log_YYYY-MM-DD_HHMMSS.csv
    ```
 
 5. 커버리지 경고/거부, 피팅 반경·축비, 보정 전후 `|B|` 산포와 95퍼센타일

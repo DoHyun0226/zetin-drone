@@ -21,10 +21,10 @@
 | 게임패드 없는 수동 UDP 콘솔 | `tune_pid.py` | 명령 1회 송신과 상태 표시. RC 자동 송신·CSV 기록·종료 시 자동 `stop` 없음 |
 | 텍스트 수신·CSV 기록 | `receive_telemetry.py` | 단독 수신 전용. 조종·정지 명령 없음 |
 | 실시간 그래프·CSV 기록 | `monitor_telemetry.py` | GUI 필요. 조종·정지 명령 없음 |
-| 비행 CSV 요약·그래프 | `analyze_flight_log.py` | 오프라인. 대상 `flight_log_*.csv` 경로를 명시 |
-| 프로브 분포 분석 | `analyze_probe_response.py` | 오프라인 연구용. 결과가 현행 착지컷에 연결되지는 않음 |
-| raw 바이너리 → CSV | `decode_imu_raw.py` | 오프라인. 원본 `.bin` 보존, 출력 CSV 생성/덮어쓰기 |
-| 자기계 보정 상수 계산 | `magcal_fit.py` | 보정용 raw CSV에서 상수를 출력. 펌웨어를 자동 수정하거나 업로드하지 않음 |
+| 비행 CSV 요약·그래프 | `drone_logs.py flight` | 오프라인. 대상 `flight_log_*.csv` 경로를 명시 |
+| 프로브 분포 분석 | `drone_logs.py probe` | 오프라인 연구용. 결과가 현행 착지컷에 연결되지는 않음 |
+| raw 바이너리 → CSV | `drone_logs.py imuraw` | 오프라인. 원본 `.bin` 보존, 출력 CSV 생성/덮어쓰기 |
+| 자기계 보정 상수 계산 | `drone_logs.py magcal` | 보정용 raw CSV에서 상수를 출력. 펌웨어를 자동 수정하거나 업로드하지 않음 |
 | dual-IMU 루프 진단 | `receive_dual_imu_debug.py` | 전용 `icm42670_dual_loop_debug` 펌웨어·`DUAL_IMU_DEBUG` AP용 |
 | 모터 식별용 시리얼 조작 | `motor_serial.py` | 전용 `motor_id_single` 펌웨어, 프로펠러 제거·PSU 전류 제한. 지정 시리얼 포트 확인 |
 
@@ -159,10 +159,10 @@ stdin에는 [프로토콜의 명령](../docs/udp_protocol.md#지상국--드론)�
 
 ```bash
 python scripts/control_dualsense.py --no-raw --no-mag
-python scripts/analyze_flight_log.py logs/flight_log_YYYY-MM-DD_HHMMSS.csv --no-plot
-python scripts/decode_imu_raw.py logs/imuraw_YYYY-MM-DD_HHMMSS.bin /tmp/imu.csv
-python scripts/analyze_probe_response.py ground.csv air.csv --label ground --label air
-python scripts/magcal_fit.py capture.csv
+python scripts/drone_logs.py flight logs/flight_log_YYYY-MM-DD_HHMMSS.csv --no-plot
+python scripts/drone_logs.py imuraw logs/imuraw_YYYY-MM-DD_HHMMSS.bin /tmp/imu.csv
+python scripts/drone_logs.py probe ground.csv air.csv --label ground --label air
+python scripts/drone_logs.py magcal capture.csv
 ```
 
 각 명령은 서로 별도 용도다. `--no-raw`는 시작 시 `raw 0`을 반복 전송하며
@@ -170,9 +170,9 @@ python scripts/magcal_fit.py capture.csv
 `--no-raw`로 시작한 세션의 기록을 다시 켜지는 않는다. 기본 실행도 `raw 1`을
 자동 재전송하지 않으므로 이전 세션이 껐다면 `raw on`을 직접 입력한다.
 
-`analyze_flight_log.py`의 `--no-plot`은 창을 생략하지만 matplotlib은 여전히
-필요하다. 파일을 생략하면 `logs/*.csv` 중 수정시각이 가장 최근인 파일을
-선택하므로, raw CSV를 고르지 않도록 경로를 명시한다. 요약에는 RP/Yaw scale의
+`drone_logs.py flight`의 `--no-plot`은 창을 생략하지만 matplotlib은 여전히
+필요하다. 파일을 생략하면 `logs/flight_log_*.csv` 중 수정시각이 가장 최근인
+파일을 선택한다. 요약에는 RP/Yaw scale의
 최솟값·p05(5백분위수), LIMITED 진입 횟수·누적 시간, roll/pitch/yaw별
 PID·I 기여의 절댓값 최댓값이 포함된다. 필요한 진단값이 없는 레거시 CSV는
 해당 항목을 `legacy/unknown`으로 표시한다. LIMITED 시간은 `Timestamp`로
@@ -185,7 +185,7 @@ PID·I 기여의 절댓값 최댓값이 포함된다. 필요한 진단값이 없
 표본 부족·`Hover_Est` 혼합은 판정을 보류한다. 종료코드 0은 분석 실행 성공이며
 분포 “통과”를 뜻하지 않는다. `--plot`일 때만 matplotlib을 불러온다.
 
-`magcal_fit.py`는 기본적으로 `Mag_Cal_Active=1`인 raw 행만 사용한다.
+`drone_logs.py magcal`은 기본적으로 `Mag_Cal_Active=1`인 raw 행만 사용한다.
 `--all`은 보정 전 raw만 따로 추린 파일임을 확인했을 때만 사용한다. 출력의
 `95p |B| radial residual`은 자기장 크기 피팅 잔차로, heading 정확도가 아니다.
 스로틀 간섭 계수 환산은 입력 좌표계가 맞아야 하며 새 보정 후 모터 벤치로

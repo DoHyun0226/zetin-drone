@@ -65,7 +65,7 @@ yaw 각속도까지 정착하면 회전이 멈춘 heading을 자동으로 잠그
 영향받는다. **펌웨어 기본값은 OFF, 지상국의 조종자 선택 기본값은 ON**이다.
 `control_dualsense.py`는 시동 직전 선택값을 전송하며 `--no-mag`나
 `mag off`로 끈 선택을 유지한다. 실제 적용 상태는 `Mag_Enabled`로 확인한다. hard/soft-iron 보정은 Li & Griffiths 제약 타원체 피팅으로 구하고
-(`scripts/magcal_fit.py`), 모터 전류 간섭은 hard/soft-iron·body 변환 후 XYZ의 throttle 보정으로
+(`scripts/drone_logs.py magcal`), 모터 전류 간섭은 hard/soft-iron·body 변환 후 XYZ의 throttle 보정으로
 상쇄한다([`bmm350_yaw_bench_test.md`](bmm350_yaw_bench_test.md)). PID 태스크가
 SPI 행업 등으로 정지하면 태스크 워치독(500ms)이 재부팅을 강제해 마지막
 PWM으로 모터가 고정되는 것을 막는다.
@@ -138,10 +138,10 @@ M4 = T + P + R + Y
 | [`tune_pid.py`](../scripts/tune_pid.py) | 게임패드 없이 UDP 명령·게인만 다루는 보조 도구 |
 | [`receive_telemetry.py`](../scripts/receive_telemetry.py) | 터미널 수신기 겸 CSV 로거 |
 | [`monitor_telemetry.py`](../scripts/monitor_telemetry.py) | 실시간 플롯 겸 CSV 로거 |
-| [`analyze_flight_log.py`](../scripts/analyze_flight_log.py) | 20Hz CSV 오프라인 분석 |
-| [`analyze_probe_response.py`](../scripts/analyze_probe_response.py) | 자동착륙 프로브 판정·응답 분포 분석 |
-| [`decode_imu_raw.py`](../scripts/decode_imu_raw.py) | `ZIMU`/`ZCAL` 바이너리 → CSV 디코더 |
-| [`magcal_fit.py`](../scripts/magcal_fit.py) | 캡처 CSV → 제약 타원체 hard/soft-iron 상수 피팅 |
+| [`drone_logs.py flight`](../scripts/ground/flight_log.py) | 20Hz CSV 오프라인 분석 |
+| [`drone_logs.py probe`](../scripts/ground/probe_response.py) | 자동착륙 프로브 판정·응답 분포 분석 |
+| [`drone_logs.py imuraw`](../scripts/ground/imu_raw.py) | `ZIMU`/`ZCAL` 바이너리 → CSV 디코더 |
+| [`drone_logs.py magcal`](../scripts/ground/magcal.py) | 캡처 CSV → 제약 타원체 hard/soft-iron 상수 피팅 |
 | [`receive_dual_imu_debug.py`](../scripts/receive_dual_imu_debug.py) | 듀얼 IMU 루프 진단 수신기 |
 | [`bench_sign_test.py`](../scripts/bench_sign_test.py) · [`bench_yaw_test.py`](../scripts/bench_yaw_test.py) · [`bench_thrust_ramp.py`](../scripts/bench_thrust_ramp.py) | 전원 인가 벤치 절차용 스크립트. 시작 시 `trim 0 0`을 보내 드론 트림을 지운다 |
 

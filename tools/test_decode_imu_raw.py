@@ -12,7 +12,7 @@ import unittest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-DECODER_PATH = REPO_ROOT / "scripts" / "decode_imu_raw.py"
+DECODER_PATH = REPO_ROOT / "scripts" / "ground" / "imu_raw.py"
 ZIMU_HEADER = struct.Struct("<4sBBHIII")
 ZIMU_SAMPLE = struct.Struct("<H12h")
 ZCAL_PACKET = struct.Struct("<4sB3x13f")

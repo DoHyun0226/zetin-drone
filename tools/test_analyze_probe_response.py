@@ -16,7 +16,7 @@ from ground.telemetry_schema import CSV_FIELDS  # noqa: E402
 
 
 def analyzer_module():
-    return importlib.import_module("analyze_probe_response")
+    return importlib.import_module("ground.probe_response")
 
 
 class AnalyzeProbeResponseTests(unittest.TestCase):
