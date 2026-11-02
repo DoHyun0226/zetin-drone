@@ -60,19 +60,20 @@ class DroneLogsTest(unittest.TestCase):
             )
 
     def test_flight_no_plot_runs_on_fixture(self):
-        fields = ("Timestamp", "Mixer_RP_Scale", "Mixer_Yaw_Scale")
+        fields = ("Timestamp", "Roll", "Pitch", "Yaw", "Throttle")
         with tempfile.TemporaryDirectory() as temp:
             csv_path = Path(temp) / "flight.csv"
             with csv_path.open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(handle, fieldnames=fields)
                 writer.writeheader()
                 writer.writerow(
-                    dict(zip(fields, ("00:00:00.000", 1.0, 1.0)))
+                    dict(zip(fields, ("00:00:00.000", 0.0, 0.0, 0.0, 1100)))
                 )
             out = run(
                 [sys.executable, DRONE_LOGS, "flight", csv_path, "--no-plot"]
             )
         self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("Allocator scale: legacy/unknown", out.stdout)
 
     def test_flight_default_picks_latest_flight_log_not_camera_csv(self):
         from ground import flight_log
