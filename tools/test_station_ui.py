@@ -110,6 +110,74 @@ class ConsoleUITest(unittest.TestCase):
             ConsoleUI().run(handler, lambda: calls.append("interrupt"), lambda: None)
         self.assertEqual(calls, ["interrupt"])
 
+    # --- review round 1: run() contains every failure ---
+
+    def _run_collecting(self, input_side_effect=None, handler=None, stdin=None):
+        calls = []
+        handled = []
+        out = io.StringIO()
+        err = io.StringIO()
+        patches = [contextlib.redirect_stdout(out), contextlib.redirect_stderr(err)]
+        if input_side_effect is not None:
+            patches.append(
+                mock.patch.object(builtins, "input", side_effect=input_side_effect)
+            )
+        if stdin is not None:
+            patches.append(mock.patch.object(sys, "stdin", stdin))
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            ConsoleUI().run(
+                handler or handled.append,
+                lambda: calls.append("interrupt"),
+                lambda: calls.append("eof"),
+            )
+        return calls, handled, out.getvalue()
+
+    def test_closed_stdin_ends_through_the_eof_safety_path(self):
+        calls, _handled, out = self._run_collecting(stdin=_ClosedStream())
+        self.assertEqual(calls, ["eof"])
+        self.assertIn("[STDIN] 입력 오류: ValueError", out)
+
+    def test_input_oserror_ends_through_the_eof_safety_path(self):
+        calls, _handled, out = self._run_collecting(
+            input_side_effect=OSError(5, "Input/output error"),
+        )
+        self.assertEqual(calls, ["eof"])
+        self.assertIn("[STDIN] 입력 오류: OSError", out)
+
+    def test_handler_exception_is_reported_and_the_loop_continues(self):
+        handled = []
+
+        def handler(msg):
+            handled.append(msg)
+            if msg == "boom":
+                raise RuntimeError("synthetic handler failure")
+
+        calls, _unused, out = self._run_collecting(
+            input_side_effect=["boom", "gains", EOFError], handler=handler,
+        )
+        self.assertEqual(handled, ["boom", "gains"])
+        self.assertEqual(calls, ["eof"])
+        self.assertIn(
+            "[STDIN] 명령 처리 오류: RuntimeError: synthetic handler failure", out,
+        )
+
+    def test_failing_safety_callback_does_not_escape_run(self):
+        def broken():
+            raise RuntimeError("synthetic callback failure")
+
+        err = io.StringIO()
+        for side_effect in (EOFError, KeyboardInterrupt, OSError("gone")):
+            with self.subTest(side_effect=side_effect):
+                with (
+                    mock.patch.object(builtins, "input", side_effect=side_effect),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(err),
+                ):
+                    ConsoleUI().run(lambda _m: None, broken, broken)
+        self.assertIn("synthetic callback failure", err.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

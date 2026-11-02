@@ -151,6 +151,10 @@ rc_seq = 0
 # send_cmd/reliable_send 같은 블로킹 가능 I/O를 호출하지 않는다.
 telem_lock        = threading.Lock()
 safety_cmd_lock   = threading.Lock()
+# rc/rcr 송신의 래치 확인+sendto와 worker_fault 쓰기를 한 덩어리로 묶는다.
+# 잎 잠금: 안에서는 sendto만 하고 다른 잠금을 잡지 않는다
+# (safety_cmd_lock -> rc_send_lock 순서만 허용).
+rc_send_lock      = threading.Lock()
 shutdown_event    = threading.Event()
 last_telem_time   = 0.0
 telem_angle_x     = 0.0
@@ -191,6 +195,27 @@ last_btn_trim_reset = False
 # ==========================================================
 # 송신
 # ==========================================================
+class _UIBuffer:
+    """Holds ui calls made while a safety action is still pending.
+
+    A fault path builds its operator lines here, runs the safety action
+    (disarm / stop_streaming_only, which write into the same buffer), then
+    flushes: the safety state and sends finish before any real ui call, and
+    the console still shows the lines in their original order.
+    """
+
+    def __init__(self):
+        self._calls = []
+
+    def event(self, text):
+        self._calls.append(("event", text))
+
+    def flush(self):
+        calls, self._calls = self._calls, []
+        for kind, text in calls:
+            getattr(ui, kind)(text)
+
+
 def _is_rc_command(cmd: str) -> bool:
     words = cmd.split(None, 1)
     return bool(words) and words[0].lower() in RC_COMMANDS
@@ -201,13 +226,22 @@ def _worker_fault_lock_reason():
     return f"{label} 스레드 오류로 잠김 - 지상국을 다시 시작하세요"
 
 
-def send_cmd(cmd: str):
-    if worker_fault is not None and _is_rc_command(cmd):
-        return  # 워커 오류 래치: rc/rcr는 재시작 전까지 나가지 않는다
+def _sendto(cmd: str):
     try:
         sock.sendto(cmd.encode(), (UDP_IP, UDP_PORT))
     except OSError:
         pass
+
+
+def send_cmd(cmd: str):
+    if _is_rc_command(cmd):
+        # 워커 오류 래치: rc/rcr는 재시작 전까지 나가지 않는다. 확인과 송신이
+        # 래치 쓰기(_handle_worker_fault)와 끼어들지 못하게 같은 잠금 안에서 한다.
+        with rc_send_lock:
+            if worker_fault is None:
+                _sendto(cmd)
+        return
+    _sendto(cmd)
 
 
 def reliable_send(cmd: str):
@@ -217,7 +251,8 @@ def reliable_send(cmd: str):
         time.sleep(STOP_INTERVAL)
 
 
-def disarm(reason: str = "수동"):
+def disarm(reason: str = "수동", out=None):
+    """out: a _UIBuffer when called from a fault path (flushed by the caller)."""
     global is_armed, is_streaming, current_throttle, throttle_f, arm_state
     with safety_cmd_lock:
         cancelled_resume = _invalidate_resume_attempt()
@@ -229,11 +264,12 @@ def disarm(reason: str = "수동"):
             current_throttle = 1000
             throttle_f       = 1000.0
         reliable_send("stop")
+    out = ui if out is None else out
     if cancelled_resume:
-        ui.event(f"\n[RESUME] 실패: {reason}으로 복구 시도 취소")
+        out.event(f"\n[RESUME] 실패: {reason}으로 복구 시도 취소")
     if cancelled_arm:
-        ui.event(f"\n[ARM] 실패: {reason}으로 무장 시도 취소")
-    ui.event(f"\n>>> [SYSTEM] DISARMED ({reason})")
+        out.event(f"\n[ARM] 실패: {reason}으로 무장 시도 취소")
+    out.event(f"\n>>> [SYSTEM] DISARMED ({reason})")
 
 
 def send_trim():
@@ -249,7 +285,7 @@ def send_trim():
     send_cmd(f"trim {trim_roll:.2f} {trim_pitch:.2f}")
 
 
-def stop_streaming_only(reason: str):
+def stop_streaming_only(reason: str, out=None):
     """드론이 자동착륙 중일 때 쓰는 로컬 해제. stop을 보내지 않는다.
 
     stop을 보내면 하강 중인 드론의 모터를 공중에서 꺼버린다. 업링크만 죽는
@@ -262,9 +298,10 @@ def stop_streaming_only(reason: str):
         with telem_lock:
             current_throttle = 1000
             throttle_f = 1000.0
+    out = ui if out is None else out  # out: _UIBuffer from a fault path
     if cancelled_resume:
-        ui.event(f"\n[RESUME] 실패: {reason}으로 복구 시도 취소")
-    ui.event(f"\n>>> [SYSTEM] 로컬 해제 ({reason}) - stop 미전송")
+        out.event(f"\n[RESUME] 실패: {reason}으로 복구 시도 취소")
+    out.event(f"\n>>> [SYSTEM] 로컬 해제 ({reason}) - stop 미전송")
 
 
 def _invalidate_resume_attempt():
@@ -313,37 +350,36 @@ def request_resume(source: str) -> bool:
     global resume_rc_total_baseline, resume_rc_dropped_baseline
     global resume_hover_est_snapshot, resume_attempt_id
 
+    rejection = None
     with safety_cmd_lock:
         now = time.monotonic()
         with telem_lock:
             if worker_fault is not None:
-                ui.event(f"\n[RESUME] 실패: {_worker_fault_lock_reason()}")
-                return False
-            if resume_state != "idle":
-                ui.event("\n[RESUME] 이미 복구 시도 중")
-                return False
-            if not is_armed:
-                ui.event("\n[RESUME] 실패: 지상국이 드론을 무장 상태로 보지 않음")
-                return False
-            if telem_failsafe_phase != 1:
-                ui.event(f"\n[RESUME] 실패: Failsafe_Phase={telem_failsafe_phase!r}, 하강 중이 아님")
-                return False
-            if last_telem_time <= 0 or now - last_telem_time > TELEM_TIMEOUT_SEC:
-                ui.event("\n[RESUME] 실패: 마지막 텔레메트리가 너무 오래됨")
-                return False
-            if (not telem_hover_valid or telem_hover_est is None
+                rejection = f"\n[RESUME] 실패: {_worker_fault_lock_reason()}"
+            elif resume_state != "idle":
+                rejection = "\n[RESUME] 이미 복구 시도 중"
+            elif not is_armed:
+                rejection = "\n[RESUME] 실패: 지상국이 드론을 무장 상태로 보지 않음"
+            elif telem_failsafe_phase != 1:
+                rejection = f"\n[RESUME] 실패: Failsafe_Phase={telem_failsafe_phase!r}, 하강 중이 아님"
+            elif last_telem_time <= 0 or now - last_telem_time > TELEM_TIMEOUT_SEC:
+                rejection = "\n[RESUME] 실패: 마지막 텔레메트리가 너무 오래됨"
+            elif (not telem_hover_valid or telem_hover_est is None
                     or not math.isfinite(telem_hover_est)):
-                ui.event("\n[RESUME] 실패: 유효한 Hover_Est 텔레메트리가 없음")
-                return False
+                rejection = "\n[RESUME] 실패: 유효한 Hover_Est 텔레메트리가 없음"
 
-            resume_attempt_id += 1
-            resume_state = "wait_rc"
-            resume_deadline = now + RESUME_RC_TIMEOUT_SEC
-            resume_rc_total_baseline = telem_total_pkts
-            resume_rc_dropped_baseline = telem_dropped_pkts
-            resume_hover_est_snapshot = float(telem_hover_est)
-            is_streaming = True
+            if rejection is None:
+                resume_attempt_id += 1
+                resume_state = "wait_rc"
+                resume_deadline = now + RESUME_RC_TIMEOUT_SEC
+                resume_rc_total_baseline = telem_total_pkts
+                resume_rc_dropped_baseline = telem_dropped_pkts
+                resume_hover_est_snapshot = float(telem_hover_est)
+                is_streaming = True
 
+    if rejection is not None:
+        ui.event(rejection)
+        return False
     ui.event(f"\n[RESUME] {source}: RC 스트리밍 재개, 드론 수락 확인 대기")
     return True
 
@@ -444,6 +480,7 @@ def advance_resume_attempt(sample, now=None):
                 resume_attempt_id += 1
                 failure = f"Failsafe_Phase={phase!r} 유지 (resume 거부 또는 확인 시간 초과)"
 
+    resume_sent = False
     if send_resume:
         with safety_cmd_lock:
             with telem_lock:
@@ -457,7 +494,9 @@ def advance_resume_attempt(sample, now=None):
                     if (resume_state == "send_pending"
                             and resume_attempt_id == send_token):
                         resume_state = "wait_phase"
-                ui.event("[RESUME] RC 수락 확인됨, resume 전송 - Failsafe_Phase 확인 대기")
+                resume_sent = True
+    if resume_sent:
+        ui.event("[RESUME] RC 수락 확인됨, resume 전송 - Failsafe_Phase 확인 대기")
     if resumed_hover is not None:
         ui.event(
             f"[RESUME] 성공: Failsafe_Phase=0, Hover_Est={resumed_hover:.1f}µs 동기화. "
@@ -941,9 +980,11 @@ def telemetry_thread():
         if elapsed > TELEM_TIMEOUT_SEC and not telemetry_lost:
             telemetry_lost = True
             if is_streaming:
-                ui.event(f"\n[FAULT] 텔레메트리 {elapsed:.1f}s 수신 없음 "
-                         f"- rc 중단, 드론 자동착륙에 맡김")
-                stop_streaming_only("텔레메트리 끊김")
+                deferred = _UIBuffer()
+                deferred.event(f"\n[FAULT] 텔레메트리 {elapsed:.1f}s 수신 없음 "
+                               f"- rc 중단, 드론 자동착륙에 맡김")
+                stop_streaming_only("텔레메트리 끊김", out=deferred)
+                deferred.flush()
             else:
                 ui.event(
                     f"\n[FAULT] 텔레메트리 {elapsed:.1f}s 수신 없음 "
@@ -1110,21 +1151,27 @@ def telemetry_thread():
         # start 재전송+텔레메트리 주기를 고려해 1.5초 grace를 둔다.
         if (is_armed and sample["Armed"] == 0
                 and time.monotonic() - last_arm_time > 1.5):
-            ui.event("\n[FAULT] 드론이 시동 상태가 아님 (시동 거부 또는 드론 측 disarm)")
-            disarm("드론 측 미시동 감지")
+            deferred = _UIBuffer()
+            deferred.event("\n[FAULT] 드론이 시동 상태가 아님 (시동 거부 또는 드론 측 disarm)")
+            disarm("드론 측 미시동 감지", out=deferred)
+            deferred.flush()
 
         # 드론 측 고장 플래그 — fault는 latch되므로 상승 엣지에서만 알린다.
         if fault_rc_drone and not prev_fault_rc:
-            ui.event(f"\n[FAULT] 드론: RC 타임아웃 - {format_rc_timeout_fault(sample)}")
+            deferred = _UIBuffer()
+            deferred.event(f"\n[FAULT] 드론: RC 타임아웃 - {format_rc_timeout_fault(sample)}")
             if is_streaming:
-                stop_streaming_only("드론 RC 타임아웃")
+                stop_streaming_only("드론 RC 타임아웃", out=deferred)
+            deferred.flush()
         prev_fault_rc = fault_rc_drone
 
         if fault_critical_drone and not prev_fault_critical:
             detail = ", ".join(active_fault_names(sample)) or "원인 미상"
-            ui.event(f"\n[FAULT] 드론: 치명 고장 감지됨 ({detail})")
+            deferred = _UIBuffer()
+            deferred.event(f"\n[FAULT] 드론: 치명 고장 감지됨 ({detail})")
             if is_armed:
-                disarm("드론 치명 고장")
+                disarm("드론 치명 고장", out=deferred)
+            deferred.flush()
         prev_fault_critical = fault_critical_drone
 
         # Armed/critical/RC 안전 처리가 resume보다 항상 우선한다.
@@ -1393,8 +1440,9 @@ def _handle_worker_fault(worker, error):
     label = WORKER_LABELS.get(worker, worker)
     reason = f"{label} 스레드 오류"
     with safety_cmd_lock:
-        if worker_fault is None:
-            worker_fault = worker
+        with rc_send_lock:
+            if worker_fault is None:
+                worker_fault = worker
         cancelled_resume = _invalidate_resume_attempt()
         cancelled_arm = arm_state == "arming"
         if cancelled_arm:

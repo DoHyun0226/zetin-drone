@@ -4,11 +4,12 @@
 UI object. ``ConsoleUI`` reproduces the plain line output the station has
 always had, character for character.
 
-Contract for every UI: output methods (``event``, ``periodic``,
-``transition``, ``alert``, ``update``, ``after_run``) never raise. They are
-called from the safety paths (disarm, stop of RC streaming, worker-fault
-handling) after the state change, and a broken terminal must not abort those
-paths. Failures are swallowed with at most one line on stderr.
+Contract for every UI: no method raises — neither the output methods
+(``event``, ``periodic``, ``transition``, ``alert``, ``update``,
+``after_run``) nor ``run``. The output methods are called from the safety
+paths (disarm, stop of RC streaming, worker-fault handling) after the state
+change, and a broken terminal must not abort those paths. Failures are
+swallowed with at most one line on stderr.
 """
 
 import sys
@@ -50,23 +51,47 @@ class ConsoleUI:
         """Fresh station snapshot for the dashboard; the console ignores it."""
 
     def run(self, input_handler, on_interrupt, on_eof):
-        """The stdin command loop.
+        """The stdin command loop; never raises.
 
         Ctrl+C -> ``on_interrupt()``, Ctrl+D (EOF) -> ``on_eof()``, then
-        return. Other exceptions propagate exactly as the old top-level loop
-        let them (``main``'s ``finally`` still closes the logs).
+        return. A broken input stream (closed stdin, I/O error) is reported
+        and ends like EOF, through ``on_eof()``'s conditional disarm. A
+        command that raises is reported as an event and the loop continues.
         """
         while True:
             try:
                 msg = input()
-                if msg:
-                    input_handler(msg)
             except KeyboardInterrupt:
-                on_interrupt()
-                break
+                self._call_safely("on_interrupt", on_interrupt)
+                return
             except EOFError:
-                on_eof()
-                break
+                self._call_safely("on_eof", on_eof)
+                return
+            except Exception as error:
+                self.event(
+                    f"[STDIN] 입력 오류: {type(error).__name__}: {error} "
+                    "- 입력 종료로 처리"
+                )
+                self._call_safely("on_eof", on_eof)
+                return
+            if not msg:
+                continue
+            try:
+                input_handler(msg)
+            except KeyboardInterrupt:
+                self._call_safely("on_interrupt", on_interrupt)
+                return
+            except Exception as error:
+                self.event(
+                    f"[STDIN] 명령 처리 오류: {type(error).__name__}: {error}"
+                )
+
+    @staticmethod
+    def _call_safely(name, callback):
+        try:
+            callback()
+        except Exception as error:
+            _report_ui_failure(name, error)
 
     def after_run(self):
         """Hook after ``run`` returns; the console has nothing buffered."""

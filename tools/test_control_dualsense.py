@@ -3108,6 +3108,295 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
             any(t.startswith("[LOG] 저장 완료:") for t in recording.texts("event"))
         )
 
+    # --- review round 1 regressions ---
+
+    def test_rc_send_cannot_interleave_with_the_latch_write(self):
+        # Pause send_cmd between its latch check and sendto (inside encode),
+        # write the latch from another thread, then let the send finish.
+        module = self.module
+        entered = threading.Event()
+        release = threading.Event()
+        observed = []
+
+        class _PausingCmd(str):
+            def encode(self, *args, **kwargs):
+                entered.set()
+                release.wait(timeout=2.0)
+                return str.encode(self, *args, **kwargs)
+
+        class _ObservingSocket(_FakeSocket):
+            def sendto(self, data, address):
+                observed.append((data, module.worker_fault))
+                super().sendto(data, address)
+
+        module.sock = _ObservingSocket()
+        module.ui = _RecordingUI()
+        sender = threading.Thread(
+            target=module.send_cmd,
+            args=(_PausingCmd("rcr 1 0.00 0.00 0.0"),),
+            daemon=True,
+        )
+        sender.start()
+        self.assertTrue(entered.wait(timeout=1.0))
+        latcher = threading.Thread(
+            target=module._handle_worker_fault,
+            args=("telemetry", RuntimeError("synthetic")),
+            daemon=True,
+        )
+        latcher.start()
+        latcher.join(timeout=0.2)
+        release.set()
+        sender.join(timeout=1.0)
+        latcher.join(timeout=1.0)
+        self.assertFalse(sender.is_alive())
+        self.assertFalse(latcher.is_alive())
+        self.assertEqual(module.worker_fault, "telemetry")
+
+        module.send_cmd("rcr 2 0.00 0.00 0.0")
+        rc_sends = [(d, f) for d, f in observed if d.startswith(b"rcr")]
+        # an rcr may leave only if the latch was not yet written when it left
+        self.assertTrue(all(fault is None for _d, fault in rc_sends), rc_sends)
+        self.assertLessEqual(len(rc_sends), 1)
+
+    def test_latch_written_before_the_rc_lock_is_taken_drops_the_send(self):
+        # Pause the sender just before it takes rc_send_lock, write the latch,
+        # then let it continue: the latch check must happen inside the lock.
+        module = self.module
+        entered = threading.Event()
+        release = threading.Event()
+        observed = []
+
+        class _PausingLock:
+            def __init__(self, inner):
+                self.inner = inner
+                self.pause_thread = None
+
+            def __enter__(self):
+                if threading.current_thread() is self.pause_thread:
+                    entered.set()
+                    release.wait(timeout=2.0)
+                self.inner.acquire()
+                return self
+
+            def __exit__(self, *_exc):
+                self.inner.release()
+                return False
+
+        class _ObservingSocket(_FakeSocket):
+            def sendto(self, data, address):
+                observed.append((data, module.worker_fault))
+                super().sendto(data, address)
+
+        pausing = _PausingLock(module.rc_send_lock)
+        module.rc_send_lock = pausing
+        module.sock = _ObservingSocket()
+        module.ui = _RecordingUI()
+        sender = threading.Thread(
+            target=module.send_cmd, args=("rcr 1 0.00 0.00 0.0",), daemon=True,
+        )
+        pausing.pause_thread = sender
+        sender.start()
+        self.assertTrue(entered.wait(timeout=1.0))
+        latcher = threading.Thread(
+            target=module._handle_worker_fault,
+            args=("controller", RuntimeError("synthetic")),
+            daemon=True,
+        )
+        latcher.start()
+        latcher.join(timeout=1.0)
+        self.assertFalse(latcher.is_alive())
+        release.set()
+        sender.join(timeout=1.0)
+        self.assertFalse(sender.is_alive())
+        self.assertEqual(
+            [(d, f) for d, f in observed if d.startswith(b"rcr")], [],
+        )
+
+    def _state_observing_ui(self, sent_socket):
+        module = self.module
+        observed = []
+
+        class _StateObservingUI(_RecordingUI):
+            def event(self, text):
+                observed.append((
+                    text,
+                    module.is_streaming,
+                    module.is_armed,
+                    b"stop" in [d for d, _ in sent_socket.sent],
+                ))
+                super().event(text)
+
+        return _StateObservingUI(), observed
+
+    def _fault_line(self, observed, needle):
+        lines = [o for o in observed if needle in o[0]]
+        self.assertEqual(len(lines), 1, observed)
+        return lines[0]
+
+    def test_telemetry_loss_fault_is_shown_only_after_rc_stops(self):
+        self.module.is_armed = True
+        self.module.is_streaming = True
+        self.module.arm_state = "armed"
+        self.module.last_telem_time = self.module.time.monotonic() - 5.0
+        sock = _FakeSocket([])
+        recording, observed = self._state_observing_ui(sock)
+        self.module.ui = recording
+        self.module.sock = sock
+        with self.assertRaises(_LoopComplete):
+            self.module.telemetry_thread()
+        _text, streaming, _armed, _stop = self._fault_line(
+            observed, "[FAULT] 텔레메트리",
+        )
+        self.assertFalse(streaming)
+        # console order is unchanged: [FAULT] first, then the local release line
+        texts = [o[0] for o in observed]
+        self.assertLess(
+            texts.index(_text),
+            [i for i, t in enumerate(texts) if "로컬 해제" in t][0],
+        )
+
+    def _run_telemetry_observing(self, samples):
+        self.module.sock = _FakeSocket([b"packet"] * len(samples))
+        recording, observed = self._state_observing_ui(self.module.sock)
+        self.module.ui = recording
+        self.module.csv_writer = types.SimpleNamespace(writerow=lambda _row: None)
+        self.module.csv_file = types.SimpleNamespace(flush=lambda: None)
+        with (
+            mock.patch.object(
+                self.module, "parse_telemetry_packet", side_effect=samples,
+            ),
+            mock.patch.object(self.module, "sample_to_csv_row", return_value=[]),
+            mock.patch.object(self.module.time, "sleep", return_value=None),
+            self.assertRaises(_LoopComplete),
+        ):
+            self.module.telemetry_thread()
+        return observed
+
+    def test_rc_timeout_fault_is_shown_only_after_rc_stops(self):
+        self.module.is_armed = True
+        self.module.is_streaming = True
+        self.module.arm_state = "armed"
+        self.module.last_arm_time = self.module.time.monotonic()
+        observed = self._run_telemetry_observing(
+            [_telemetry_sample(Fault_RC=1, Failsafe_Phase=1, Armed=1)],
+        )
+        _text, streaming, _armed, _stop = self._fault_line(
+            observed, "[FAULT] 드론: RC 타임아웃",
+        )
+        self.assertFalse(streaming)
+
+    def test_critical_fault_is_shown_only_after_disarm_sent_stop(self):
+        self.module.is_armed = True
+        self.module.is_streaming = True
+        self.module.arm_state = "armed"
+        self.module.last_arm_time = self.module.time.monotonic()
+        observed = self._run_telemetry_observing(
+            [_telemetry_sample(Fault_Critical=1, Failsafe_Phase=0, Armed=1)],
+        )
+        _text, streaming, armed, stop_sent = self._fault_line(
+            observed, "[FAULT] 드론: 치명 고장",
+        )
+        self.assertFalse(armed)
+        self.assertFalse(streaming)
+        self.assertTrue(stop_sent)
+
+    def test_drone_not_armed_fault_is_shown_only_after_disarm_sent_stop(self):
+        self.module.is_armed = True
+        self.module.is_streaming = True
+        self.module.arm_state = "armed"
+        self.module.last_arm_time = self.module.time.monotonic() - 10.0
+        observed = self._run_telemetry_observing(
+            [_telemetry_sample(Armed=0, Failsafe_Phase=0)],
+        )
+        _text, _streaming, armed, stop_sent = self._fault_line(
+            observed, "[FAULT] 드론이 시동 상태가 아님",
+        )
+        self.assertFalse(armed)
+        self.assertTrue(stop_sent)
+
+    def test_resume_rejections_call_the_ui_without_holding_state_locks(self):
+        module = self.module
+        held = []
+
+        class _LockCheckingUI(_RecordingUI):
+            def event(self, text):
+                for name in ("safety_cmd_lock", "telem_lock"):
+                    lock = getattr(module, name)
+                    if lock.acquire(blocking=False):
+                        lock.release()
+                    else:
+                        held.append((name, text))
+                super().event(text)
+
+        recording = _LockCheckingUI()
+        module.ui = recording
+        commands = []
+        module.reliable_send = commands.append
+
+        def ready(**overrides):
+            module.resume_state = "idle"
+            module.worker_fault = None
+            module.is_armed = True
+            module.telem_failsafe_phase = 1
+            module.telem_hover_est = 1360.0
+            module.telem_hover_valid = True
+            module.last_telem_time = module.time.monotonic()
+            for name, value in overrides.items():
+                setattr(module, name, value)
+
+        for overrides in (
+            {"worker_fault": "telemetry"},
+            {"resume_state": "wait_rc"},
+            {"is_armed": False},
+            {"telem_failsafe_phase": 0},
+            {"last_telem_time": 0.0},
+            {"telem_hover_valid": False},
+        ):
+            ready(**overrides)
+            self.assertFalse(module.request_resume("test"))
+
+        # accepted request, then the "RC accepted, resume sent" event
+        ready()
+        module.telem_total_pkts = 40
+        module.telem_dropped_pkts = 3
+        self.assertTrue(module.request_resume("test"))
+        module.advance_resume_attempt(
+            _telemetry_sample(RC_Total_Pkts=42, RC_Dropped_Pkts=3),
+            now=module.resume_deadline - 0.1,
+        )
+        self.assertEqual(commands, ["resume"])
+        self.assertEqual(len(recording.texts("event")), 8)
+        self.assertEqual(held, [])
+
+    def test_no_ui_call_is_lexically_inside_a_state_lock(self):
+        import ast
+
+        tree = ast.parse(CONTROL_PATH.read_text(encoding="utf-8"))
+        lock_names = {"safety_cmd_lock", "telem_lock", "rc_send_lock"}
+        offenders = []
+
+        def visit(node, locked):
+            if isinstance(node, ast.With):
+                names = {
+                    item.context_expr.id
+                    for item in node.items
+                    if isinstance(item.context_expr, ast.Name)
+                }
+                locked = locked or bool(names & lock_names)
+            if (
+                locked
+                and isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "ui"
+            ):
+                offenders.append(node.lineno)
+            for child in ast.iter_child_nodes(node):
+                visit(child, locked)
+
+        visit(tree, False)
+        self.assertEqual(offenders, [])
+
 
 class BenchTrimResetTests(unittest.TestCase):
     @classmethod
