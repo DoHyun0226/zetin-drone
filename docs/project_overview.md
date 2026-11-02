@@ -134,7 +134,7 @@ M4 = T + P + R + Y
 
 | 도구 | 역할 |
 |---|---|
-| [`control_dualsense.py`](../scripts/control_dualsense.py) | **정상 조종·벤치의 유일한 대화형 지상국.** RC 스트리밍·stdin 명령·상태 표시·CSV·raw 기록을 한 프로세스에서 처리 |
+| [`ground/control_station.py`](../scripts/ground/control_station.py) | **정상 조종·벤치의 유일한 대화형 지상국.** RC 스트리밍·stdin 명령·상태 표시·CSV·raw 기록을 한 프로세스에서 처리 |
 | [`tune_pid.py`](../scripts/tune_pid.py) | 게임패드 없이 UDP 명령·게인만 다루는 보조 도구 |
 | [`receive_telemetry.py`](../scripts/receive_telemetry.py) | 터미널 수신기 겸 CSV 로거 |
 | [`monitor_telemetry.py`](../scripts/monitor_telemetry.py) | 실시간 플롯 겸 CSV 로거 |

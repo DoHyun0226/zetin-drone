@@ -6,11 +6,11 @@ import socket
 import struct
 import threading
 import time
-from pathlib import Path
 
 import pygame
 
 from ground.imu_raw import decode_file
+from ground.paths import LOG_DIR
 from ground.failsafe_telemetry import (
     FAILSAFE_PHASE_NAMES,
     FAILSAFE_PROBE_STATE_NAMES,
@@ -86,8 +86,6 @@ sock.bind(("", UDP_PORT))
 sock.settimeout(0.1)
 
 # --- 비행 CSV 로그 (receive/monitor와 같은 스키마, logs/에 저장) ---
-SCRIPT_DIR = Path(__file__).resolve().parent
-LOG_DIR = SCRIPT_DIR.parent / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_TIMESTAMP = f"{datetime.datetime.now():%Y-%m-%d_%H%M%S}"
 log_path = LOG_DIR / f"flight_log_{LOG_TIMESTAMP}.csv"

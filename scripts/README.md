@@ -2,7 +2,7 @@
 
 현행 `dual_imu_cascade_pwm`용 조종·텔레메트리 수집·오프라인 분석 도구다.
 처음 시작하면 [전원 인가 벤치 절차](../docs/power_on_bench_procedure.md)를
-먼저 읽고, USB로 연결한 DualSense와 `control_dualsense.py`를 사용한다.
+먼저 읽고, USB로 연결한 DualSense와 `ground/control_station.py`를 사용한다.
 이 문서는 저스로틀 yaw 개선이 통합된 저장소 코드 기준이며 현재 기체에 올라간 빌드나 실기
 통과 여부를 뜻하지 않는다. 명령·필드 순서·단위의 정본은
 [UDP 프로토콜](../docs/udp_protocol.md)이다.
@@ -15,7 +15,7 @@
 
 | 목적 | 도구 | 실행 조건과 출력 |
 |---|---|---|
-| 조종·stdin 명령·CSV·raw 기록 | `control_dualsense.py` | 현행 기본 지상국. 게임패드 USB 연결, `Drone_Tuning` 접속 |
+| 조종·stdin 명령·CSV·raw 기록 | `ground/control_station.py` | 현행 기본 지상국. 게임패드 USB 연결, `Drone_Tuning` 접속 |
 | 축·버튼 번호 확인 | `gamepad_probe.py` | 드론에 명령을 보내지 않음. 처음 0.7초 손을 떼고 각 입력을 하나씩 확인 |
 | 입력값 연속 표시 | `test_dualsense_input.py` | 로컬 입력 진단. 화면의 RX/RY/L2 라벨은 예시 매핑이므로 축 번호를 실측 |
 | 게임패드 없는 수동 UDP 콘솔 | `tune_pid.py` | 명령 1회 송신과 상태 표시. RC 자동 송신·CSV 기록·종료 시 자동 `stop` 없음 |
@@ -31,11 +31,11 @@
 **드론에 UDP를 보내는 도구는 한 번에 하나만 실행한다.** 펌웨어는 마지막
 발신자의 IP/포트를 텔레메트리 목적지로 삼는다. 포트 충돌을 피했더라도
 `tune_pid.py`나 수신기의 `connect`가 조종 지상국의 데이터를 가져갈 수 있다.
-DualSense 조종 중 상태 확인과 로그 기록도 같은 `control_dualsense.py`에서 한다.
+DualSense 조종 중 상태 확인과 로그 기록도 같은 `ground/control_station.py`에서 한다.
 
 `receive_telemetry.py`와 `monitor_telemetry.py`는 현재 raw 바이너리 분기가
 없다. 펌웨어 raw가 켜져 있으면 `ZIMU`·`ZCAL`을 불량 텔레메트리로 집계하며
-저장하지 않는다. raw까지 받을 세션은 `control_dualsense.py`를 사용한다.
+저장하지 않는다. raw까지 받을 세션은 `ground/control_station.py`를 사용한다.
 독립 수신기만 사용할 벤치에서는 모터를 정지한 채 기존 콘솔에서 `raw off`
 (`tune_pid.py`에서는 `raw 0`)를 보내고 그 콘솔을 종료한 뒤 수신기를 실행한다.
 이 설정은 드론 재부팅 후 유지되지 않는다.
@@ -44,7 +44,7 @@ DualSense 조종 중 상태 확인과 로그 기록도 같은 `control_dualsense
 
 ```bash
 python scripts/gamepad_probe.py
-python scripts/control_dualsense.py
+PYTHONPATH=scripts python -m ground.control_station
 ```
 
 첫 명령을 종료한 다음 두 번째 명령을 실행한다. 실행만으로 시동하지 않는다.
@@ -158,7 +158,7 @@ stdin에는 [프로토콜의 명령](../docs/udp_protocol.md#지상국--드론)�
 따라 달라진다. 코드의 “10분 세션 약 12초”는 안내값이다.
 
 ```bash
-python scripts/control_dualsense.py --no-raw --no-mag
+PYTHONPATH=scripts python -m ground.control_station --no-raw --no-mag
 python scripts/drone_logs.py flight logs/flight_log_YYYY-MM-DD_HHMMSS.csv --no-plot
 python scripts/drone_logs.py imuraw logs/imuraw_YYYY-MM-DD_HHMMSS.bin /tmp/imu.csv
 python scripts/drone_logs.py probe ground.csv air.csv --label ground --label air
@@ -194,7 +194,7 @@ PID·I 기여의 절댓값 최댓값이 포함된다. 필요한 진단값이 없
 ## 카메라 녹화
 
 기체의 ESP32-CAM 보드([`firmware/camera`](../firmware/camera/README.md))가 보내는 영상을
-노트북에서 녹화한다. 조종 링크와는 별개이므로 `control_dualsense.py`와 **다른 터미널에서
+노트북에서 녹화한다. 조종 링크와는 별개이므로 `ground/control_station.py`와 **다른 터미널에서
 동시에** 실행한다. 녹화기는 비행 UDP 포트를 쓰지 않는다.
 
 사전 점검:

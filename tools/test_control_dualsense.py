@@ -18,7 +18,7 @@ from unittest import mock
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
-CONTROL_PATH = SCRIPTS_DIR / "control_dualsense.py"
+CONTROL_PATH = SCRIPTS_DIR / "ground" / "control_station.py"
 
 
 class _LoopComplete(BaseException):
