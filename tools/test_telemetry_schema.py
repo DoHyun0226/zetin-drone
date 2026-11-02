@@ -70,6 +70,30 @@ ALLOCATION_TELEMETRY_NAMES = (
     "Yaw_Authority_State",
 )
 
+# dual_imu_cascade_flow_hold 만 보내는 인덱스 75~90.
+FLOW_HOLD_TELEMETRY_NAMES = (
+    "Flow_Seq",
+    "Flow_Dt_MS",
+    "Flow_Reject",
+    "Flow_Vel_R",
+    "Flow_Vel_P",
+    "Pos_R",
+    "Pos_P",
+    "Height_M",
+    "Vz_MS",
+    "PosHold_State",
+    "Hold_Roll_Deg",
+    "Hold_Pitch_Deg",
+    "AltHold_State",
+    "AltHold_US",
+    "FlowCal_State",
+    "FlowCal_Samples",
+)
+FLOW_HOLD_INT_NAMES = {
+    "Flow_Seq", "Flow_Reject", "PosHold_State", "AltHold_State",
+    "FlowCal_State", "FlowCal_Samples",
+}
+
 EXPECTED_TELEMETRY_FIELDS = (
     "Roll",
     "Pitch",
@@ -124,6 +148,7 @@ EXPECTED_TELEMETRY_FIELDS = (
     "Flow_Quality",
     "Mag_Cal_Active",
     *ALLOCATION_TELEMETRY_NAMES,
+    *FLOW_HOLD_TELEMETRY_NAMES,
 )
 
 
@@ -370,18 +395,38 @@ class TelemetryCompatibilityTest(unittest.TestCase):
                 for name in ALLOCATION_TELEMETRY_NAMES:
                     self.assertIsNone(sample[name])
 
-    def test_current_csv_row_has_timestamp_plus_75_wire_fields(self):
+    def test_main_firmware_75_field_row_leaves_flow_hold_columns_blank(self):
         sample = parse_telemetry_packet(
             packet(65) + ",0.9,0.8,1300,1,2,3,4,5,6,2"
         )
 
         row = sample_to_csv_row("12:34:56.789", sample)
 
-        self.assertEqual(76, len(CSV_FIELDS))
-        self.assertEqual(76, len(row))
+        self.assertEqual(92, len(CSV_FIELDS))
+        self.assertEqual(92, len(row))
         self.assertEqual("12:34:56.789", row[0])
         self.assertEqual(0.9, row[CSV_FIELDS.index("Mixer_RP_Scale")])
         self.assertEqual(2, row[CSV_FIELDS.index("Yaw_Authority_State")])
+        for name in FLOW_HOLD_TELEMETRY_NAMES:
+            self.assertIsNone(sample[name])
+
+    def test_flow_hold_91_field_packet_appends_after_index_74(self):
+        # 기존 75필드(0~74)는 그대로이고 75~90 이 새 필드다.
+        self.assertEqual(FLOW_HOLD_TELEMETRY_NAMES, TELEMETRY_FIELDS[75:91])
+        flow_values = ("42", "100.0", "0", "0.125", "-0.250", "0.010",
+                       "-0.020", "0.480", "0.050", "1", "1.50", "-2.25",
+                       "2", "-12.5", "2", "180")
+        sample = parse_telemetry_packet(
+            packet(65) + ",0.9,0.8,1300,1,2,3,4,5,6,2," + ",".join(flow_values)
+        )
+        self.assertEqual(2, sample["Yaw_Authority_State"])
+        for name, raw in zip(FLOW_HOLD_TELEMETRY_NAMES, flow_values):
+            if name in FLOW_HOLD_INT_NAMES:
+                self.assertEqual(int(raw), sample[name])
+                self.assertIs(type(sample[name]), int)
+            else:
+                self.assertEqual(float(raw), sample[name])
+                self.assertIs(type(sample[name]), float)
 
     def test_malformed_required_value_is_rejected_for_current_packet(self):
         fields = (packet(65) + ",0.9,0.8,1300,1,2,3,4,5,6,2").split(",")
@@ -500,6 +545,31 @@ class GainsPacketTest(unittest.TestCase):
     def test_gains_packet_rejects_wrong_field_count(self):
         with self.assertRaises(ValueError):
             telemetry_schema.parse_gains_packet("GAINS,1.0,2.0")
+
+
+class FlowCalPacketTest(unittest.TestCase):
+    def test_flowcal_result_packet_is_recognised_and_parsed(self):
+        line = "FLOWCAL,1,OK,1.20,-544.30,545.10,-0.80,20000,0.0123,1.40,0.050,280"
+        self.assertTrue(telemetry_schema.is_flowcal_packet(line))
+        self.assertFalse(telemetry_schema.is_flowcal_packet("1,2,3"))
+        result = telemetry_schema.parse_flowcal_packet(line)
+        self.assertTrue(result["ok"])
+        self.assertEqual("OK", result["reason"])
+        self.assertEqual(((1.20, -544.30), (545.10, -0.80)), result["m"])
+        self.assertEqual(20000, result["delay_us"])
+        self.assertEqual(280, result["samples"])
+
+    def test_failed_flowcal_packet_with_infinite_condition_still_parses(self):
+        # 한 축만 흔들면 조건수가 무한대다. 실패 이유가 조용히 버려지면 안 된다.
+        line = "FLOWCAL,0,LOW_EXCITATION,0.00,0.00,0.00,0.00,0,1.0000,inf,0.000,150"
+        result = telemetry_schema.parse_flowcal_packet(line)
+        self.assertFalse(result["ok"])
+        self.assertEqual("LOW_EXCITATION", result["reason"])
+        self.assertEqual(float("inf"), result["cond"])
+
+    def test_malformed_flowcal_packet_raises(self):
+        with self.assertRaises(ValueError):
+            telemetry_schema.parse_flowcal_packet("FLOWCAL,1,OK,1,2")
 
 
 if __name__ == "__main__":

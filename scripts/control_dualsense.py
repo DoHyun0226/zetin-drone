@@ -19,7 +19,9 @@ from failsafe_telemetry import (
 from telemetry_schema import (
     CSV_FIELDS,
     active_fault_names,
+    is_flowcal_packet,
     is_gains_packet,
+    parse_flowcal_packet,
     parse_gains_packet,
     parse_telemetry_packet,
     sample_to_csv_row,
@@ -786,7 +788,29 @@ def format_status_telemetry(sample):
         f"Hover_Est={_format_optional_float(sample.get('Hover_Est'), 1)} "
         f"Hover_Valid={_format_binary_flag(sample.get('Hover_Valid'))} "
         f"Raw={_format_raw_status()} "
+        f"{_format_flow_hold_status(sample)}"
         f"Faults={faults}"
+    )
+
+
+POSHOLD_STATE_NAMES = ("OFF", "ACTIVE", "COAST", "SUSPENDED", "OVERRIDE")
+ALTHOLD_STATE_NAMES = ("OFF", "ACTIVE", "ADJUST", "SUSPENDED")
+
+
+def _state_name(names, value):
+    if value is None:
+        return "-"
+    return names[value] if 0 <= value < len(names) else str(value)
+
+
+def _format_flow_hold_status(sample):
+    """Flow-hold firmware only; the main firmware leaves these fields None."""
+    if sample.get("PosHold_State") is None:
+        return ""
+    return (
+        f"PosHold={_state_name(POSHOLD_STATE_NAMES, sample.get('PosHold_State'))} "
+        f"AltHold={_state_name(ALTHOLD_STATE_NAMES, sample.get('AltHold_State'))} "
+        f"H={_format_optional_float(sample.get('Height_M'), 2)} "
     )
 
 
@@ -896,6 +920,13 @@ def telemetry_thread():
 
         try:
             line = data.decode("utf-8", errors="strict")
+            if is_flowcal_packet(line):
+                print(f"\n[FLOWCAL] {parse_flowcal_packet(line)}")
+                continue
+            if line.startswith("IMUCAL,"):
+                # IMUCAL,ok,reason,b1x,b1y,b1z,b2x,b2y,b2z,scale1,scale2,maxSD,saved
+                print(f"\n[IMUCAL] {line}")
+                continue
             if is_gains_packet(line):
                 gains = parse_gains_packet(line)
                 print(
@@ -1085,6 +1116,8 @@ def controller_thread():
     print("      ap <val>, ar|at|ay <val>")
     print(" Control: th <val>, yaw <0|1>, raw on|off, mag on|off, gains, start, stop, resume")
     print("          trim <roll> <pitch>, magc <x> <y> <z>")
+    print(" FlowHold: flowcal 1|0, poshold 1|0, althold 1|0, hg <name> <val>")
+    print(" IMU cal:  imucal (disarmed, drone still on the floor, 2 s; saved to NVS)")
     print("======================================")
 
     if pygame.joystick.get_count() == 0:

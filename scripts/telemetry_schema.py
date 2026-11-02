@@ -47,6 +47,22 @@ source of truth for that state.
 Fields 66-75 append allocator scale/collective, the PID and integral terms
 used for that control tick, and yaw-authority state (0=NORMAL, 1=LIMITED,
 2=RECOVERING).
+Fields 76-91 (zero-based indices 75-90) are sent only by
+``firmware/flight/dual_imu_cascade_flow_hold``; packets from the main cascade
+firmware stop at 75 fields and leave them ``None``. ``Flow_Reject`` is 0 when
+the last flow interval was usable and otherwise a ``FlowReject`` code from
+``flow_odometry.h``. ``Flow_Vel_R``/``Flow_Vel_P`` and ``Pos_R``/``Pos_P`` are
+in the hold's correction space, where a positive value is corrected by a
+positive roll/pitch change. With this firmware's convention (+pitch = nose
+down, +roll = right wing down) ``Flow_Vel_P`` is minus forward velocity and
+``Flow_Vel_R`` is minus rightward velocity. ``Pos_*`` is the body-frame offset
+from the hold reference in the same space (moving forward makes ``Pos_P``
+negative). ``Hold_Roll_Deg``/``Hold_Pitch_Deg`` and ``AltHold_US`` are the
+*candidate* corrections, computed even while disarmed (dry run); whether they
+are applied follows ``Armed`` and ``Failsafe_Phase``. ``PosHold_State`` is
+0=OFF, 1=ACTIVE, 2=COAST, 3=SUSPENDED, 4=OVERRIDE; ``AltHold_State`` is
+0=OFF, 1=ACTIVE, 2=ADJUST, 3=SUSPENDED; ``FlowCal_State`` is 0=IDLE,
+1=RUNNING, 2=DONE_OK, 3=DONE_FAILED. ``Height_M`` is -1 when invalid.
 """
 
 import math
@@ -128,6 +144,22 @@ TELEMETRY_FIELDS = (
     "I_Pitch_US",
     "I_Yaw_US",
     "Yaw_Authority_State",
+    "Flow_Seq",
+    "Flow_Dt_MS",
+    "Flow_Reject",
+    "Flow_Vel_R",
+    "Flow_Vel_P",
+    "Pos_R",
+    "Pos_P",
+    "Height_M",
+    "Vz_MS",
+    "PosHold_State",
+    "Hold_Roll_Deg",
+    "Hold_Pitch_Deg",
+    "AltHold_State",
+    "AltHold_US",
+    "FlowCal_State",
+    "FlowCal_Samples",
 )
 
 TELEMETRY_FIELD_TYPES = {
@@ -206,6 +238,22 @@ TELEMETRY_FIELD_TYPES = {
     "I_Pitch_US": float,
     "I_Yaw_US": float,
     "Yaw_Authority_State": int,
+    "Flow_Seq": int,
+    "Flow_Dt_MS": float,
+    "Flow_Reject": int,
+    "Flow_Vel_R": float,
+    "Flow_Vel_P": float,
+    "Pos_R": float,
+    "Pos_P": float,
+    "Height_M": float,
+    "Vz_MS": float,
+    "PosHold_State": int,
+    "Hold_Roll_Deg": float,
+    "Hold_Pitch_Deg": float,
+    "AltHold_State": int,
+    "AltHold_US": float,
+    "FlowCal_State": int,
+    "FlowCal_Samples": int,
 }
 
 GAIN_FIELDS = (
@@ -242,11 +290,11 @@ def _parse_integer(raw, name):
 
 
 def parse_telemetry_packet(line):
-    """Parse a legacy or current (75-field) packet into a fixed-schema dict.
+    """Parse a legacy, main (75-field) or flow-hold (91-field) packet.
 
-    Fields unavailable in legacy packets are returned as ``None`` so CSV
+    Fields unavailable in shorter packets are returned as ``None`` so CSV
     files retain the full header without inventing healthy/fault values. Extra
-    future fields are ignored after the known 75 fields. The first
+    future fields are ignored after the known 91 fields. The first
     ``REQUIRED_FIELD_COUNT`` fields must be non-empty: consumers format and
     do arithmetic on them, so a blank there is a malformed packet, not a
     legacy one.
@@ -293,6 +341,38 @@ def parse_gains_packet(line):
     return {
         name: _parse_finite_float(raw, name)
         for name, raw in zip(GAIN_FIELDS, parts[1:])
+    }
+
+
+def is_flowcal_packet(line):
+    """Return whether ``line`` is a flow-calibration result datagram."""
+
+    return line.strip().startswith("FLOWCAL,")
+
+
+def parse_flowcal_packet(line):
+    """Parse ``FLOWCAL,ok,reason,m00,m01,m10,m11,delay_us,residual,cond,corr,samples``.
+
+    Sent once by ``dual_imu_cascade_flow_hold`` when ``flowcal 0`` finishes.
+    ``m`` is the 2x2 counts/rad matrix (sensor counts per body roll/pitch
+    rotation); the firmware also prints the constant lines to paste.
+    """
+
+    parts = [part.strip() for part in line.strip().split(",")]
+    if len(parts) != 12 or parts[0] != "FLOWCAL":
+        raise ValueError(f"FLOWCAL has {len(parts) - 1} fields; need 11")
+    m = tuple(_parse_finite_float(raw, "m") for raw in parts[3:7])
+    return {
+        "ok": _parse_integer(parts[1], "ok") == 1,
+        "reason": parts[2],
+        "m": ((m[0], m[1]), (m[2], m[3])),
+        "delay_us": _parse_integer(parts[7], "delay_us"),
+        # 진단값은 실패 결과에서 inf/nan 일 수 있다(한 축만 흔들면 조건수 무한대).
+        # 실패 이유를 보여 주는 것이 목적이므로 그대로 받는다.
+        "residual": float(parts[8]),
+        "cond": float(parts[9]),
+        "corr": float(parts[10]),
+        "samples": _parse_integer(parts[11], "samples"),
     }
 
 

@@ -204,8 +204,8 @@ const int SPI_CS1 = 10;  // IMU1
 const int SPI_CS2 = 9;   // IMU2
 // Matek 3901-L0X (광류+라이다). 모듈 TX -> 이 핀, 3.3V 로직이라 직결한다.
 // 모듈 RX 는 연결하지 않는다 — 우리는 보낼 것이 없고 수신 전용이다.
-// 19/20 은 USB D-/D+ 라 피했고 스트래핑 핀도 피했다.
-const int MSP_SENSOR_RX_PIN = 16;
+// PCB v1.5.2 의 소나 커넥터 UART(ESP RX=17, TX=18) 중 RX 만 쓴다.
+const int MSP_SENSOR_RX_PIN = 17;
 const uint32_t MSP_SENSOR_BAUD = 115200;
 // 이보다 오래 프레임이 없으면 quality 를 -1 로 보고한다. 얼어붙은 센서가
 // 마지막 값으로 유효해 보이면 안 된다(MAG_STALE_MS 와 같은 이유).

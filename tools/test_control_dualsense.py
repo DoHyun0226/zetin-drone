@@ -1678,6 +1678,31 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
 
         self.assertIn("Raw=-", status)
 
+    def test_status_line_shows_flow_hold_state_when_present(self):
+        status = self.module.format_status_telemetry(
+            _telemetry_sample(PosHold_State=1, AltHold_State=2, Height_M=0.48)
+        )
+
+        self.assertIn("PosHold=ACTIVE", status)
+        self.assertIn("AltHold=ADJUST", status)
+        self.assertIn("H=0.48", status)
+
+    def test_status_line_omits_flow_hold_for_main_firmware(self):
+        status = self.module.format_status_telemetry(_telemetry_sample())
+
+        self.assertNotIn("PosHold=", status)
+
+    def test_stdin_flow_hold_commands_pass_through(self):
+        commands = []
+        self.module.send_cmd = commands.append
+
+        for command in ("poshold 1", "althold 0", "flowcal 1", "hg kv 6"):
+            self.module.handle_stdin_command(command)
+
+        self.assertEqual(
+            commands, ["poshold 1", "althold 0", "flowcal 1", "hg kv 6"]
+        )
+
     def test_stdin_raw_on_and_off_map_to_firmware_gate_commands(self):
         commands = []
         self.module.send_cmd = commands.append

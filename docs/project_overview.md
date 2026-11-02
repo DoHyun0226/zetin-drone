@@ -70,7 +70,7 @@ yaw 각속도까지 정착하면 회전이 멈춘 heading을 자동으로 잠그
 SPI 행업 등으로 정지하면 태스크 워치독(500ms)이 재부팅을 강제해 마지막
 PWM으로 모터가 고정되는 것을 막는다.
 
-Matek 3901-L0X(PMW3901 광류 + VL53L0X ToF)는 GPIO16으로 INAV MSPv2 프레임을
+Matek 3901-L0X(PMW3901 광류 + VL53L0X ToF)는 GPIO17로 INAV MSPv2 프레임을
 받아 텔레메트리 60~64번으로 내보내기만 한다. **아직 어떤 제어 판정에도 쓰지
 않는다.** 거리 원값은 작동 범위(80~2000mm) 밖이면 음수이고 너무 가까울 때와
 너무 멀 때가 같은 음수이므로, 신선도는 반드시 `*_Quality`의 −1로 판단한다.
@@ -94,7 +94,7 @@ SPI: SCK=12, MISO=13, MOSI=11
 IMU1 CS=10, IMU2 CS=9
 Motor PWM: M1=4 (FL), M2=5 (RR), M3=6 (FR), M4=7 (RL)
 BMM350: I2C 주소 0x14
-3901-L0X: 모듈 TX → GPIO16 (수신 전용, 3.3V 직결). 전원은 반드시 5V
+3901-L0X: 모듈 TX → GPIO17 (PCB 소나 커넥터 ESP RX=17·TX=18 중 RX만, 3.3V 직결). 전원은 반드시 5V
 ```
 
 단일 IMU raw 진단만 별도 배치(SCK/MISO/MOSI/CS = 18/19/23/5)를 쓴다.

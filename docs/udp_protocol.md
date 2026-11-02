@@ -383,7 +383,7 @@ quality로 판단한다 — 얼어붙은 센서가 마지막 값으로 유효해
 size(u16 LE) payload crc8`이 오고, **CRC(crc8_dvb_s2, 다항식 0xD5, 초기값 0)는
 방향 바이트 다음부터** 적용된다. `MSP2_SENSOR_RANGEFINDER=0x1F01`
 (`u8 quality; i32 distanceMm`), `MSP2_SENSOR_OPTIC_FLOW=0x1F02`
-(`u8 quality; i32 motionX; i32 motionY`). 배선은 모듈 TX → ESP32 GPIO16
+(`u8 quality; i32 motionX; i32 motionY`). 배선은 모듈 TX → ESP32 GPIO17
 (수신 전용, 3.3V 직결), 전원은 **반드시 5V**다(3.3V로 주면 측정거리가 줄어든다).
 
 목표 각도 필드는 다음처럼 해석해야 한다.
