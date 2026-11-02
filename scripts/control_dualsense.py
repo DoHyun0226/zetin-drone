@@ -11,12 +11,12 @@ from pathlib import Path
 import pygame
 
 from decode_imu_raw import decode_file
-from failsafe_telemetry import (
+from ground.failsafe_telemetry import (
     FAILSAFE_PHASE_NAMES,
     FAILSAFE_PROBE_STATE_NAMES,
     phase_number,
 )
-from telemetry_schema import (
+from ground.telemetry_schema import (
     CSV_FIELDS,
     active_fault_names,
     is_flowcal_packet,

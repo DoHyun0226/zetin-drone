@@ -9,7 +9,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from camera_stream import INDEX_FIELDS, MjpegParser, aligned_rows  # noqa: E402
+from ground.camera_stream import INDEX_FIELDS, MjpegParser, aligned_rows  # noqa: E402
 from camera_to_mp4 import (  # noqa: E402
     build_ffmpeg_command,
     build_video_inputs,

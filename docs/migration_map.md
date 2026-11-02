@@ -39,7 +39,7 @@
 | `scripts/Drone_Reciever.py` | `scripts/receive_telemetry.py` | 현행 |
 | `scripts/Drone_Monitor.py` | `scripts/monitor_telemetry.py` | 현행 |
 | `scripts/Drone_Analasys.py` | `scripts/analyze_flight_log.py` | 현행 |
-| `scripts/drone_telemetry.py` | `scripts/telemetry_schema.py` | 현행 |
+| `scripts/drone_telemetry.py` | `scripts/ground/telemetry_schema.py` | 현행 |
 | `scripts/dual_imu_pid_debug_receiver.py` | `scripts/receive_dual_imu_debug.py` | 현행 |
 | `scripts/Controller_test.py` | `scripts/test_dualsense_input.py` | 현행 |
 | `scripts/GPS_Reciever.py` | `scripts/archive/receive_gps_udp_legacy.py` | 보관 |

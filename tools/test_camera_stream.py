@@ -7,7 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from camera_stream import (  # noqa: E402
+from ground.camera_stream import (  # noqa: E402
     MjpegParser,
     aligned_rows,
     clock_jumps,

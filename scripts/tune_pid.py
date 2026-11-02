@@ -2,7 +2,7 @@ import socket
 import threading
 import time
 
-from telemetry_schema import (
+from ground.telemetry_schema import (
     active_fault_names,
     is_gains_packet,
     parse_gains_packet,

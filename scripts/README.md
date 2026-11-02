@@ -133,7 +133,7 @@ stdin에는 [프로토콜의 명령](../docs/udp_protocol.md#지상국--드론)�
 
 ## 로그 저장과 오프라인 분석
 
-공유 `telemetry_schema.py`의 현행 패킷은 **75필드**, PC 수신 시각
+공유 `ground/telemetry_schema.py`의 현행 패킷은 **75필드**, PC 수신 시각
 `Timestamp`를 앞에 붙인 CSV는 **76열**이다. 수신·모니터 도구도 같은 파서를
 쓴다. 10~74필드의 레거시 패킷은 없는 뒤쪽 값을 빈 셀로 기록하고, 75필드를
 넘는 미래 패킷은 알려진 앞쪽만 읽는다. 첫 10필드는 비어 있지 않은 유한수,
@@ -246,6 +246,6 @@ WiFi 복귀 성공을 충분히 확인하지 않은 채 완료를 출력한다. 
   검증으로 취급하지 않는다. 이 제한을 해결하기 전에는 초보자 실행 경로에서
   제외한다.
 
-공유 모듈은 `telemetry_schema.py`(파싱·CSV 정규화)와
+공유 모듈은 `ground/` 패키지의 `telemetry_schema.py`(파싱·CSV 정규화)와
 `failsafe_telemetry.py`(phase·probe 이름과 표시)다. 이들은 실행 도구가 아니다.
 [archive/](archive/README.md)의 GPS/TCP 도구는 현행 비행 펌웨어용이 아니다.

@@ -23,7 +23,7 @@
 현행 수집기는 `Timestamp` 다음에 공유 스키마의 텔레메트리를 기록한다.
 **저스로틀 yaw 개선 통합 코드 기준 75필드 + PC 시각 = 76열**이다. 정확한 필드 순서·단위·
 레거시 형식은 [UDP 프로토콜](../docs/udp_protocol.md#드론--지상국), 구현은
-[`telemetry_schema.py`](../scripts/telemetry_schema.py)가 정본이다.
+[`telemetry_schema.py`](../scripts/ground/telemetry_schema.py)가 정본이다.
 
 현행 수집기로 구형 패킷을 받으면 없는 필드는 빈 셀로 채워진다. 과거 도구로
 생성한 파일은 헤더 자체가 짧을 수 있으므로 실제 헤더를 먼저 읽는다.

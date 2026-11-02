@@ -5,7 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from failsafe_telemetry import format_failsafe_phase, phase_number
+from ground.failsafe_telemetry import format_failsafe_phase, phase_number
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent

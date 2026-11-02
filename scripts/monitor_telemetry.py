@@ -9,8 +9,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
-from failsafe_telemetry import render_monitor_title
-from telemetry_schema import (
+from ground.failsafe_telemetry import render_monitor_title
+from ground.telemetry_schema import (
     CSV_FIELDS,
     active_fault_names,
     is_gains_packet,

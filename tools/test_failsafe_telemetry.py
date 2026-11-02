@@ -11,7 +11,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from scripts import failsafe_telemetry
+from scripts.ground import failsafe_telemetry
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

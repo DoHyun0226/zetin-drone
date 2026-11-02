@@ -2488,7 +2488,7 @@ static void handleGainCommand(const char *buf) {
 // 필드, 필드 65 Mag_Cal_Active, 필드 66~75 allocator/PID/I/yaw authority를
 // append-only로 보낸다. IMU별 값은 융합값과 같은 body frame이다.
 // 이 스케치는 인덱스 75~90 에 광류 위치·고도 유지 16개 필드를 더 붙인다
-// (Flow_Seq … FlowCal_Samples, scripts/telemetry_schema.py).
+// (Flow_Seq … FlowCal_Samples, scripts/ground/telemetry_schema.py).
 static void sendTelemetry() {
   if (!connectionEstablished) return;
   bool criticalFault = (active_imus == 0) || fault_attitude || !calibration_ok;

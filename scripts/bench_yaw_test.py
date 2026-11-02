@@ -26,7 +26,7 @@ import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from telemetry_schema import parse_telemetry_packet  # noqa: E402
+from ground.telemetry_schema import parse_telemetry_packet  # noqa: E402
 
 DRONE_SSID = "Drone_Tuning"
 HOME_SSID = "ZETIN-ROBOT"

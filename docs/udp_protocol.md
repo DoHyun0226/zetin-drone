@@ -465,7 +465,7 @@ Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw
   현행 CSV는 76개 열이 된다.
 
 공유 구현은
-[`telemetry_schema.py`](../scripts/telemetry_schema.py)에 있다.
+[`telemetry_schema.py`](../scripts/ground/telemetry_schema.py)에 있다.
 
 ### 1kHz IMU 원시 배치 (`ZIMU`)
 

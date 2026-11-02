@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from telemetry_schema import (
+from ground.telemetry_schema import (
     CSV_FIELDS,
     active_fault_names,
     is_gains_packet,

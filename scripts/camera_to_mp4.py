@@ -20,7 +20,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from camera_stream import (
+from ground.camera_stream import (
     INDEX_FIELDS,
     aligned_rows,
     clock_jumps,

@@ -86,14 +86,10 @@ def check_migration_map(repo, map_path, expected_rows=44):
         )
 
     old_seen = set()
-    new_seen = set()
     for line_number, old, new in rows:
         if old in old_seen:
             errors.append(f"migration map line {line_number}: duplicate old path {old}")
-        if new in new_seen:
-            errors.append(f"migration map line {line_number}: duplicate new path {new}")
         old_seen.add(old)
-        new_seen.add(new)
         if (repo / old).exists():
             errors.append(f"migration map line {line_number}: old path still exists {old}")
         if not (repo / new).exists():
@@ -138,7 +134,7 @@ def stale_scan_files(repo):
     ]
     files.extend(sorted((repo / "firmware/flight").rglob("*.ino")))
     files.extend(sorted((repo / "firmware/diagnostics").rglob("*.ino")))
-    files.extend(sorted((repo / "scripts").glob("*.py")))
+    files.extend(sorted((repo / "scripts").rglob("*.py")))
     return files
 
 

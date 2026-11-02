@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from telemetry_schema import CSV_FIELDS  # noqa: E402
+from ground.telemetry_schema import CSV_FIELDS  # noqa: E402
 
 
 def analyzer_module():

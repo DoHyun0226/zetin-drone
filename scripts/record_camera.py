@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import BinaryIO, Callable, Iterable, Iterator, TextIO
 from urllib.parse import urlsplit
 
-from camera_stream import (
+from ground.camera_stream import (
     INDEX_FIELDS,
     MjpegParser,
     RecordingSummary,
