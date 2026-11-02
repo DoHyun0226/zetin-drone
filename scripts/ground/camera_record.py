@@ -6,7 +6,7 @@ the flight UDP link. Output goes to ``logs/``:
   camera_<YYYY-MM-DD_HHMMSS>.mjpeg  the received JPEGs back to back (no re-encode)
   camera_<YYYY-MM-DD_HHMMSS>.csv    one row per frame (see camera_stream.INDEX_FIELDS)
 
-``camera_to_mp4.py`` turns the pair into a flight-log-aligned CSV and an mp4.
+``ground/camera_mp4.py`` turns the pair into a flight-log-aligned CSV and an mp4.
 The stream comes from ``firmware/camera/esp32cam_stream``.
 """
 
@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import BinaryIO, Callable, Iterable, Iterator, TextIO
 from urllib.parse import urlsplit
 
+from ground.paths import LOG_DIR
 from ground.camera_stream import (
     INDEX_FIELDS,
     MjpegParser,
@@ -37,7 +38,6 @@ from ground.camera_stream import (
 
 
 DEFAULT_URL = "http://192.168.4.200:81/stream"
-LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 READ_BYTES = 4096
 
 

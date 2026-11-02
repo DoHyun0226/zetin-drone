@@ -1,7 +1,7 @@
 """Shared logic for the drone camera stream: MJPEG parsing, the recording index
 schema, recording summaries and camera-to-laptop clock alignment.
 
-Standard library only. ``record_camera.py`` (recording) and ``camera_to_mp4.py``
+Standard library only. ``camera_record.py`` (recording) and ``camera_mp4.py``
 (post-processing) build on this module; the stream format is produced by
 ``firmware/camera/esp32cam_stream``.
 """

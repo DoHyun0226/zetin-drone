@@ -207,9 +207,9 @@ PID·I 기여의 절댓값 최댓값이 포함된다. 필요한 진단값이 없
   `off`인지 확인한다.
 
 ```bash
-python scripts/record_camera.py                 # 미리보기 창 + 녹화 (q로 종료)
-python scripts/record_camera.py --no-preview    # 창 없이 녹화 (Ctrl+C로 종료)
-python scripts/camera_to_mp4.py logs/camera_YYYY-MM-DD_HHMMSS.csv
+python scripts/drone_video.py                 # 미리보기 창 + 녹화 (q로 종료)
+python scripts/drone_video.py --no-preview    # 창 없이 녹화 (Ctrl+C로 종료)
+python scripts/drone_video.py mp4 logs/camera_YYYY-MM-DD_HHMMSS.csv
 ```
 
 출력:
@@ -219,7 +219,7 @@ python scripts/camera_to_mp4.py logs/camera_YYYY-MM-DD_HHMMSS.csv
   - 카메라 일련번호와 캡처 시각
   - 노트북 수신 시각. 비행 로그와 같은 `HH:MM:SS.mmm` 형식이고, 헤더가 도착한 시각이다.
   - 접속 구간 번호
-- 후처리 결과(`camera_to_mp4.py`)
+- 후처리 결과(`drone_video.py mp4`)
   - `_aligned.csv`: 프레임별 캡처 시각을 노트북 시계로 옮긴 표. 비행 로그 `Timestamp`와 맞춰 보는 데 쓴다.
   - `.mp4`: 일반 재생용 가변 프레임레이트 영상
 

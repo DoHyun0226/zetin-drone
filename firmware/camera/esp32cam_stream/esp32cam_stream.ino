@@ -1,5 +1,5 @@
 // ESP32-CAM(AI-Thinker 핀맵) 영상 스트림 — 비행 ESP32 의 SoftAP 에 붙어 노트북으로
-// MJPEG 를 내보낸다. 노트북의 scripts/record_camera.py 가 받아 녹화한다.
+// MJPEG 를 내보낸다. 노트북의 scripts/drone_video.py 가 받아 녹화한다.
 //
 //   :81 /stream  multipart/x-mixed-replace;boundary=zetincamframe
 //                파트마다 X-Timestamp(캡처 시각, 부팅 후 s.µs) · X-Frame-Seq(송신 일련번호)

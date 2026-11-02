@@ -16,7 +16,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from ground.camera_stream import INDEX_FIELDS, MjpegParser, format_recv_time  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from record_camera import (  # noqa: E402
+from ground.camera_record import (  # noqa: E402
     LatestFrame,
     OutputError,
     OpenedStream,
@@ -305,7 +305,7 @@ class SafetyTest(unittest.TestCase):
             calls.append(1)
             return opened(iter([part(jpeg(1), 0)]))
 
-        with mock.patch("record_camera.record_chunks", side_effect=OutputError("disk full")):
+        with mock.patch("ground.camera_record.record_chunks", side_effect=OutputError("disk full")):
             with tempfile.TemporaryDirectory() as tmp:
                 with self.assertRaises(RuntimeError):
                     run("http://cam", Path(tmp), preview=False, timeout_s=1.0, retry_s=0, opener=opener)
@@ -336,7 +336,7 @@ class SafetyTest(unittest.TestCase):
         def opener(url, timeout_s):
             return opened(iter([part(jpeg(1), 0)]))
 
-        with mock.patch("record_camera.record_chunks", side_effect=ZeroDivisionError("bug")):
+        with mock.patch("ground.camera_record.record_chunks", side_effect=ZeroDivisionError("bug")):
             with tempfile.TemporaryDirectory() as tmp:
                 with self.assertRaises(RuntimeError):
                     run("http://cam", Path(tmp), preview=False, timeout_s=1.0, retry_s=0, opener=opener)

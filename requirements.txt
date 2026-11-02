@@ -5,5 +5,5 @@ numpy>=1.26
 matplotlib>=3.7
 pandas>=2.0
 pygame>=2.5
-# record_camera.py 미리보기 창 (녹화·후처리 로직은 표준 라이브러리만 쓴다)
+# drone_video.py record 미리보기 창 (녹화·후처리 로직은 표준 라이브러리만 쓴다)
 opencv-python>=4.8

@@ -16,8 +16,9 @@ SKETCH_DIR = REPO_ROOT / "firmware" / "camera" / "esp32cam_stream"
 SKETCH = SKETCH_DIR / "esp32cam_stream.ino"
 CAMERA_SCRIPTS = (
     REPO_ROOT / "scripts" / "ground" / "camera_stream.py",
-    REPO_ROOT / "scripts" / "record_camera.py",
-    REPO_ROOT / "scripts" / "camera_to_mp4.py",
+    REPO_ROOT / "scripts" / "ground" / "camera_record.py",
+    REPO_ROOT / "scripts" / "ground" / "camera_mp4.py",
+    REPO_ROOT / "scripts" / "drone_video.py",
 )
 CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
