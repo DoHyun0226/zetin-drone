@@ -2884,6 +2884,15 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.send_cmd("gains")
         self.assertEqual([d for d, _ in latched_socket.sent], [b"gains"])
 
+    def test_controller_skips_rcr_while_latched_even_with_a_raw_sender(self):
+        # the controller's own guard, independent of the send_cmd gate
+        commands = []
+        self.module.send_cmd = commands.append
+        self.module.worker_fault = "telemetry"
+        self.module.is_streaming = True
+        self._run_controller(iterations=3)
+        self.assertFalse(any(c.startswith("rcr") for c in commands))
+
     def test_worker_fault_latch_refuses_arm_without_sending(self):
         self._prime_prearm_telemetry()
         self.module.worker_fault = "controller"
