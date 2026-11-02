@@ -54,7 +54,7 @@ arduino-cli upload  --fqbn esp32:esp32:esp32cam -p /dev/ttyUSB0 firmware/camera/
 
 | 상수 | 기본값 | 바꾸는 때 |
 |---|---|---|
-| `FRAME_SIZE` | VGA 640×480 | SVGA는 TCP 송신 버퍼 한계로 1.3 fps까지 떨어졌다. 올리지 않는다 |
+| `FRAME_SIZE` | VGA 640×480 | SVGA는 1.3 fps까지 떨어졌다(TCP 송신 버퍼·왕복 지연 쪽 한계로 보인다). 올리지 않는다 |
 | `JPEG_QUALITY` | 10 | 값이 작을수록 고화질이고 프레임이 커진다(VGA·10 ≈ 15–22 kB). 끊김이 잦으면 12–14로 올린다 |
 | `FPS_CAP` | 10 | |
 | `BYTE_RATE_CAP` | 187,500 B/s (1.5 Mbps) | 조종 링크 보호용 평균 상한 |

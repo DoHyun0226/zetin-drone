@@ -27,8 +27,8 @@ const IPAddress CAM_IP = IPAddress(192, 168, 4, 200);
 const IPAddress CAM_GATEWAY = IPAddress(192, 168, 4, 1);
 const IPAddress CAM_SUBNET = IPAddress(255, 255, 255, 0);
 // 최대 출력. 11 dBm 으로 낮췄더니 벤치(2026-11-02, OV3660 보드)에서 카메라 구간 ping 이
-// 17–640 ms 로 튀고 녹화가 0.7–1.2 fps 에 그쳤다 — TCP 송신 버퍼(5744 B)가 프레임 하나라
-// 왕복 지연이 곧 fps 상한이 된다. 19.5 dBm 에서는 18–91 ms, 7.9 fps.
+// 17–640 ms 로 튀고 녹화가 0.7–1.2 fps 에 그쳤다 — 미확인 ACK 가 TCP 송신 버퍼(5744 B)를
+// 넘지 못해 왕복 지연이 곧 fps 를 누른다. 19.5 dBm 에서는 18–91 ms, 7.9 fps.
 // 송신 피크 전류가 커지므로 BEC 로 옮기면 reset_reason 이 brownout 인지 확인한다.
 const wifi_power_t CAM_WIFI_TX_POWER = WIFI_POWER_19_5dBm;
 const uint32_t WIFI_CHECK_MS = 2000;
@@ -40,8 +40,10 @@ const uint32_t WIFI_RESTART_AFTER_MS = 10000;  // 이만큼 끊겨 있으면 beg
 const bool CAM_HMIRROR = true;
 const bool CAM_VFLIP = false;
 // VGA·품질 10: 벤치(2026-11-02)에서 장면에 따라 15–22 kB/프레임, 2.8–7.7 fps, 최장 공백 3 s.
-// 처리량은 5744 B TCP 송신 버퍼 ÷ 왕복 지연으로 막혀 약 85–115 kB/s 다. SVGA 는 28 kB 프레임이
-// 왕복 5번 가까이 걸려 1.3 fps 로 무너졌다. 끊김이 문제면 JPEG_QUALITY 를 올려(12–14) 프레임을 줄인다.
+// 처리량은 바이트율 상한이 아니라 TCP 송신 버퍼(5744 B)·왕복 지연 쪽에서 막히는 것으로 보인다
+// (약 75–115 kB/s, 송신 버퍼만 바꾼 대조 실험은 아직 없다). SVGA 는 28 kB 프레임에 1.3 fps 로
+// 무너졌다. 끊김이 문제면 JPEG_QUALITY 를 올려(12–14) 프레임을 줄인다 — UDP 로 바꿔도 나아지지
+// 않았다(설계 문서 9절).
 const framesize_t FRAME_SIZE = FRAMESIZE_VGA;           // 640x480
 const framesize_t FRAME_SIZE_NO_PSRAM = FRAMESIZE_QVGA;  // 320x240
 const int JPEG_QUALITY = 10;

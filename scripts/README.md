@@ -202,7 +202,9 @@ PID·I 기여의 절댓값 최댓값이 포함된다. 필요한 진단값이 없
 - 노트북이 `Drone_Tuning`에 붙어 있어야 한다. 유선 LAN이나 USB 테더링이 192.168.4.0/24로
   가는 경로를 가로채지 않는지 확인한다. 녹화기는 접속한 로컬 주소가 192.168.4.x가 아니면
   `[WARN]`을 찍는다.
-- WiFi 절전을 끈다([링크 문서](../docs/ground_station_link.md)의 `powersave` 항목).
+- WiFi 절전을 끈다([링크 문서](../docs/ground_station_link.md)의 `powersave` 항목). 연결 프로필에
+  절전을 꺼 두어도 커널에서 켜져 있던 적이 있다. 녹화 직전에 `iw dev wlan0 get power_save`로
+  `off`인지 확인한다.
 
 ```bash
 python scripts/record_camera.py                 # 미리보기 창 + 녹화 (q로 종료)
