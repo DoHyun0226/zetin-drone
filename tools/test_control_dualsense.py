@@ -55,6 +55,64 @@ class _FakeSocket:
         pass
 
 
+class _BindFailSocket(_FakeSocket):
+    def bind(self, _address):
+        raise OSError(98, "Address already in use")
+
+
+class _RecordingUI:
+    def __init__(self):
+        self.calls = []
+
+    def event(self, text):
+        self.calls.append(("event", text))
+
+    def periodic(self, text):
+        self.calls.append(("periodic", text))
+
+    def transition(self, text):
+        self.calls.append(("transition", text))
+
+    def alert(self, text):
+        self.calls.append(("alert", text))
+
+    def update(self, snap):
+        self.calls.append(("update", snap))
+
+    def run(self, input_handler, on_interrupt, on_eof):
+        self.calls.append(("run", None))
+
+    def after_run(self):
+        self.calls.append(("after_run", None))
+
+    def texts(self, kind):
+        return [text for call_kind, text in self.calls if call_kind == kind]
+
+
+class _RaisingUI(_RecordingUI):
+    """A broken UI: every output call raises, as a dead terminal pipe would."""
+
+    def event(self, text):
+        raise BrokenPipeError("synthetic event failure")
+
+    def periodic(self, text):
+        raise BrokenPipeError("synthetic periodic failure")
+
+    def alert(self, text):
+        raise BrokenPipeError("synthetic alert failure")
+
+
+class _RaisingJoystick:
+    def init(self):
+        pass
+
+    def get_name(self):
+        return "broken joystick"
+
+    def get_button(self, _index):
+        raise RuntimeError("synthetic joystick failure")
+
+
 class _FakeThread:
     def __init__(self, *_, **__):
         pass
@@ -249,14 +307,23 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         for name, value in values.items():
             setattr(self.module, name, value)
 
-    def _load_module(self, argv=(), module_name="_control_dualsense_under_test"):
+    def _load_module(
+        self,
+        argv=(),
+        module_name="_control_dualsense_under_test",
+        *,
+        input_side_effect=KeyboardInterrupt,
+        before_main=None,
+        fake_socket=None,
+    ):
         sys.modules.pop(module_name, None)
         spec = importlib.util.spec_from_file_location(module_name, CONTROL_PATH)
         module = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = module
 
         fake_pygame = types.ModuleType("pygame")
-        fake_socket = _FakeSocket()
+        if fake_socket is None:
+            fake_socket = _FakeSocket()
         fake_csv_file = io.StringIO()
         with (
             mock.patch.dict(sys.modules, {"pygame": fake_pygame}),
@@ -264,13 +331,32 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
             mock.patch.object(pathlib.Path, "mkdir"),
             mock.patch.object(pathlib.Path, "open", return_value=fake_csv_file),
             mock.patch.object(threading, "Thread", _FakeThread),
-            mock.patch.object(builtins, "input", side_effect=KeyboardInterrupt),
+            mock.patch.object(builtins, "input", side_effect=input_side_effect),
             mock.patch.object(
                 sys, "argv", [str(CONTROL_PATH), *argv],
             ),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             spec.loader.exec_module(module)
+            if before_main is not None:
+                before_main(module)
+            module.main()
+        return module, fake_socket
+
+    def _load_module_armed(self, *, input_side_effect):
+        module_name = "_control_dualsense_armed_under_test"
+
+        def arm_locally(module):
+            module.is_armed = True
+            module.is_streaming = True
+            module.arm_state = "armed"
+
+        module, fake_socket = self._load_module(
+            module_name=module_name,
+            input_side_effect=input_side_effect,
+            before_main=arm_locally,
+        )
+        self.addCleanup(sys.modules.pop, module_name, None)
         return module, fake_socket
 
     def tearDown(self):
@@ -2668,6 +2754,350 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
             with log_path.open(newline="", encoding="utf-8") as saved_log:
                 rows = list(csv.reader(saved_log))
             self.assertEqual(rows, [list(self.module.CSV_FIELDS), record])
+
+    # --- worker wrapper, fault latch, EOF, port check, UI routing ---
+
+    def _run_telemetry_wrapped(self, samples):
+        """Run the wrapped telemetry worker; csv_writer is left to the caller."""
+        self.module.sock = _FakeSocket([b"packet"] * len(samples))
+        self.module.csv_file = types.SimpleNamespace(flush=lambda: None)
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                self.module, "parse_telemetry_packet", side_effect=samples,
+            ),
+            mock.patch.object(self.module, "sample_to_csv_row", return_value=[]),
+            contextlib.redirect_stdout(output),
+        ):
+            try:
+                self.module.telemetry_worker()
+            except _LoopComplete:
+                pass
+        return output.getvalue()
+
+    def _break_csv_writer(self):
+        self.module.csv_writer = types.SimpleNamespace(
+            writerow=mock.Mock(side_effect=OSError("disk")),
+        )
+
+    def _run_controller_with_joystick(self, joystick, iterations=2):
+        event = _LoopEvent(iterations)
+        self.module.pygame = _pygame_for(joystick, event)
+        output = io.StringIO()
+        with (
+            mock.patch.object(self.module.time, "sleep", return_value=None),
+            contextlib.redirect_stdout(output),
+        ):
+            try:
+                self.module.controller_worker()
+            except _LoopComplete:
+                pass
+        return output.getvalue()
+
+    def test_worker_exception_stops_rc_streaming(self):
+        self.module.is_armed = True
+        self.module.is_streaming = True
+        self.module.arm_state = "armed"
+        self._break_csv_writer()
+
+        out = self._run_telemetry_wrapped([_telemetry_sample(Failsafe_Phase=0)])
+
+        self.assertFalse(self.module.is_streaming)
+        self.assertIn("수신 스레드 오류", out)
+        self.assertIn(
+            "[ERR] 수신 스레드 오류: OSError: disk - rc 중단, 드론 자동착륙에 맡김. "
+            "지상국을 다시 시작하세요",
+            out,
+        )
+        self.assertIn(">>> [SYSTEM] 로컬 해제 (수신 스레드 오류) - stop 미전송", out)
+        self.assertEqual(self.module.snapshot()["worker_fault"], "telemetry")
+        # stop_streaming_only semantics: never a stop while the drone may be descending
+        self.assertNotIn(b"stop", [data for data, _ in self.module.sock.sent])
+
+    def test_controller_exception_stops_rc_streaming(self):
+        self.module.is_armed = True
+        self.module.is_streaming = True
+        self.module.arm_state = "armed"
+        self.module.sock = _FakeSocket()
+
+        out = self._run_controller_with_joystick(_RaisingJoystick())
+
+        self.assertFalse(self.module.is_streaming)
+        self.assertIn(
+            "[ERR] 조종 스레드 오류: RuntimeError: synthetic joystick failure - "
+            "rc 중단, 드론 자동착륙에 맡김. 지상국을 다시 시작하세요",
+            out,
+        )
+        self.assertEqual(self.module.snapshot()["worker_fault"], "controller")
+        sent = [data for data, _ in self.module.sock.sent]
+        self.assertNotIn(b"stop", sent)
+        self.assertFalse(any(data.startswith(b"rcr") for data in sent))
+
+    def test_worker_exception_cancels_a_resume_attempt(self):
+        self.module.is_armed = True
+        self.module.is_streaming = True
+        self.module.arm_state = "armed"
+        self.module.resume_state = "wait_rc"
+        self.module.resume_deadline = self.module.time.monotonic() + 10.0
+        self._break_csv_writer()
+
+        out = self._run_telemetry_wrapped([_telemetry_sample(Failsafe_Phase=0)])
+
+        self.assertEqual(self.module.resume_state, "idle")
+        self.assertIn("[RESUME] 실패: 수신 스레드 오류로 복구 시도 취소", out)
+
+    def test_worker_fault_latch_blocks_resume_and_rc(self):
+        self.module.is_armed = True
+        self.module.is_streaming = True
+        self.module.arm_state = "armed"
+        self._break_csv_writer()
+        self._run_telemetry_wrapped([_telemetry_sample(Failsafe_Phase=0)])
+        self.assertFalse(self.module.is_streaming)
+
+        # every precondition for a resume is otherwise satisfied
+        self.module.telem_failsafe_phase = 1
+        self.module.telem_hover_est = 1360.0
+        self.module.telem_hover_valid = True
+        self.module.last_telem_time = self.module.time.monotonic()
+        latched_socket = _FakeSocket()
+        self.module.sock = latched_socket
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            accepted = self.module.request_resume("패드")
+            self.module.handle_stdin_command("resume")
+            self.module.handle_stdin_command("rcr 1 0.00 0.00 0.0")
+            self.module.handle_stdin_command("rc 1500 1500 1500 1500")
+        self.assertFalse(accepted)
+        self.assertFalse(self.module.is_streaming)
+        self.assertEqual(self.module.resume_state, "idle")
+        self.assertIn("[RESUME] 실패: 수신 스레드 오류로 잠김", output.getvalue())
+
+        # even if streaming were somehow re-opened, no rc/rcr leaves the station
+        self.module.is_streaming = True
+        self._run_controller_with_joystick(_Joystick(_LoopEvent(0)), iterations=3)
+        sent = [data for data, _ in latched_socket.sent]
+        self.assertEqual(sent, [])
+        self.module.send_cmd("rcr 9 0.00 0.00 0.0")
+        self.module.send_cmd("rc 1500 1500 1500 1500")
+        self.assertEqual(latched_socket.sent, [])
+        # the latch blocks only rc/rcr, not other commands
+        self.module.send_cmd("gains")
+        self.assertEqual([d for d, _ in latched_socket.sent], [b"gains"])
+
+    def test_worker_fault_latch_refuses_arm_without_sending(self):
+        self._prime_prearm_telemetry()
+        self.module.worker_fault = "controller"
+        latched_socket = _FakeSocket()
+        self.module.sock = latched_socket
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            accepted = self.module.arm()
+        self.assertFalse(accepted)
+        self.assertEqual(self.module.arm_state, "idle")
+        self.assertEqual(latched_socket.sent, [])
+        self.assertIn("[ARM] 거부: 조종 스레드 오류로 잠김", output.getvalue())
+
+    def test_worker_fault_during_arming_blocks_arm_confirmation(self):
+        self._prime_prearm_telemetry()
+        commands = []
+        self.module.reliable_send = commands.append
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(self.module.arm())
+        self.assertEqual(self.module.arm_state, "arming")
+        self.module.sock = _FakeSocket()
+        commands.clear()
+
+        out = self._run_controller_with_joystick(_RaisingJoystick())
+        self.assertEqual(self.module.snapshot()["worker_fault"], "controller")
+        # the arm attempt is cancelled the way every other arm cancel is: stop
+        self.assertEqual(commands, ["stop"])
+        self.assertIn("[ARM] 실패: 조종 스레드 오류로 무장 시도 취소, stop 전송", out)
+
+        confirm_socket = _FakeSocket()
+        self.module.sock = confirm_socket
+        self.module.csv_writer = types.SimpleNamespace(writerow=lambda _row: None)
+        self._run_telemetry_wrapped([
+            _telemetry_sample(Armed=1, Failsafe_Phase=0),
+            _telemetry_sample(Armed=0, Failsafe_Phase=0),
+        ])
+        self.assertFalse(self.module.is_armed)
+        self.assertFalse(self.module.is_streaming)
+        self.assertNotIn(b"start", [d for d, _ in self.module.sock.sent])
+
+    def test_latched_advance_arm_attempt_neither_confirms_nor_retries(self):
+        commands = []
+        self.module.send_cmd = commands.append
+        self.module.reliable_send = commands.append
+        self.module.arm_state = "arming"
+        self.module.arm_deadline = 100.0
+        self.module.arm_next_retry = 0.0
+        self.module.worker_fault = "telemetry"
+
+        self.module.advance_arm_attempt(_telemetry_sample(Armed=1), now=10.0)
+        self.module.advance_arm_attempt(_telemetry_sample(Armed=0), now=10.5)
+
+        self.assertFalse(self.module.is_armed)
+        self.assertFalse(self.module.is_streaming)
+        self.assertNotIn("start", commands)
+
+    def test_ui_failure_does_not_skip_safety(self):
+        self.module.is_armed = True
+        self.module.is_streaming = True
+        self.module.arm_state = "armed"
+        self.module.ui = _RaisingUI()
+        self._break_csv_writer()
+
+        # must return normally even though every UI call raises
+        self._run_telemetry_wrapped([_telemetry_sample(Failsafe_Phase=0)])
+
+        self.assertFalse(self.module.is_streaming)
+        self.assertEqual(self.module.snapshot()["worker_fault"], "telemetry")
+
+        self.module.is_streaming = True
+        self.module.sock = _FakeSocket()
+        self._run_controller_with_joystick(_RaisingJoystick())
+        self.assertFalse(self.module.is_streaming)
+        # the first fault stays latched
+        self.assertEqual(self.module.worker_fault, "telemetry")
+
+    def test_eof_disarms_when_armed(self):
+        m, sock = self._load_module_armed(input_side_effect=EOFError)
+        self.assertTrue(any(d == b"stop" for d, _ in sock.sent))
+        self.assertFalse(m.is_armed)
+
+    def test_eof_does_not_send_stop_when_disarmed(self):
+        self.assertFalse(any(d == b"stop" for d, _ in self.startup_socket.sent))
+        module_name = "_control_dualsense_eof_under_test"
+        _module, sock = self._load_module(
+            module_name=module_name, input_side_effect=EOFError,
+        )
+        self.addCleanup(sys.modules.pop, module_name, None)
+        self.assertFalse(any(d == b"stop" for d, _ in sock.sent))
+
+    def test_keyboard_interrupt_still_disarms_when_armed(self):
+        _m, sock = self._load_module_armed(input_side_effect=KeyboardInterrupt)
+        self.assertTrue(any(d == b"stop" for d, _ in sock.sent))
+
+    def test_bind_failure_exits_before_creating_log(self):
+        module_name = "_control_dualsense_bind_under_test"
+        sys.modules.pop(module_name, None)
+        spec = importlib.util.spec_from_file_location(module_name, CONTROL_PATH)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        self.addCleanup(sys.modules.pop, module_name, None)
+        output = io.StringIO()
+        with (
+            mock.patch.dict(sys.modules, {"pygame": types.ModuleType("pygame")}),
+            mock.patch.object(socket, "socket", return_value=_BindFailSocket()),
+            mock.patch.object(pathlib.Path, "mkdir") as mkdir,
+            mock.patch.object(pathlib.Path, "open") as path_open,
+            mock.patch.object(threading, "Thread", _FakeThread),
+            mock.patch.object(sys, "argv", [str(CONTROL_PATH)]),
+            contextlib.redirect_stdout(output),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            spec.loader.exec_module(module)
+        self.assertEqual(raised.exception.code, 1)
+        path_open.assert_not_called()
+        mkdir.assert_not_called()
+        self.assertIn(
+            "[ERR] 포트 4210을 다른 지상국이 쓰고 있음 - 먼저 종료하세요",
+            output.getvalue(),
+        )
+
+    def test_state_transitions_reach_ui(self):
+        recording = _RecordingUI()
+        self.module.ui = recording
+        self._run_telemetry([
+            _telemetry_sample(Failsafe_Phase=0, Armed=0),
+            _telemetry_sample(Failsafe_Phase=1, Armed=0),
+            _telemetry_sample(Failsafe_Phase=1, Armed=0),
+            _telemetry_sample(Failsafe_Phase=0, Armed=0),
+        ])
+        self.assertEqual(
+            recording.texts("transition"),
+            [
+                "[STATE] Failsafe_Phase 0 → 1",
+                "[STATE] Failsafe_Phase 1 → 0",
+            ],
+        )
+
+    def test_each_watched_state_field_reports_its_transition(self):
+        for field in (
+            "Failsafe_Phase",
+            "Failsafe_Probe_State",
+            "Yaw_Authority_State",
+            "PosHold_State",
+            "AltHold_State",
+        ):
+            with self.subTest(field=field):
+                recording = _RecordingUI()
+                self.module.ui = recording
+                base = {
+                    "Failsafe_Phase": 0, "Failsafe_Probe_State": 0,
+                    "Yaw_Authority_State": 0, "PosHold_State": 0,
+                    "AltHold_State": 0, "Armed": 0,
+                }
+                changed = dict(base, **{field: 2})
+                self._run_telemetry([
+                    _telemetry_sample(**base),
+                    _telemetry_sample(**changed),
+                ])
+                self.assertEqual(
+                    recording.texts("transition"), [f"[STATE] {field} 0 → 2"],
+                )
+
+    def test_periodic_lines_go_through_ui_periodic(self):
+        recording = _RecordingUI()
+        self.module.ui = recording
+        self.module.is_armed = True
+        self.module.last_arm_time = self.module.time.monotonic()
+        self._run_telemetry([_telemetry_sample()] * 4)
+        periodic = recording.texts("periodic")
+        self.assertTrue(any(t.startswith("[STATUS]") for t in periodic))
+        self.assertTrue(any(t.startswith("[AUTO-LAND]") for t in periodic))
+        self.assertTrue(any(t.startswith(" [DIAG]") for t in periodic))
+        self.assertTrue(recording.texts("update"))
+        events = recording.texts("event")
+        self.assertIn("[TELEM] 수신 스레드 시작", events)
+        self.assertFalse(any("[STATUS]" in t or "[DIAG]" in t for t in events))
+
+    def test_snapshot_exposes_the_dashboard_fields(self):
+        self.module.bad_packet_count = 0
+        self._run_telemetry([_telemetry_sample(Failsafe_Phase=0, Armed=0)])
+        snap = self.module.snapshot()
+        for key in (
+            "arm_state", "is_armed", "is_streaming", "current_throttle",
+            "trim_roll", "trim_pitch", "telem_total_pkts", "telem_dropped_pkts",
+            "bad_packet_count", "last_telem_time", "log_path", "mode",
+            "worker_fault", "last_sample", "raw_capture_enabled",
+            "raw_batch_count", "raw_last_dropped", "raw_last_receive_time",
+        ):
+            self.assertIn(key, snap)
+        self.assertEqual(snap["bad_packet_count"], 0)
+        self.assertIsNone(snap["worker_fault"])
+        self.assertEqual(snap["mode"], "pad")
+        self.assertEqual(snap["last_sample"]["Failsafe_Phase"], 0)
+
+    def test_main_routes_input_through_the_ui_and_closes_the_log(self):
+        module_name = "_control_dualsense_main_under_test"
+        module, _sock = self._load_module(module_name=module_name)
+        self.addCleanup(sys.modules.pop, module_name, None)
+        recording = _RecordingUI()
+        module.csv_file = io.StringIO()
+        with (
+            mock.patch.object(threading, "Thread", _FakeThread),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            module.main(ui=recording)
+        kinds = [kind for kind, _ in recording.calls]
+        self.assertIn("run", kinds)
+        self.assertLess(kinds.index("run"), kinds.index("after_run"))
+        self.assertIs(module.ui, recording)
+        self.assertTrue(module.csv_file.closed)
+        self.assertTrue(
+            any(t.startswith("[LOG] 저장 완료:") for t in recording.texts("event"))
+        )
 
 
 class BenchTrimResetTests(unittest.TestCase):
