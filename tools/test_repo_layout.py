@@ -11,6 +11,7 @@ from check_repo_layout import (  # noqa: E402
     check_sketch_names,
     check_stale_tokens,
     maintained_markdown_files,
+    stale_scan_files,
 )
 
 
@@ -66,6 +67,35 @@ class RepoLayoutChecksTest(unittest.TestCase):
         errors = check_stale_tokens(self.repo, [readme])
         self.assertEqual(1, len(errors))
         self.assertIn("Drone_Reciever.py", errors[0])
+
+    def test_migration_map_allows_merged_destinations(self):
+        header = "| Old path | New path |\n|---|---|\n"
+        self.write("new/merged.py")
+        mapping = self.write(
+            "docs/migration_map.md",
+            header + "| `old/a.py` | `new/merged.py` |\n"
+            "| `old/b.py` | `new/merged.py` |\n",
+        )
+        self.assertEqual([], check_migration_map(self.repo, mapping, 2))
+        mapping.write_text(
+            header + "| `old/a.py` | `new/merged.py` |\n"
+            "| `old/a.py` | `new/merged.py` |\n",
+            encoding="utf-8",
+        )
+        errors = check_migration_map(self.repo, mapping, 2)
+        self.assertTrue(any("duplicate old path" in e for e in errors))
+        mapping.write_text(
+            header + "| `old/a.py` | `new/gone.py` |\n", encoding="utf-8"
+        )
+        errors = check_migration_map(self.repo, mapping, 1)
+        self.assertTrue(any("new path missing" in e for e in errors))
+
+    def test_stale_scan_reaches_nested_script_packages(self):
+        self.write("scripts/ground/nested.py", "# Drone_Reciever.py\n")
+        errors = check_stale_tokens(self.repo, stale_scan_files(self.repo))
+        self.assertEqual(1, len(errors))
+        self.assertIn("scripts/ground/nested.py", errors[0])
+
 
 if __name__ == "__main__":
     unittest.main()
