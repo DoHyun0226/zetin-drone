@@ -39,11 +39,13 @@ const uint32_t WIFI_RESTART_AFTER_MS = 10000;  // 이만큼 끊겨 있으면 beg
 // 맞춰 바꾼다.
 const bool CAM_HMIRROR = true;
 const bool CAM_VFLIP = false;
-// VGA·품질 10: 벤치(2026-11-02)에서 장면에 따라 15–22 kB/프레임, 2.8–7.7 fps, 최장 공백 3 s.
-// 처리량은 바이트율 상한이 아니라 TCP 송신 버퍼(5744 B)·왕복 지연 쪽에서 막히는 것으로 보인다
-// (약 75–115 kB/s, 송신 버퍼만 바꾼 대조 실험은 아직 없다). SVGA 는 28 kB 프레임에 1.3 fps 로
-// 무너졌다. 끊김이 문제면 JPEG_QUALITY 를 올려(12–14) 프레임을 줄인다 — UDP 로 바꿔도 나아지지
-// 않았다(설계 문서 9절).
+// 센서 입력 클럭. 20 MHz 에서는 센서를 끄고 클럭만 돌려도 카메라 링크의 TCP 처리량이 69/81 kB/s
+// 로 떨어졌고(클럭까지 끄면 219/254 kB/s) 스트림이 5.0·0.65 fps 였다. 12 MHz 에서는 9.5–9.7 fps
+// (벤치 2026-11-02, 11번 채널). CPU 는 남아 있었고 우선순위로는 달라지지 않았다 — 클럭에 따른
+// 전기·RF 결합이 유력하지만 경로는 미확인이다. 10 MHz 도 나빴고 24 MHz 는 프레임이 깨진다.
+const int CAM_XCLK_HZ = 12000000;
+// VGA·품질 10: 20 MHz 클럭 시절 벤치에서 15–22 kB/프레임. 12 MHz 에서는 10 fps 상한 근처까지
+// 나온다(약 150 kB/s). 처리량은 TCP 송신 버퍼(5744 B) ÷ 왕복 지연 근사를 따른다.
 const framesize_t FRAME_SIZE = FRAMESIZE_VGA;           // 640x480
 const framesize_t FRAME_SIZE_NO_PSRAM = FRAMESIZE_QVGA;  // 320x240
 const int JPEG_QUALITY = 10;
@@ -138,7 +140,7 @@ static bool initCamera() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
+  config.xclk_freq_hz = CAM_XCLK_HZ;
   config.pixel_format = PIXFORMAT_JPEG;
   config.jpeg_quality = JPEG_QUALITY;
   if (g_psram) {

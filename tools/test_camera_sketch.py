@@ -57,6 +57,13 @@ class CameraSketchStaticTest(unittest.TestCase):
         self.assertIn("const framesize_t FRAME_SIZE = FRAMESIZE_VGA;", text)
         self.assertIn("const int JPEG_QUALITY = 10;", text)
 
+    def test_xclk_12mhz_by_default(self):
+        # bench 2026-11-02: XCLK 20 MHz alone (sensor powered down) cut the camera link to
+        # ~70-110 kB/s and the stream to 5.0/0.65 fps; 12 MHz gave 9.5-9.7 fps. 24 MHz corrupts frames.
+        text = SKETCH.read_text(encoding="utf-8")
+        self.assertIn("const int CAM_XCLK_HZ = 12000000;", text)
+        self.assertRegex(text, r"config\.xclk_freq_hz\s*=\s*CAM_XCLK_HZ;")
+
     def test_mirror_and_flip_are_applied_from_constants(self):
         text = SKETCH.read_text(encoding="utf-8")
         self.assertIn("const bool CAM_HMIRROR = true;", text)  # OV3660 board: image came out mirrored
