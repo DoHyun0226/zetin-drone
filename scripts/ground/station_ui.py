@@ -54,9 +54,10 @@ class ConsoleUI:
         """The stdin command loop; never raises.
 
         Ctrl+C -> ``on_interrupt()``, Ctrl+D (EOF) -> ``on_eof()``, then
-        return. A broken input stream (closed stdin, I/O error) is reported
-        and ends like EOF, through ``on_eof()``'s conditional disarm. A
-        command that raises is reported as an event and the loop continues.
+        return. A broken input stream (closed stdin, I/O error) ends like
+        EOF: ``on_eof()``'s conditional disarm runs first, then the error is
+        reported. A command that raises is reported as an event and the loop
+        continues.
         """
         while True:
             try:
@@ -68,11 +69,13 @@ class ConsoleUI:
                 self._call_safely("on_eof", on_eof)
                 return
             except Exception as error:
+                # 안전 경로(조건부 disarm)를 먼저 돌리고, 알림은 그 뒤에 낸다.
+                # 출력이 막혀 있어도 disarm이 늦어지지 않게 한다.
+                self._call_safely("on_eof", on_eof)
                 self.event(
                     f"[STDIN] 입력 오류: {type(error).__name__}: {error} "
                     "- 입력 종료로 처리"
                 )
-                self._call_safely("on_eof", on_eof)
                 return
             if not msg:
                 continue

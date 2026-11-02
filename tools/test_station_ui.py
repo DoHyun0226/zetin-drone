@@ -4,6 +4,7 @@ import builtins
 import contextlib
 import io
 import sys
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -145,6 +146,35 @@ class ConsoleUITest(unittest.TestCase):
         )
         self.assertEqual(calls, ["eof"])
         self.assertIn("[STDIN] 입력 오류: OSError", out)
+
+    def test_input_error_runs_the_safety_callback_before_any_output(self):
+        # stdout blocks until the EOF callback (the conditional disarm) has run;
+        # a write that comes first waits out the timeout and is recorded.
+        disarmed = threading.Event()
+        writes = []
+
+        class _BlockingStdout(io.StringIO):
+            def write(self, text):
+                writes.append((text, disarmed.is_set()))
+                disarmed.wait(timeout=0.5)
+                return super().write(text)
+
+        def run():
+            with (
+                mock.patch.object(builtins, "input", side_effect=OSError(5, "EIO")),
+                contextlib.redirect_stdout(_BlockingStdout()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                ConsoleUI().run(lambda _m: None, lambda: None, disarmed.set)
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(timeout=3.0)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(disarmed.is_set())
+        error_writes = [w for w in writes if "[STDIN] 입력 오류" in w[0]]
+        self.assertEqual(len(error_writes), 1, writes)
+        self.assertTrue(all(done for _text, done in writes), writes)
 
     def test_handler_exception_is_reported_and_the_loop_continues(self):
         handled = []
