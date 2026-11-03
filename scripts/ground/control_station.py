@@ -9,7 +9,7 @@ import time
 
 import pygame
 
-from ground.dashboard_view import (
+from ground.status_format import (
     ALTHOLD_STATE_NAMES,
     IMU_TELEMETRY_FIELDS,
     POSHOLD_STATE_NAMES,

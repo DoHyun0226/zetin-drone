@@ -3088,6 +3088,13 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertEqual(snap["mode"], "pad")
         self.assertEqual(snap["last_sample"]["Failsafe_Phase"], 0)
 
+    def test_station_imports_without_prompt_toolkit(self):
+        module_name = "_control_dualsense_no_ptk_under_test"
+        with mock.patch.dict(sys.modules, {"prompt_toolkit": None}):
+            module, _sock = self._load_module(module_name=module_name)
+        self.addCleanup(sys.modules.pop, module_name, None)
+        self.assertEqual(module._format_optional_int(3), "3")
+
     def test_snapshot_armed_since_follows_the_arm_time(self):
         self.module.is_armed = False
         self.module.last_arm_time = 123.0

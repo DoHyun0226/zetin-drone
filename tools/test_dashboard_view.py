@@ -170,6 +170,31 @@ class RenderTest(unittest.TestCase):
         self.assertNotIn("+0.5/-1.0!", ok)
         self.assertIn("+0.5/-1.0!", bad)
 
+    def test_invalid_height_sentinel_shows_dash(self):
+        t = flatten(render(snap(sample91(Height_M=-1.0)), 100, 30, NOW))
+        self.assertNotIn("-1.00", t)
+        self.assertRegex(t, r"H -\s")
+        t = flatten(render(snap(sample91(Height_M=float("nan"))), 100, 30, NOW))
+        self.assertNotIn("nan", t)
+
+    def test_cw_ccw_uses_the_console_definition(self):
+        yaw = sample75(Motor_M1=1400, Motor_M2=1400, Motor_M3=1600, Motor_M4=1600)
+        self.assertIn("CW-CCW -400", flatten(render(snap(yaw), 100, 30, NOW)))
+        pitch = sample75(Motor_M1=1400, Motor_M2=1600, Motor_M3=1400, Motor_M4=1600)
+        self.assertIn("CW-CCW +0", flatten(render(snap(pitch), 100, 30, NOW)))
+
+    def test_formatters_import_without_prompt_toolkit(self):
+        import subprocess
+        code = (
+            "import sys; sys.modules['prompt_toolkit'] = None; "
+            "sys.path.insert(0, %r); "
+            "import ground.status_format as f; "
+            "assert f._format_optional_int(3) == '3'"
+        ) % str(SCRIPTS)
+        result = subprocess.run([sys.executable, "-I", "-c", code],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_render_does_not_mutate_snapshot(self):
         sn = snap(sample91())
         before = repr(sn)
