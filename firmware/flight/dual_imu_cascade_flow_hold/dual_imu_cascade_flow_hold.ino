@@ -3,6 +3,9 @@
 // 바이트 동일해야 한다(tools/test_flow_hold_sketch.py). 이 파일의 기존 부분을
 // 고칠 때는 dual_imu_cascade_pwm 에도 같은 수정이 필요한지 먼저 본다.
 // 설계: docs/superpowers/plans/2026-10-29-flow-position-hold.md
+// RC 상실 시 거리 기반 자동착륙(range_land.h): 거리가 신선하면 목표 고도를 낮추며
+// 위치 유지를 켠 채 내려오고, 접촉을 확인하면 컷한다. 거리를 못 믿으면 주력과 같은
+// 시간 기반 하강으로 폴백한다. 설계: docs/superpowers/specs/2026-11-03-range-autoland-design.md
 #include <Arduino.h>
 #include <SPI.h>
 #include <Wire.h>
