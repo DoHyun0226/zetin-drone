@@ -1,3 +1,5 @@
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -37,7 +39,11 @@ class DroneVideoTest(unittest.TestCase):
             self.assertTrue(csv_path.with_name(csv_path.stem + "_aligned.csv").exists())
 
     def test_unknown_subcommand_fails(self):
-        self.assertNotEqual(drone_video.main(["bogus"]), 0)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(drone_video.main(["bogus"]), 2)
+        self.assertIn("unknown subcommand: bogus", err.getvalue())
+        self.assertIn("usage:", err.getvalue())
 
     def test_record_default_out_dir_is_repo_logs(self):
         self.assertEqual(camera_record.LOG_DIR, REPO_ROOT / "logs")
