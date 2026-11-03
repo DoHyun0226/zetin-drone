@@ -1700,14 +1700,18 @@ int main() {
     CHECK_MSG(bad.empty(), bad);
   });
 
-  runCase("sil_held_near_object_before_rc_loss_does_not_land", [] {
+  for (bool invalid_first : {false, true}) {
+  // invalid_first: 200 mm 앞에 −1 한 프레임(최종 재검토 Critical: 음수 한 프레임이 추적을 비웠다).
+  runCase(std::string("sil_held_near_object_before_rc_loss_does_not_land") +
+          (invalid_first ? " after -1" : ""), [invalid_first] {
     // 1.5 m 에서 RC 상실 2.5 s 전부터 원값이 200 mm 로 유지되고, 진입 뒤 30 mm 로 내려간다
     // (최종 검토 Critical: 1.226 m 에서 CUT_LANDED). 조종자 고도 유지는 끈다 — 켜 두면 200 mm 를
     // 보고 기체를 끌어올려 다른 시나리오가 된다.
     LandCase c(1.5);
     c.warmup(6000, false);
-    c.run.sensor.range_override = [&c](uint32_t tick, int32_t mm) {
+    c.run.sensor.range_override = [&c, invalid_first](uint32_t tick, int32_t mm) {
       if (tick + 2500 < c.w.disconnect_tick + RC_TIMEOUT_MS) return mm;
+      if (invalid_first && tick + 2500 < c.w.disconnect_tick + RC_TIMEOUT_MS + 35) return (int32_t)-1;
       if (!c.w.entry_tick) return (int32_t)200;
       // 진입 뒤 0.4 m/s 로 낮춘다(추적 허용 안의 속도).
       return std::max((int32_t)30, 200 - (int32_t)lround(0.4 * (tick - c.w.entry_tick)));
@@ -1717,6 +1721,7 @@ int main() {
     CHECK(!c.w.saw_range);
     CHECK(c.w.end_phase != FS_CUT_LANDED);
   });
+  }
 
   runCase("sil_outlier_frame_does_not_disturb_flow_velocity", [] {
     // 광류 프레임과 같은 tick 에 1800 mm 이상값이 오면, 판정 전에 광류가 그 높이로 속도를

@@ -448,17 +448,32 @@ int main() {
   });
 
   runCase("pre_entry_track_expires_after_a_gap", [] {
-    // 2.3 s 무수신 뒤 첫 프레임은 이전 안정 이력을 물려받지 않는다(Codex P1).
+    // 2.3 s 무수신 뒤 첫 프레임은 이전 안정 이력을 물려받지 않는다(Codex P1). 기준은 남아
+    // 있어 그 사이 가까워진 값(130 mm)은 받아들이지 않는다.
     PreRig r;
     r.feed(1000, 1500);
     CHECK(r.stable());
     r.now += 2300;
-    r.feed(35, 130);
+    r.feed(35, 1500);
     CHECK(!r.stable());
-    r.feed(400, 130);
-    CHECK(!r.stable());
-    r.feed(200, 130);
+    r.feed(600, 1500);
     CHECK(r.stable());
+    r.now += 2300;
+    r.feed(3000, 130);
+    CHECK(!r.stable());
+    CHECK(r.tr.ref_mm == 1500);
+  });
+
+  runCase("pre_entry_track_single_invalid_does_not_reset", [] {
+    // −1 한 프레임 뒤 200 mm 를 유지해도 기준이 되지 않는다(최종 재검토 Critical: 음수
+    // 한 프레임이 추적을 비워 1.43 m 에서 CUT_LANDED).
+    PreRig r;
+    r.feed(1000, 1500);
+    r.feed(35, -1);
+    CHECK(!r.stable());
+    r.feed(3000, 200);
+    CHECK(!r.stable());
+    CHECK(r.tr.ref_mm == 1500);
   });
 
   runCase("pre_entry_track_rejects_a_fast_walk", [] {
@@ -542,6 +557,29 @@ int main() {
     CHECK(rig.out.stage == RL_STAGE_APPROACH || rig.out.stage == RL_STAGE_DESCENT);
     CHECK(peak_drop > 0.0f);
     CHECK(rig.out.drop_us == 0.0f);   // 기준 스로틀 감소를 천천히 되돌렸다
+  });
+
+  runCase("hold_scale_restores_slowly_after_revoke", [] {
+    // 철회 순간 hold_scale 이 1 로 튀면 위치 유지 적용값이 한 tick 에 0→7° 로 돌아온다
+    // (최종 재검토 Important). 1 s 에 걸쳐 되돌린다(8° 상한 × 1/s < 위치 유지 10°/s).
+    Rig rig;
+    rig.start(300);
+    for (int i = 1; i <= 4000 && rig.out.stage < RL_STAGE_NEAR_GROUND; i++) {
+      rig.step(i % kFrameMs == 0 ? std::max(80, 300 - (int)lround(0.12 * i)) : kNoFrame);
+    }
+    rig.run(600, [](int) { return 80; });       // 완전히 감쇠
+    CHECK(rig.out.hold_scale == 0.0f);
+    float prev = rig.out.hold_scale, worst = 0.0f;
+    bool revoked = false;
+    for (int i = 1; i <= 2500; i++) {
+      rig.step(i % kFrameMs == 0 ? std::min(300, 80 + (int32_t)lround(0.2 * i)) : kNoFrame);
+      if (rig.out.stage < RL_STAGE_NEAR_GROUND) revoked = true;
+      worst = std::max(worst, rig.out.hold_scale - prev);
+      prev = rig.out.hold_scale;
+    }
+    CHECK(revoked);
+    checkNear(worst, 0.0, 1.0 / RL_HOLD_RESTORE_MS + 1e-6, "largest hold_scale step");
+    checkNear(rig.out.hold_scale, 1.0, 1e-6, "restored");
   });
 
   runCase("landed_requires_contact_drop", [] {

@@ -34,6 +34,10 @@ static const uint32_t RL_LANDED_HOLD_MS = 400;
 static const float RL_TOUCHDOWN_RAMP_US_S = 100.0f;
 static const uint32_t RL_TOUCHDOWN_MAX_MS = 3000;
 static const uint32_t RL_HOLD_FADE_MS = 500;      // 바닥 근접 뒤 위치 유지 감쇠
+// 바닥 근접 철회 뒤 위치 유지 복원. 적용값 = 후보 × hold_scale 이고 이 곱은 위치 유지의
+// 변화율 제한(10°/s) 뒤라, 후보 상한 8° 를 1 s 에 되돌리면 8°/s 다(최종 재검토 Important:
+// 한 tick 에 1 로 튀어 0→7° 계단).
+static const uint32_t RL_HOLD_RESTORE_MS = 1000;
 static const uint32_t RL_INVALID_GRACE_MS = 300;  // ALTHOLD_SUSPEND_S 와 같은 성격
 static const uint32_t RL_MAX_MS = 12000;
 // 바닥 근접 뒤 신선한 채택값이 이만큼 이상으로 돌아오면 바닥 근접을 철회한다(상승 외란).
@@ -53,8 +57,9 @@ static const uint32_t RL_RATE_WINDOW_MS = 300;
 // 올라간 경우처럼 진짜로 바닥이 가까워진 경우는 그동안 시간 기반 하강을 쓴다.
 static const uint32_t RL_ENTRY_STABLE_MS = 500;
 static const uint32_t RL_TRACK_RESET_MS = 1000;
-// 진입 전 추적에서 프레임이 이만큼 끊기면 이전 안정 이력을 버리고 다시 쌓는다. 공백만큼
-// 넓어진 허용폭으로 받은 첫 프레임이 곧바로 안정이 되면 안 된다(Codex 코드 검토 P1).
+// 진입 전 추적에서 프레임이 이만큼 끊기면 이전 안정 이력을 버리고 다시 쌓는다(기준은
+// 남긴다). 공백만큼 넓어진 허용폭으로 받은 첫 프레임이 곧바로 안정이 되면 안 된다(Codex
+// 코드 검토 P1). 허용폭 계산의 공백도 이 값에서 자른다.
 static const uint32_t RL_TRACK_MAX_GAP_MS = 300;
 
 // 텔레메트리 번호다. 뒤에만 덧붙인다.
@@ -111,6 +116,7 @@ struct RangeLandState {
   bool rejecting;            // 마지막 신뢰 프레임이 거부됐다
   uint16_t reject_count;
   float drop_us;
+  float hold_scale;          // 위치 유지 적용 비율(바닥 근접에서 0 쪽, 철회 뒤 천천히 1 로)
 };
 
 struct RangeLandInput {
@@ -196,16 +202,27 @@ static inline void rangeTrackRestart(RangeTrack &t, int32_t raw_mm, uint32_t now
 // 진입 전(무장 중, failsafe 밖) 신선한 신뢰 프레임마다 부른다. 조종자가 0.6 m/s 넘게
 // 오르내리는 중이면 안정으로 보지 않고, 그때 RC 가 끊기면 시간 기반 하강을 쓴다.
 static inline void rangeTrackUpdate(RangeTrack &t, int32_t raw_mm, uint32_t now_ms) {
-  if (raw_mm <= 0) {
-    t.have = false;
-    t.last_frame_ms = now_ms;
+  uint32_t frame_gap = now_ms - t.last_frame_ms;
+  t.last_frame_ms = now_ms;
+  if (!t.have) {
+    if (raw_mm > 0) rangeTrackRestart(t, raw_mm, now_ms);   // 첫 기준(이륙 전 지면부터)
     return;
   }
-  const uint32_t frame_gap = now_ms - t.last_frame_ms;
-  t.last_frame_ms = now_ms;
-  if (!t.have || frame_gap > RL_TRACK_MAX_GAP_MS) {
-    rangeTrackRestart(t, raw_mm, now_ms);
+  // 무효값·공백은 기준을 지우지 않는다. 지우면 그 다음 근접값이 연속성 검사 없이 새 기준이
+  // 된다(최종 재검토 Critical: −1 한 프레임 뒤 200 mm → 1.43 m CUT_LANDED). 안정 이력만 취소한다.
+  if (raw_mm <= 0) {
+    if (!t.rejecting) {
+      t.rejecting = true;
+      t.reject_since_ms = now_ms;
+    }
     return;
+  }
+  if (frame_gap > RL_TRACK_MAX_GAP_MS) {
+    frame_gap = RL_TRACK_MAX_GAP_MS;
+    if (!t.rejecting) {
+      t.rejecting = true;
+      t.reject_since_ms = now_ms;
+    }
   }
   // 허용폭은 직전 프레임과의 공백으로 잰다. 마지막 채택 시각으로 재면 거부가 이어지는 동안
   // 허용폭이 계속 넓어져 유지된 근접값을 결국 받아들인다(하강 추적의 허용폭 고정과 같은 이유).
@@ -245,6 +262,7 @@ static inline void rangeLandStart(RangeLandState &st, float h_now,
   st = RangeLandState{};
   st.enter_ms = now_ms;
   st.h_ref = h_now;
+  st.hold_scale = 1.0f;
   st.ref_mm = range_mm_now;
   st.ref_ms = now_ms;
   st.anchor_mm = range_mm_now;
@@ -380,11 +398,13 @@ static inline RangeLandOutput rangeLandStep(RangeLandState &st,
   out.stage = st.stage;
   out.h_ref = st.h_ref;
   out.drop_us = st.drop_us;
-  if (!near) {
-    out.hold_scale = 1.0f;
+  if (st.stage >= RL_STAGE_NEAR_GROUND) {
+    st.hold_scale -= in.dt_s * 1000.0f / (float)RL_HOLD_FADE_MS;
+    if (st.hold_scale < 0.0f) st.hold_scale = 0.0f;
   } else {
-    const float t = (float)(now - st.near_ground_since_ms) / (float)RL_HOLD_FADE_MS;
-    out.hold_scale = t >= 1.0f ? 0.0f : 1.0f - t;
+    st.hold_scale += in.dt_s * 1000.0f / (float)RL_HOLD_RESTORE_MS;
+    if (st.hold_scale > 1.0f) st.hold_scale = 1.0f;
   }
+  out.hold_scale = st.hold_scale;
   return out;
 }
