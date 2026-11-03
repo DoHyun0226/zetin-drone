@@ -36,10 +36,18 @@ static const uint32_t RL_TOUCHDOWN_MAX_MS = 3000;
 static const uint32_t RL_HOLD_FADE_MS = 500;      // 바닥 근접 뒤 위치 유지 감쇠
 static const uint32_t RL_INVALID_GRACE_MS = 300;  // ALTHOLD_SUSPEND_S 와 같은 성격
 static const uint32_t RL_MAX_MS = 12000;
-// 거리 기반 모드로 들어가려면 진입 직전 신뢰 프레임이 이만큼 연달아 서로 이어져야 한다.
-// RC 가 끊기는 순간의 근접 물체 값을 진입 기준으로 잡지 않기 위해서다(Codex 코드 검토
-// Task 4 P1). 35 ms 주기에 약 105 ms.
-static const uint8_t RL_ENTRY_STABLE_FRAMES = 3;
+// 프레임마다의 허용폭(한 프레임 71 mm, 약 2 m/s) 안 걸음을 이어 붙여 근접값으로 걸어
+// 내려가지 못하게, 300 ms 창의 기준(anchor)에서 본 변화도 50 mm + RL_MAX_VZ_MPS·경과
+// 안이어야 한다. 명령 속도가 아니라 기체가 낼 수 있는 속도에 대한 한계다 — 명령에 대한
+// 여유로 잡으면 추력 변화로 기체가 명령을 벗어날 때마다 센서 이상값으로 폴백한다.
+static const uint32_t RL_RATE_WINDOW_MS = 300;
+// 진입 전 추적(RangeTrack). 거리 기반 모드는 이 추적이 RL_ENTRY_STABLE_MS 동안 거부 없이
+// 이어졌을 때만 고른다. RC 가 끊기는 순간 센서 앞에 온 근접 물체 값을 진입 기준으로 잡지
+// 않기 위해서다(Codex 코드 검토 Task 4 P1 — 연속 프레임 수만 세면 세 프레임 유지된 근접값이
+// 통과했다). 거부가 RL_TRACK_RESET_MS 넘게 이어지면 그 값을 새 바닥으로 다시 잡는다(그만큼
+// 가만히 있는 것은 면이다).
+static const uint32_t RL_ENTRY_STABLE_MS = 500;
+static const uint32_t RL_TRACK_RESET_MS = 1000;
 
 // 텔레메트리 번호다. 뒤에만 덧붙인다.
 enum RangeLandMode : uint8_t {
@@ -87,6 +95,8 @@ struct RangeLandState {
   // 추적 기준. tol_mm·pred_mm 은 채택 뒤 첫 신뢰 프레임이 올 때 한 번 정해진다.
   int32_t ref_mm;
   uint32_t ref_ms;
+  int32_t anchor_mm;         // 300 ms 창 속도 검사의 기준
+  uint32_t anchor_ms;
   bool tol_fixed;
   int32_t tol_mm;
   int32_t pred_mm;
@@ -134,6 +144,69 @@ static inline bool rangeLandFramesConsistent(int32_t prev_mm, int32_t raw_mm,
   return (d < 0 ? -d : d) <= (int64_t)rangeLandTolMm((float)gap_ms);
 }
 
+// 창 기준(anchor)에서 본 변화가 기체 속도 한계 안인가.
+static inline bool rangeLandWindowOk(int32_t anchor_mm, uint32_t anchor_ms,
+                                     int32_t raw_mm, uint32_t now_ms) {
+  const int64_t d = (int64_t)raw_mm - (int64_t)anchor_mm;
+  return (d < 0 ? -d : d) <= (int64_t)rangeLandTolMm((float)(now_ms - anchor_ms));
+}
+
+struct RangeTrack {
+  bool have;
+  int32_t ref_mm;
+  uint32_t ref_ms;
+  int32_t anchor_mm;
+  uint32_t anchor_ms;
+  bool rejecting;
+  uint32_t reject_since_ms;
+  uint32_t stable_since_ms;
+};
+
+static inline void rangeTrackRestart(RangeTrack &t, int32_t raw_mm, uint32_t now_ms) {
+  t.have = true;
+  t.ref_mm = t.anchor_mm = raw_mm;
+  t.ref_ms = t.anchor_ms = now_ms;
+  t.rejecting = false;
+  t.stable_since_ms = now_ms;
+}
+
+// 진입 전(무장 중, failsafe 밖) 신선한 신뢰 프레임마다 부른다. 조종자가 0.6 m/s 넘게
+// 오르내리는 중이면 안정으로 보지 않고, 그때 RC 가 끊기면 시간 기반 하강을 쓴다.
+static inline void rangeTrackUpdate(RangeTrack &t, int32_t raw_mm, uint32_t now_ms) {
+  if (raw_mm <= 0) {
+    t.have = false;
+    return;
+  }
+  if (!t.have) {
+    rangeTrackRestart(t, raw_mm, now_ms);
+    return;
+  }
+  const bool ok =
+      rangeLandFramesConsistent(t.ref_mm, raw_mm, now_ms - t.ref_ms) &&
+      rangeLandWindowOk(t.anchor_mm, t.anchor_ms, raw_mm, now_ms);
+  if (ok) {
+    t.ref_mm = raw_mm;
+    t.ref_ms = now_ms;
+    if (now_ms - t.anchor_ms >= RL_RATE_WINDOW_MS) {
+      t.anchor_mm = raw_mm;
+      t.anchor_ms = now_ms;
+    }
+    if (t.rejecting) {
+      t.rejecting = false;
+      t.stable_since_ms = now_ms;
+    }
+  } else if (!t.rejecting) {
+    t.rejecting = true;
+    t.reject_since_ms = now_ms;
+  } else if (now_ms - t.reject_since_ms >= RL_TRACK_RESET_MS) {
+    rangeTrackRestart(t, raw_mm, now_ms);
+  }
+}
+
+static inline bool rangeTrackStable(const RangeTrack &t, uint32_t now_ms) {
+  return t.have && !t.rejecting && now_ms - t.stable_since_ms >= RL_ENTRY_STABLE_MS;
+}
+
 // 단계의 목표 하강 속도(예측에도 쓴다). 바닥 근접 뒤에는 0 — 기준 스로틀 감소로
 // 내려가며, 예측 중심은 마지막 채택값에 머문다.
 static inline float rangeLandStageSpeed(uint8_t stage) {
@@ -149,6 +222,8 @@ static inline void rangeLandStart(RangeLandState &st, float h_now,
   st.h_ref = h_now;
   st.ref_mm = range_mm_now;
   st.ref_ms = now_ms;
+  st.anchor_mm = range_mm_now;
+  st.anchor_ms = now_ms;
   st.stage = RL_STAGE_DESCENT;
   if (range_mm_now <= rangeLandApproachMm()) {
     st.stage = RL_STAGE_APPROACH;
@@ -178,7 +253,8 @@ static inline RangeLandOutput rangeLandStep(RangeLandState &st,
     const int32_t raw = in.range_mm;
     if (raw > 0) {
       const int64_t err = (int64_t)raw - (int64_t)st.pred_mm;
-      accepted = (err < 0 ? -err : err) <= (int64_t)st.tol_mm;
+      accepted = (err < 0 ? -err : err) <= (int64_t)st.tol_mm &&
+                 rangeLandWindowOk(st.anchor_mm, st.anchor_ms, raw, now);
     }
     // 바닥 근접 진입은 바로 전에 낮은 높이를 지나왔을 때만이다.
     const bool low_recent = st.have_low && now - st.last_low_ms <= RL_CONTINUITY_MS;
@@ -189,6 +265,10 @@ static inline RangeLandOutput rangeLandStep(RangeLandState &st,
     if (accepted) {
       st.ref_mm = raw;
       st.ref_ms = now;
+      if (now - st.anchor_ms >= RL_RATE_WINDOW_MS) {
+        st.anchor_mm = raw;
+        st.anchor_ms = now;
+      }
       st.tol_fixed = false;
       st.rejecting = false;
       if (raw <= rangeLandApproachMm()) {

@@ -510,7 +510,7 @@ struct LandWatch {
   uint32_t fallback_tick = 0, touch_tick = 0;
   uint8_t end_phase = FS_NONE, cut_reason = RL_CUT_NONE;
   bool saw_range = false, saw_timed = false, saw_fallback = false;
-  double h_at_end = -1.0, h_at_near = -1.0, vh_at_touch = 0.0, prev_vh = 0.0;
+  double h_at_end = -1.0, h_at_near = -1.0, vh_at_touch = 0.0, prev_vh = 0.0, h_at_fallback = -1.0;
   int prev_req = 0, req_before_fallback = 0, req_at_entry_before = 0, req_at_entry = 0;
   bool req_rose_after_near = false, req_rose_after_fallback = false;
   double min_h_near = 1e9, max_rise_near = 0.0, max_vh_up_near = 0.0;
@@ -573,6 +573,7 @@ struct LandCase {
     }
     if (descending && rl_mode == RL_MODE_TIMED_FALLBACK && !w.fallback_tick) {
       w.fallback_tick = tick;
+      w.h_at_fallback = s.h;
       w.saw_fallback = true;
       w.req_before_fallback = w.prev_req;
     }
@@ -1322,13 +1323,17 @@ int main() {
   });
 
   runCase("sil_fallback_does_not_raise_collective", [] {
-    // 호버 추정이 +80 us 틀렸으면 시간 기반 하강값(추정 − 60)이 실제로 내던 collective
-    // 보다 높다. 상한이 없으면 폴백 순간 위로 튄다.
+    // 하강 중 추력이 서서히 30 % 늘면(실제 필요한 collective 가 호버 추정보다 낮아짐)
+    // 시간 기반 하강값(추정 − 60)이 실제로 내던 collective 보다 높다. 상한이 없으면 폴백
+    // 순간 위로 튄다.
     LandCase c(1.2);
     c.warmup();
+    c.run.P.thrust_scale_at = [&c](uint32_t tick) {
+      if (!c.w.entry_tick || tick <= c.w.entry_tick) return 1.0;
+      return std::min(1.3, 1.0 + 0.3 * (tick - c.w.entry_tick) / 3000.0);
+    };
     c.extra = [&c](uint32_t tick) {
-      if (tick >= c.w.disconnect_tick && fs_phase == FS_NONE) forceHoverEstimate(1420.0f);
-      if (rl_mode == RL_MODE_RANGE && c.run.s.h < 0.8 &&
+      if (rl_mode == RL_MODE_RANGE && c.run.s.h < 0.6 &&
           c.run.sensor.range_off_to == 0) {
         c.run.sensor.range_off_from = tick;
         c.run.sensor.range_off_to = tick + 6000;
@@ -1337,8 +1342,9 @@ int main() {
     c.land();
     CHECK(c.w.saw_range);
     CHECK(c.w.fallback_tick != 0);
-    CHECK_MSG(c.w.req_before_fallback < 1420 - FS_DESCENT_DELTA_US,
-              "cap not exercised, req=" + fmt(c.w.req_before_fallback));
+    CHECK_MSG(c.w.req_before_fallback < 1340 - FS_DESCENT_DELTA_US,
+              "cap not exercised, req=" + fmt(c.w.req_before_fallback) +
+              " h@fallback=" + fmt(c.w.h_at_fallback));
     CHECK(!c.w.req_rose_after_fallback);
   });
 
@@ -1538,29 +1544,63 @@ int main() {
     CHECK(c.w.end_phase != FS_CUT_LANDED);
   });
 
-  runCase("sil_near_object_at_entry_tick_uses_timed", [] {
-    // 1.5 m 에서 RC 가 끊기는 순간 근접 물체 값(200 mm)이 들어오고 130→60→30 mm 로
-    // 이어진다. 그 값을 진입 기준으로 잡으면 공중 1 m 위에서 착지로 간다(Codex P1).
-    LandCase c(1.5);
+  for (uint32_t lead : {40u, 110u, 400u}) {
+    // 1.5 m 에서 RC 가 끊기기 lead ms 전부터 근접 물체 값(200 mm)이 들어오고, 진입 뒤
+    // 130→60→30 mm 로 이어진다. 그 값을 진입 기준으로 잡으면 공중 1 m 위에서 착지로
+    // 간다(Codex P1: 세 프레임만 유지돼도 연속 카운터를 통과했다).
+    runCase("sil_near_object_at_entry_tick_uses_timed lead " + fmt(lead), [lead] {
+      LandCase c(1.5);
+      c.warmup();
+      uint32_t first = 0;
+      c.run.sensor.range_override = [&](uint32_t tick, int32_t mm) {
+        if (tick + lead < c.w.disconnect_tick + RC_TIMEOUT_MS) return mm;
+        if (!first) first = tick;
+        if (!c.w.entry_tick) return (int32_t)200;
+        const uint32_t k = (tick - c.w.entry_tick) / 35;
+        return k == 0 ? (int32_t)130 : (k == 1 ? (int32_t)60 : (int32_t)30);
+      };
+      c.land(8000);
+      CHECK(first != 0);
+      CHECK(c.w.entry_tick != 0);
+      CHECK(first <= c.w.entry_tick);
+      CHECK_MSG(!c.w.saw_range, "range mode chosen from a near-object entry value");
+      CHECK(c.w.end_phase != FS_CUT_LANDED);
+    });
+  }
+
+  runCase("sil_stale_consumed_frame_does_not_pollute_vz", [] {
+    // 정상 1500 mm 사이에, 이미 165 ms 지난 200 mm 신뢰 프레임이 늦게 소비된다(Codex P2).
+    // 그 값을 높이 추정에 넣으면 다음 정상 프레임 뒤 가짜 상승속도가 고도 제어에 남는다.
+    LandCase c(1.6);
     c.warmup();
-    uint32_t first = 0;
-    int idx = 0;
-    c.run.sensor.range_override = [&](uint32_t tick, int32_t mm) {
-      if (tick + 40 < c.w.disconnect_tick + RC_TIMEOUT_MS) return mm;
-      if (!first) first = tick;
-      static const int32_t seq[] = {200, 130, 60, 30};
-      return idx < 4 ? seq[idx++] : (int32_t)30;
+    uint32_t seen = 0, spiked = 0;
+    double vh_before = 0.0, worst = 0.0;
+    c.extra = [&](uint32_t tick) {
+      if (!spiked && rl_mode == RL_MODE_RANGE && c.w.entry_tick &&
+          tick >= c.w.entry_tick + 1000) {
+        portENTER_CRITICAL(&flowSensorMux);
+        if (flowSensorSnapshot.range_seq != seen && seen != 0) {
+          flowSensorSnapshot.range_mm = 200;
+          flowSensorSnapshot.range_t_us -= 165000;
+          spiked = tick;
+          vh_before = c.run.s.vh;
+        }
+        seen = flowSensorSnapshot.range_seq;
+        portEXIT_CRITICAL(&flowSensorMux);
+      } else if (!spiked) {
+        portENTER_CRITICAL(&flowSensorMux);
+        seen = flowSensorSnapshot.range_seq;
+        portEXIT_CRITICAL(&flowSensorMux);
+      }
+      if (spiked && tick > spiked && tick < spiked + 600) {
+        worst = std::max(worst, std::fabs(c.run.s.vh - vh_before));
+      }
     };
-    double h_at_cut = -1.0;
-    c.extra = [&](uint32_t) {
-      if (c.w.end_tick && h_at_cut < 0.0) h_at_cut = c.run.s.h;
-    };
-    c.land(8000);
-    CHECK(first != 0);
-    CHECK(c.w.entry_tick != 0);
-    CHECK(first <= c.w.entry_tick);
-    CHECK_MSG(!c.w.saw_range, "range mode chosen from a near-object entry value");
-    CHECK(c.w.end_phase != FS_CUT_LANDED);
+    c.land();
+    CHECK(spiked != 0);
+    CHECK(!c.w.saw_fallback);
+    CHECK_MSG(worst < 0.05, "vertical speed disturbed by " + fmt(worst));
+    CHECK(c.w.end_phase == FS_CUT_LANDED);
   });
 
   runCase("sil_single_rejected_frame_does_not_kick_althold", [] {

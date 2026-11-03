@@ -385,7 +385,88 @@ int main() {
     CHECK(!rangeLandFramesConsistent(1500, -1, 35));
     CHECK(!rangeLandFramesConsistent(1500, INT32_MIN, 35));
     CHECK(rangeLandFramesConsistent(1500, 1300, 300));    // 결손 300 ms 뒤면 230 mm 까지
-    CHECK(RL_ENTRY_STABLE_FRAMES == 3);
+  });
+
+  // 진입 전 추적기(.ino 가 무장 중 매 신뢰 프레임마다 갱신). 거리 기반 모드는 이 추적이
+  // RL_ENTRY_STABLE_MS 동안 거부 없이 이어졌을 때만 고른다.
+  struct PreRig {
+    RangeTrack tr{};
+    uint32_t now = 10000;
+    void feed(int ms, int32_t raw) {
+      for (int i = 1; i <= ms; i++) {
+        now++;
+        if (now % kFrameMs == 0) rangeTrackUpdate(tr, raw, now);
+      }
+    }
+    bool stable() const { return rangeTrackStable(tr, now); }
+  };
+
+  runCase("pre_entry_track_needs_history", [] {
+    PreRig r;
+    r.feed(400, 1500);
+    CHECK(!r.stable());
+    r.feed(200, 1500);
+    CHECK(r.stable());
+  });
+
+  runCase("pre_entry_track_rejects_a_held_near_object", [] {
+    // 진입 −70/−35/0 ms 에 200 mm 가 세 프레임 이어져도 기준이 되지 않는다(Codex P1).
+    PreRig r;
+    r.feed(1000, 1500);
+    CHECK(r.stable());
+    r.feed(105, 200);
+    CHECK(!r.stable());
+    CHECK(r.tr.ref_mm == 1500);
+    r.feed(800, 200);                 // 1 s 가 안 됐다: 아직 거부 중
+    CHECK(!r.stable());
+    r.feed(700, 200);                 // 1 s 넘게 그대로면 새 바닥으로 다시 잡고 500 ms 를 쌓는다
+    CHECK(r.stable());
+    CHECK(r.tr.ref_mm == 200);
+  });
+
+  runCase("pre_entry_track_breaks_on_out_of_range", [] {
+    PreRig r;
+    r.feed(1000, 1500);
+    r.feed(35, -1);
+    CHECK(!r.stable());
+    r.feed(400, 1500);
+    CHECK(!r.stable());
+    r.feed(200, 1500);
+    CHECK(r.stable());
+  });
+
+  runCase("pre_entry_track_rejects_a_fast_walk", [] {
+    // 한 프레임 허용폭 안의 걸음(70 mm)을 이어 붙여도 300 ms 창의 속도 검사에 걸린다.
+    PreRig r;
+    r.feed(1000, 1500);
+    int32_t v = 1500;
+    for (int k = 0; k < 6; k++) {
+      v -= 70;
+      r.feed(35, v);
+    }
+    CHECK(!r.stable());
+  });
+
+  runCase("window_rate_blocks_a_walk_after_entry", [] {
+    // 1.5 m 에서 근접값이 한 프레임 70 mm 씩(2 m/s) 걸어 내려온다. 한 프레임 허용폭(71 mm)만
+    // 보면 끝까지 따라간다. 300 ms 창의 속도 한계(0.6 m/s)에 걸려 거부가 이어지고 폴백한다.
+    Rig rig;
+    rig.start(1500);
+    rig.hold(500, 1500);
+    rig.run(2000, [](int i) { return std::max(20, 1500 - 70 * (i / kFrameMs)); });
+    CHECK(rig.max_stage < RL_STAGE_NEAR_GROUND);
+    CHECK(rig.st.ref_mm >= 1200);
+    CHECK(rig.action == RL_FALLBACK);
+  });
+
+  runCase("window_allows_a_climb_the_drone_can_make", [] {
+    // 추력이 늘어 기체가 0.4 m/s 로 오르면 명령(하강)과 어긋나도 센서 이상값이 아니다.
+    Rig rig;
+    rig.start(1000);
+    rig.hold(300, 1000);
+    rig.run(1000, [](int i) { return 1000 + (int32_t)lround(0.4 * i); });
+    CHECK(rig.st.reject_count == 0);
+    CHECK(rig.action == RL_CONTINUE);
   });
 
   runCase("landed_requires_contact_drop", [] {

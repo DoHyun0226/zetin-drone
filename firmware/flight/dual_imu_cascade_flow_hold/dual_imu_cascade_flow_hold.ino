@@ -835,7 +835,7 @@ volatile float rl_h_ref = 0.0f;
 int32_t rlRangeMm = -1;
 uint32_t rlRangeTUs = 0;
 bool rlRangeSeen = false;
-uint8_t rlRangeStable = 0;   // 연달아 서로 이어진 신뢰 프레임 수
+RangeTrack rlPreTrack = {};   // 진입 전 추적(무장 중 매 신선한 신뢰 프레임)
 // 요청 = allocator 입력(base + 고도 보정), 전달 = allocator 출력 collective.
 volatile int rl_requested_collective_us = 1000;
 volatile float rl_delivered_collective_us = 1000.0f;
@@ -918,7 +918,7 @@ static inline void resetFlowHoldForHarness() {
   rlRangeMm = -1;
   rlRangeTUs = 0;
   rlRangeSeen = false;
-  rlRangeStable = 0;
+  rlPreTrack = RangeTrack{};
   rl_requested_collective_us = 1000;
   rl_delivered_collective_us = 1000.0f;
   publishFlowHoldTelemetry(FlowHoldTelemetry());
@@ -1997,15 +1997,15 @@ void pid_task(void *pv) {
       rangeSeqSeen = sensorSnap.range_seq;
       // Core 0 가 막혔다 풀리며 꺼낸 프레임은 시각을 믿을 수 없다. 현재 시각으로
       // 차분하면 가짜 수직속도가 고도 유지에 들어간다(재검토 코드 P1-3). 버린다.
-      if (sensorSnap.range_timing_ok) {
+      // 늦게 소비돼 이미 수명이 지난 프레임도 시각 차분에 쓰지 않는다 — 다음 정상 프레임
+      // 뒤 가짜 수직속도가 남는다(Codex 코드 검토 Task 4 P2).
+      const bool rangeFrameFresh =
+          (uint32_t)(nowUs - sensorSnap.range_t_us) <= FLOW_HEIGHT_MAX_AGE_US;
+      if (sensorSnap.range_timing_ok && rangeFrameFresh) {
         heightBeforeFrame = heightEst;
         heightUpdate(heightEst, sensorSnap.range_mm, sensorSnap.range_t_us,
                      angleX, angleY);
-        const uint32_t gapMs = (sensorSnap.range_t_us - rlRangeTUs) / 1000U;
-        rlRangeStable =
-            rlRangeSeen && rangeLandFramesConsistent(rlRangeMm, sensorSnap.range_mm, gapMs)
-                ? (uint8_t)min((int)rlRangeStable + 1, 255)
-                : (uint8_t)(sensorSnap.range_mm > 0 ? 1 : 0);
+        rangeTrackUpdate(rlPreTrack, sensorSnap.range_mm, sensorSnap.range_t_us / 1000U);
         rlRangeMm = sensorSnap.range_mm;
         rlRangeTUs = sensorSnap.range_t_us;
         rlRangeSeen = true;
@@ -2186,7 +2186,7 @@ void pid_task(void *pv) {
         rl_base_ceiling = ceiling;
         startTimedDescent();
         if (heightFresh && rlRangeFresh && rlRangeMm > 0 &&
-            rlRangeStable >= RL_ENTRY_STABLE_FRAMES) {
+            rangeTrackStable(rlPreTrack, rlRangeTUs / 1000U)) {
           rl_mode = RL_MODE_RANGE;
           rangeLandStart(rangeLand, heightEst.h_m, rlRangeMm, nowMs);
           rl_stage = rangeLand.stage;
