@@ -167,10 +167,10 @@ _STYLE_RULES = {
     "disarmed": "bg:ansigreen fg:ansiblack bold",
     "alert": "fg:ansired bold",
     "warn": "fg:ansiyellow",
-    "dim": "fg:ansibrightblack",
+    "dim": "fg:ansicyan",
     "ok": "fg:ansigreen",
     "value": "",
-    "event-time": "fg:ansibrightblack",
+    "event-time": "fg:ansicyan",
     "input": "",
 }
 

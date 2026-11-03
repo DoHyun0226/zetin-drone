@@ -832,5 +832,15 @@ class MakeUITest(unittest.TestCase):
         self.assertIn("[WARN] prompt_toolkit 없음 - 줄 출력으로 실행", out.getvalue())
 
 
+class DashboardStyleContrastTest(unittest.TestCase):
+    def test_no_style_uses_bright_black_foreground(self):
+        # ANSI bright black is the background colour in some terminal themes
+        # (kitty, 2026-11-03 bench): labels and event times became invisible.
+        from ground import station_ui
+        for name, rule in station_ui._STYLE_RULES.items():
+            with self.subTest(style=name):
+                self.assertNotIn("fg:ansibrightblack", rule)
+
+
 if __name__ == "__main__":
     unittest.main()
