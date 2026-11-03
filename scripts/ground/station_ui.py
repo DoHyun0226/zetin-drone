@@ -162,6 +162,23 @@ _FIXED_ROWS = 3                 # event title + separator + input line
 _MIN_EVENT_ROWS = 1
 _PAD_HINTS = "X 시동  △ 복구  R2/L2 스로틀  ? 도움말 "
 _LISTEN_HINTS = "? 도움말 "
+def _wrap_cells(text, width):
+    """Split ``text`` into pieces that each fit ``width`` terminal cells."""
+    from prompt_toolkit.utils import get_cwidth
+
+    width = max(1, width)
+    pieces, current, used = [], [], 0
+    for char in text:
+        cells = get_cwidth(char)
+        if current and used + cells > width:
+            pieces.append("".join(current))
+            current, used = [], 0
+        current.append(char)
+        used += cells
+    pieces.append("".join(current))
+    return pieces
+
+
 _STYLE_RULES = {
     "armed": "bg:ansired fg:ansiwhite bold",
     "disarmed": "bg:ansigreen fg:ansiblack bold",
@@ -392,10 +409,13 @@ class DashboardUI:
             available = max(_MIN_EVENT_ROWS, height - _FIXED_ROWS - len(self._panel_rows()))
             with self._lock:
                 entries = list(self._events)[-available:]
-            rows = [
-                [("class:event-time", f"{stamp} "), (style, text)]
-                for stamp, text, style in entries
-            ]
+            rows = []
+            for stamp, text, style in entries:
+                lead = f"{stamp} "
+                indent = " " * len(lead)
+                for i, chunk in enumerate(_wrap_cells(text, width - len(lead))):
+                    rows.append([("class:event-time", lead if i == 0 else indent), (style, chunk)])
+            rows = rows[-available:]
         except Exception as error:
             rows = [[("class:alert", f"[대시보드] 사건 그리기 오류: {error!r}")]]
         self._drawn_events = rows

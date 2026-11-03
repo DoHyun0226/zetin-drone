@@ -842,5 +842,25 @@ class DashboardStyleContrastTest(unittest.TestCase):
                 self.assertNotIn("fg:ansibrightblack", rule)
 
 
+class DashboardEventWrapTest(unittest.TestCase):
+    def test_long_event_wraps_instead_of_being_cut(self):
+        # 2026-11-03 bench: the [GAINS] reply ran past the right edge and the
+        # numbers after the edge were never shown.
+        from prompt_toolkit.utils import get_cwidth
+        from ground.station_ui import DashboardUI
+        ui = DashboardUI()
+        ui._size = lambda: (80, 30)
+        ui._panel_rows = lambda: []
+        text = "[GAINS] " + " ".join(f"Kp_rate{i}=0.{i:03d} 게인{i}" for i in range(20))
+        ui.event(text)
+        ui._event_fragments()
+        rows = ui._drawn_events
+        self.assertGreater(len(rows), 1)
+        for row in rows:
+            self.assertLessEqual(get_cwidth("".join(part for _, part in row)), 80)
+        shown = "".join(part for row in rows for style, part in row if style != "class:event-time")
+        self.assertEqual(shown.replace(" ", ""), text.replace(" ", ""))
+
+
 if __name__ == "__main__":
     unittest.main()
