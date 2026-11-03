@@ -1270,7 +1270,7 @@ def controller_thread():
         last_btn_resume = btn_resume
 
         if is_streaming:
-            # 실측 매핑(gamepad_probe): R1=b5, L1=b4, R2=a5, L2=a2 (트리거 휴지 -1.0)
+            # 실측 매핑(--pad-check): R1=b5, L1=b4, R2=a5, L2=a2 (트리거 휴지 -1.0)
             curr_R1 = joy.get_button(5)
             curr_L1 = joy.get_button(4)
             curr_R2 = joy.get_axis(5) > 0.0   # a5 = R2 (휴지 -1.0 → 누르면 +1.0)

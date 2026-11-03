@@ -73,7 +73,7 @@ body frame은 오른손 FLU(x 앞, y 왼쪽, z 위). IMU1 sensor frame 기준
 ### 벤치 부호 점검 절차 (프로펠러 제거 상태)
 
 1. 부팅 후 시리얼에서 `[CALIB] OK`와 rest accel body가 `(≈0, ≈0, ≈+1)`인지 확인.
-2. `monitor_telemetry.py`로 수신하고, 모터는 잠근 상태에서 기체를 손으로 움직여 확인:
+2. `drone_control.py --listen --plot`으로 수신하고, 모터는 잠근 상태에서 기체를 손으로 움직여 확인:
    - 오른쪽으로 기울이면 Roll이 +로 증가
    - 기수를 아래로 숙이면 Pitch가 +로 증가
    - 위에서 볼 때 반시계로 돌리면 Yaw가 +로 증가

@@ -16,11 +16,11 @@
 | 목적 | 도구 | 실행 조건과 출력 |
 |---|---|---|
 | 조종·stdin 명령·CSV·raw 기록 | `drone_control.py` | 현행 기본 지상국. 게임패드 USB 연결, `Drone_Tuning` 접속 |
-| 축·버튼 번호 확인 | `gamepad_probe.py` | 드론에 명령을 보내지 않음. 처음 0.7초 손을 떼고 각 입력을 하나씩 확인 |
-| 입력값 연속 표시 | `test_dualsense_input.py` | 로컬 입력 진단. 화면의 RX/RY/L2 라벨은 예시 매핑이므로 축 번호를 실측 |
+| 축·버튼 번호 확인 | `drone_control.py --pad-check` | 드론에 아무것도 보내지 않음(소켓 없음). 처음 0.7초 손을 떼고 각 입력을 하나씩 확인 |
+| 입력값 연속 표시 | `drone_control.py --pad-check --live` | 로컬 입력 진단. 한 줄에 모든 축·버튼·햇 값을 표시. 번호는 실측 |
 | 게임패드 없는 명령 콘솔 | `drone_control.py --keyboard` | 설정·읽기용. RC 송신 없음, `start`·`resume` 거부, 종료 시 자동 송신 없음(`stop`은 직접 입력), 로그 파일 없음 |
 | 수신·표시·CSV·raw 기록 | `drone_control.py --listen` | 수신 전용. `connect` 외에는 보내지 않음(입력줄 명령·트림 재동기화·종료 시 disarm 없음) |
-| 실시간 그래프·CSV 기록 | `monitor_telemetry.py` | GUI 필요. 조종·정지 명령 없음 |
+| 실시간 그래프·CSV 기록 | `drone_control.py --listen --plot` | GUI 필요. `connect` 외에는 보내지 않음 |
 | 비행 CSV 요약·그래프 | `drone_logs.py flight` | 오프라인. 대상 `flight_log_*.csv` 경로를 명시 |
 | 프로브 분포 분석 | `drone_logs.py probe` | 오프라인 연구용. 결과가 현행 착지컷에 연결되지는 않음 |
 | raw 바이너리 → CSV | `drone_logs.py imuraw` | 오프라인. 원본 `.bin` 보존, 출력 CSV 생성/덮어쓰기 |
@@ -33,9 +33,9 @@
 `--keyboard`의 명령이나 `--listen`·수신기의 `connect`가 조종 지상국의 데이터를 가져갈 수 있다.
 DualSense 조종 중 상태 확인과 로그 기록도 같은 `ground/control_station.py`에서 한다.
 
-`monitor_telemetry.py`는 현재 raw 바이너리 분기가
+`--listen --plot`(`ground/monitor_plot.py`)는 현재 raw 바이너리 분기가
 없다. 펌웨어 raw가 켜져 있으면 `ZIMU`·`ZCAL`을 불량 텔레메트리로 집계하며
-저장하지 않는다. raw까지 받을 세션은 `drone_control.py`(`--listen` 포함)를 사용한다.
+저장하지 않는다. raw까지 받을 세션은 `--plot` 없는 `drone_control.py`(`--listen` 포함)를 사용한다.
 독립 수신기만 사용할 벤치에서는 모터를 정지한 채 기존 콘솔에서 `raw off`를
 보내고 그 콘솔을 종료한 뒤 수신기를 실행한다.
 이 설정은 드론 재부팅 후 유지되지 않는다.
@@ -43,7 +43,7 @@ DualSense 조종 중 상태 확인과 로그 기록도 같은 `ground/control_st
 ## DualSense 시작·조종·정지
 
 ```bash
-python scripts/gamepad_probe.py
+python scripts/drone_control.py --pad-check
 PYTHONPATH=scripts python -m ground.control_station
 ```
 

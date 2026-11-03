@@ -2,8 +2,8 @@
 
 조종과 함께 기록할 때는 [`ground/control_station.py`](../scripts/ground/control_station.py)를
 사용한다. 수신 전용 `drone_control.py --listen`도 같은 CSV·raw를 기록하고,
-`--keyboard`는 로그 파일을 만들지 않는다. 단독 수신기 `monitor_telemetry.py`도
-비행 CSV를 만들지만 raw 바이너리는 저장하지 않는다. UDP 수신 도구를 동시에 실행하면
+`--keyboard`는 로그 파일을 만들지 않는다. `drone_control.py --listen --plot`
+(`ground/monitor_plot.py`)도 비행 CSV를 만들지만 raw 바이너리는 저장하지 않는다. UDP 수신 도구를 동시에 실행하면
 텔레메트리 목적지가 바뀌므로 [도구별 사용 조건](../scripts/README.md)을 따른다.
 
 ## 어떤 파일인가

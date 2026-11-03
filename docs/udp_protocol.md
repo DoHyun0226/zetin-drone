@@ -230,7 +230,7 @@ ar|at|ay <value>      # roll / pitch / yaw
 
 수신된 데이터그램은 그 출발지 주소를 텔레메트리 목적지로도 등록한다.
 [`drone_control.py`](../scripts/drone_control.py)(모든 모드)와
-[`monitor_telemetry.py`](../scripts/monitor_telemetry.py)는 이를 위해 주기적으로
+[`ground/monitor_plot.py`](../scripts/ground/monitor_plot.py)(`--listen --plot`)는 이를 위해 주기적으로
 `connect`를 보낸다.
 
 ### RC 순서와 카운터

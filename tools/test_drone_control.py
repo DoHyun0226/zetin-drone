@@ -72,7 +72,9 @@ class DroneControlTest(unittest.TestCase):
         self.assertIn("--keyboard", out)
 
     def test_invalid_arguments_do_not_import_the_station(self):
-        for argv in (["--keyboard", "--listen"], ["--bogus"], ["--pad-check"], ["--plot"]):
+        for argv in (["--keyboard", "--listen"], ["--bogus"], ["--plot"],
+                     ["--pad-check", "--listen"], ["--plot", "--keyboard"],
+                     ["--pad-check", "--plain"], ["--listen", "--plot", "--no-mag"]):
             with self.subTest(argv=argv):
                 code, _out, err = self._main_without_station(argv)
                 self.assertNotEqual(code, 0)
@@ -104,6 +106,36 @@ class DroneControlTest(unittest.TestCase):
                 self.assertEqual(seen["name"], STATION)
                 self.assertEqual(seen["argv_at_import"], argv)
                 self.assertEqual(seen["main_argv"], argv)
+
+    def test_pad_check_mode_does_not_import_control_station(self):
+        from ground import pad_check
+
+        with (
+            mock.patch.object(socket, "socket") as make_socket,
+            mock.patch.object(pad_check, "main", return_value=0) as pad_main,
+        ):
+            self.assertEqual(drone_control.main(["--pad-check"]), 0)
+        make_socket.assert_not_called()
+        pad_main.assert_called_once()
+        self.assertNotIn(STATION, sys.modules)
+
+    def test_listen_plot_mode_runs_monitor_plot(self):
+        from ground import monitor_plot
+
+        with (
+            mock.patch.object(socket, "socket") as make_socket,
+            mock.patch.object(monitor_plot, "main", return_value=5) as plot_main,
+        ):
+            self.assertEqual(drone_control.main(["--listen", "--plot"]), 5)
+        make_socket.assert_not_called()
+        plot_main.assert_called_once()
+        self.assertNotIn(STATION, sys.modules)
+
+    def test_plot_without_listen_is_an_error(self):
+        code, _out, err = self._main_without_station(["--plot"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("--plot", err)
+        self.assertIn("--listen", err)
 
 
 if __name__ == "__main__":

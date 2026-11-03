@@ -37,11 +37,11 @@
 | `scripts/Drone_Control_Dualsense.py` | `scripts/ground/control_station.py` | 현행 |
 | `scripts/Drone_Tuning.py` | `scripts/drone_control.py` | 현행 |
 | `scripts/Drone_Reciever.py` | `scripts/drone_control.py` | 현행 |
-| `scripts/Drone_Monitor.py` | `scripts/monitor_telemetry.py` | 현행 |
+| `scripts/Drone_Monitor.py` | `scripts/drone_control.py` | 현행 |
 | `scripts/Drone_Analasys.py` | `scripts/ground/flight_log.py` | 현행 |
 | `scripts/drone_telemetry.py` | `scripts/ground/telemetry_schema.py` | 현행 |
 | `scripts/dual_imu_pid_debug_receiver.py` | `scripts/receive_dual_imu_debug.py` | 현행 |
-| `scripts/Controller_test.py` | `scripts/test_dualsense_input.py` | 현행 |
+| `scripts/Controller_test.py` | `scripts/drone_control.py` | 현행 |
 | `scripts/GPS_Reciever.py` | `scripts/archive/receive_gps_udp_legacy.py` | 보관 |
 | `test/tcp_test.py` | `scripts/archive/test_tcp_legacy.py` | 보관 |
 | `docs/ONBOARDING.md` | `docs/project_overview.md` | 현행 |
