@@ -222,7 +222,8 @@ runCase("sil_mode_switch_is_smooth", ...);
 
 - 진입: 거리 기반 모드는 진입 전 추적(`RangeTrack`, `rangeTrackUpdate`/`rangeTrackStable`)이 `RL_ENTRY_STABLE_MS` 500 ms 동안 거부 없이 이어졌을 때만. 가까운 쪽 점프는 재기준 없음, 먼 쪽 점프는 `RL_TRACK_RESET_MS` 1 s 뒤 재기준, 300 ms 넘는 공백은 재시작. 추적 시각은 millis 축.
 - 추적: 프레임 허용폭(고정 50 mm + 0.6 m/s·공백, 거부 중 고정)에 더해 300 ms 창 검사 `|raw − anchor| ≤ 50 + 0.6·dt`, anchor 자체도 0.6 m/s 로만 움직임. 바닥 근접·접촉에서 예측 속도 0. 목표 고도는 신선한 높이에서만 낮춤.
-- 바닥 근접: 채택값 ≥ `RL_NEAR_REVOKE_MM` 150 mm 이면 철회(접근 하강으로, `drop_us` 천천히 되돌림, 래칫 해제). 래칫이 비상승을 맡고 `no_positive` 는 쓰지 않는다.
+- 바닥 근접: 채택값 ≥ `RL_NEAR_REVOKE_MM` 150 mm 이면 철회(접근 하강으로, `drop_us` 천천히 되돌림, 래칫 해제, `hold_scale` 은 `RL_HOLD_RESTORE_MS` 1 s 에 걸쳐 복원). 래칫이 비상승을 맡고 `no_positive` 는 쓰지 않는다.
+- 진입 전 추적의 무효값(−1)·300 ms 넘는 공백은 기준을 지우지 않고 안정 이력만 취소한다(첫 프레임만 기준을 새로 잡는다).
 - 하강 이득: `k_vz` 120(나머지 계획값). 시작 높이 × 편향 ±30 µs × 처짐 행렬 SIL 로 확정.
 - 프레임 처리: 도착 시각 전 프레임은 다음 tick, 소비 때 이미 150 ms 지난 프레임·`range_timing_ok=false` 프레임은 높이 추정·추적에 넣지 않음. 거부 프레임은 높이 추정을 되돌림. 거리 판정은 광류·위치 유지 계산보다 먼저.
 - resume 인계 중 재진입은 그 순간 요청 collective 를 에피소드 기준 스로틀 상한으로 고정.

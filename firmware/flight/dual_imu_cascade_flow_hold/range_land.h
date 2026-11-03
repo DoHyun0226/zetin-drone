@@ -35,8 +35,9 @@ static const float RL_TOUCHDOWN_RAMP_US_S = 100.0f;
 static const uint32_t RL_TOUCHDOWN_MAX_MS = 3000;
 static const uint32_t RL_HOLD_FADE_MS = 500;      // 바닥 근접 뒤 위치 유지 감쇠
 // 바닥 근접 철회 뒤 위치 유지 복원. 적용값 = 후보 × hold_scale 이고 이 곱은 위치 유지의
-// 변화율 제한(10°/s) 뒤라, 후보 상한 8° 를 1 s 에 되돌리면 8°/s 다(최종 재검토 Important:
-// 한 tick 에 1 로 튀어 0→7° 계단).
+// 변화율 제한(10°/s) 뒤에 걸린다. 복원 몫은 후보 상한 8° × 1/s = 8°/s 이고, 후보 자체 변화
+// (≤ 10°/s)를 더하면 적용값은 최대 약 18°/s 로 변할 수 있다 — 엄격한 상한이 아니라 계단을
+// 없애는 것이 목적이다(최종 재검토 Important: 한 tick 에 1 로 튀어 0→7° 계단).
 static const uint32_t RL_HOLD_RESTORE_MS = 1000;
 static const uint32_t RL_INVALID_GRACE_MS = 300;  // ALTHOLD_SUSPEND_S 와 같은 성격
 static const uint32_t RL_MAX_MS = 12000;
