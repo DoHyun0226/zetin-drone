@@ -93,6 +93,20 @@ class MonitorPlotTest(unittest.TestCase):
             self.assertEqual(monitor.bad_packet_count, 2)
             self.assertEqual(monitor.packet_count, 1)
 
+    def test_raw_imu_datagrams_are_skipped_not_counted_as_bad(self):
+        # 2026-11-03 bench: with the drone's raw IMU stream on, every ZIMU/ZCAL
+        # datagram printed "잘못된 텔레메트리" and was counted as a bad packet.
+        packets = [b"ZIMU\x01\x00\x9f\xe0" + bytes(40), b"ZCAL\x01" + bytes(30), GOOD_PACKET]
+        with tempfile.TemporaryDirectory() as tmp:
+            monitor, _sock, _f = self._monitor(packets, tmp)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                monitor.update(0)
+        self.assertEqual(monitor.bad_packet_count, 0)
+        self.assertEqual(monitor.raw_packet_count, 2)
+        self.assertEqual(monitor.packet_count, 1)
+        self.assertNotIn("잘못된 텔레메트리", out.getvalue())
+
     def test_four_panels(self):
         with tempfile.TemporaryDirectory() as tmp:
             monitor, _s, _f = self._monitor([], tmp)

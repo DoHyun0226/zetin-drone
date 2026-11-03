@@ -111,6 +111,7 @@ class Monitor:
         self.last_handshake = 0.0
         self.packet_count = 0
         self.bad_packet_count = 0
+        self.raw_packet_count = 0   # ZIMU/ZCAL raw IMU datagrams: not telemetry, not recorded here
         self.latest_sample = None
         self.animation = None
 
@@ -128,6 +129,9 @@ class Monitor:
         while True:
             try:
                 data, _ = self.sock.recvfrom(2048)
+                if data[:4] in (b"ZIMU", b"ZCAL"):
+                    self.raw_packet_count += 1
+                    continue
                 line = data.decode("utf-8", errors="strict")
                 if is_gains_packet(line):
                     continue
@@ -295,5 +299,6 @@ def main(argv=None) -> int:
         if monitor is not None:
             plt_close(monitor.fig)
             print(f"✅ 저장 {monitor.packet_count}개, "
-                  f"잘못된 패킷 {monitor.bad_packet_count}개")
+                  f"잘못된 패킷 {monitor.bad_packet_count}개, "
+                  f"raw IMU 데이터그램 {monitor.raw_packet_count}개(기록 안 함)")
     return 0

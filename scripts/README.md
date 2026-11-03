@@ -39,12 +39,9 @@
 `--keyboard`의 명령이나 `--listen`·수신기의 `connect`가 조종 지상국의 데이터를 가져갈 수 있다.
 DualSense 조종 중 상태 확인과 로그 기록도 같은 `drone_control.py`에서 한다.
 
-`--listen --plot`(`ground/monitor_plot.py`)는 현재 raw 바이너리 분기가
-없다. 펌웨어 raw가 켜져 있으면 `ZIMU`·`ZCAL`을 불량 텔레메트리로 집계하며
-저장하지 않는다. raw까지 받을 세션은 `--plot` 없는 `drone_control.py`(`--listen` 포함)를 사용한다.
-독립 수신기만 사용할 벤치에서는 모터를 정지한 채 기존 콘솔에서 `raw off`를
-보내고 그 콘솔을 종료한 뒤 수신기를 실행한다.
-이 설정은 드론 재부팅 후 유지되지 않는다.
+`--listen --plot`(`ground/monitor_plot.py`)는 raw IMU 데이터그램(`ZIMU`·`ZCAL`)을
+알아보고 건너뛴다. 불량 패킷으로 세지 않고 저장하지도 않으며, 종료 때 받은 개수만
+알려 준다. raw까지 받을 세션은 `--plot` 없는 `drone_control.py`(`--listen` 포함)를 사용한다.
 
 ## DualSense 시작·조종·정지
 
