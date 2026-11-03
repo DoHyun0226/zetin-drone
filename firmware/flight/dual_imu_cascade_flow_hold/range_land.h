@@ -204,9 +204,9 @@ static inline RangeLandOutput rangeLandStep(RangeLandState &st,
   const bool near = st.stage >= RL_STAGE_NEAR_GROUND;
   if (!near) {
     out.vz_ref = -rangeLandStageSpeed(st.stage);
-    // 거리를 믿을 수 있을 때만 목표를 낮춘다. 끊긴 동안 내려 두면 복귀 순간 큰
-    // 하강 오차가 된다.
-    if (in.range_fresh && !st.rejecting) st.h_ref += out.vz_ref * in.dt_s;
+    // 신선한 높이가 있을 때만 목표를 낮춘다(거리 끊김·거부·높이 범위 밖에서는 멈춤).
+    // 끊긴 동안 내려 두면 복귀 순간 큰 하강 오차가 된다.
+    if (in.height_fresh && !st.rejecting) st.h_ref += out.vz_ref * in.dt_s;
   } else {
     // 바닥 근접에서는 기준 스로틀 감소로 내려간다. 고도 보정은 .ino 가 올리는
     // 방향을 자른다. 목표는 느린 속도로 계속 낮춰 위로 끌지 않게 한다.

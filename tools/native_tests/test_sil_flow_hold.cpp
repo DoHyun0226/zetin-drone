@@ -147,12 +147,14 @@ std::array<double, 3> integrate(State &s, const Params &P, const Disturbance &d,
     s.h = 0.0;
     s.vh = std::max(0.0, s.vh);
     s.vn = s.ve = 0.0;
+    acc[2] = std::min(acc[2], 0.0);   // 지면이 받친다: 가속도계는 정지 1 g 를 본다
   }
   if (P.tether_floor) {
     const double floor_h = P.tether_floor(tick);
     if (s.h < floor_h) {
       s.h = floor_h;
       s.vh = std::max(0.0, s.vh);
+      acc[2] = std::min(acc[2], 0.0);   // 줄이 받친다
     }
   }
 
@@ -232,7 +234,8 @@ struct SensorModel {
   int corrupt_every = 0;    // n 번째 광류 프레임마다 CRC 손상
   uint32_t range_off_from = std::numeric_limits<uint32_t>::max();
   uint32_t range_off_to = 0;
-  // 착지 상태에서 센서가 읽는 거리(착륙장치 높이). 실측 착지 원값 중앙값 약 30 mm.
+  // 센서가 착륙장치 바닥보다 이만큼 위에 있다(실측 착지 원값 중앙값 약 30 mm). 플랜트
+  // 높이 s.h 는 착륙장치 바닥이고, 거리·광류 기하는 모두 센서 높이 s.h + 이 값으로 계산한다.
   int ground_offset_mm = 0;
   // 참이면 80 mm 미만도 보고한다(실기 3901-L0X 는 착지 상태 18–37 mm 를 보고).
   bool report_short = false;
@@ -272,7 +275,9 @@ struct SensorModel {
     return {off[0], -off[1]};
   }
 
-  void tick(uint32_t tick, const State &s) {
+  void tick(uint32_t tick, const State &plant) {
+    State s = plant;                       // 센서 원점
+    s.h += ground_offset_mm * 0.001;
     // 광류: 100 ms 경계마다 한 구간. 센서 지연만큼 늦게 내보낸다.
     if (tick % 100 == 0) {
       if (have_point) {
@@ -300,7 +305,7 @@ struct SensorModel {
     if (tick % 35 == 0) {
       const auto R = rotation(s);
       const double slant = s.h / std::max(1e-6, R[2][2]);
-      int32_t mm = (int32_t)std::lround(slant * 1000.0) + ground_offset_mm;
+      int32_t mm = (int32_t)std::lround(slant * 1000.0);
       if (noise_mm > 0) {
         noise_state = noise_state * 1664525u + 1013904223u;
         mm += (int32_t)((noise_state >> 16) % (uint32_t)(2 * noise_mm + 1)) - noise_mm;
@@ -662,8 +667,47 @@ int main() {
     };
     run.runTicks(1500);               // 시동 안 함: 떨어져 줄에 걸린다
     CHECK_MSG(std::fabs(run.s.h - 0.05) < 1e-9, "h=" + fmt(run.s.h));
+    // 줄에 걸려 정지한 기체의 가속도계는 1 g 를 본다(지지력 반영).
+    for (int i = 0; i < 4; i++) motorOut[i] = 1000;
+    State hung = run.s;
+    const auto acc = integrate(hung, run.P, Disturbance{}, 2000);
+    CHECK_MSG(std::fabs(acc[2]) < 1e-9, "acc_down at rest on the tether=" + fmt(acc[2]));
     CHECK(std::count(seen.begin(), seen.end(), 30) >= 2);
     CHECK(seen.back() == 80);
+  });
+
+  runCase("sil_ground_offset_moves_the_sensor_origin_for_flow_too", [] {
+    // 오프셋은 센서 높이다. 같은 수평 이동이 센서 높이 0.13 m 에서 보이는 각도는
+    // 0.10 m 일 때의 0.10/0.13 배다.
+    auto flowAngle = [](int offset_mm) {
+      State so;
+      so.h = 0.10 + offset_mm * 0.001;
+      const auto g = SensorModel::boresightHit(so);
+      so.n += 0.01;                    // 기체 1 cm 전진
+      return SensorModel::offset(so, g)[0];
+    };
+    const double a0 = flowAngle(0), a30 = flowAngle(30);
+    CHECK_MSG(std::fabs(a30 / a0 - 0.10 / 0.13) < 0.01, "ratio=" + fmt(a30 / a0));
+    // 펌웨어가 받는 광류도 센서 높이 기준이다: 같은 이동에서 오프셋 30 mm 의 광류 크기는
+    // 오프셋 0 의 약 0.77 배다.
+    auto flowCounts = [](int offset_mm) {
+      Run run;
+      run.s.h = 0.10;
+      resetFirmware(run.s);
+      run.sensor.ground_offset_mm = offset_mm;
+      run.sensor.report_short = true;
+      run.kinematic = [](uint32_t tick, State &s) {
+        s = State(); s.h = 0.10; s.n = 0.2 * tick * kDt; s.vn = 0.2;
+      };
+      run.runTicks(450);
+      return std::make_pair((double)std::labs(msp_flow_x) + std::labs(msp_flow_y),
+                            (int)msp_range_mm);
+    };
+    const auto f0 = flowCounts(0), f30 = flowCounts(30);
+    CHECK_MSG(f0.first > 5.0, "flow counts=" + fmt(f0.first));
+    CHECK_MSG(std::fabs(f30.first / f0.first - 0.10 / 0.13) < 0.08,
+              "flow ratio=" + fmt(f30.first / f0.first));
+    CHECK_MSG(std::abs(f30.second - 130) <= 1, "range=" + fmt(f30.second));
   });
 
   runCase("sil_thrust_scale_and_ground_effect_change_thrust", [] {

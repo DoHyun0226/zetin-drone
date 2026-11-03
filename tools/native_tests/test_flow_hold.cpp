@@ -30,7 +30,7 @@ static void runCase(const std::string &name, const std::function<void()> &body) 
 
 static void checkNear(double actual, double expected, double tol,
                       const char *what) {
-  if (std::fabs(actual - expected) > tol) {
+  if (!std::isfinite(actual) || std::fabs(actual - expected) > tol) {
     throw std::runtime_error(std::string(what) + ": got " +
                              std::to_string(actual) + " want " +
                              std::to_string(expected));
@@ -607,6 +607,20 @@ int main() {
       CHECK(rig.out.state == ALTHOLD_ACTIVE);
     }
     CHECK(rig.out.candidate_us > 5.0f);
+  });
+
+  runCase("althold_external_ref_leaves_adjust", [] {
+    AltRig rig;
+    rig.run(10);
+    rig.in.base_throttle = 1370;      // 조종자 스로틀 변경 → ADJUST
+    rig.run(1);
+    CHECK(rig.out.state == ALTHOLD_ADJUST);
+    rig.in.external_ref = true;
+    rig.in.h_ref_ext = 0.3f;          // 0.2 m 위에 있다 → 내리는 보정
+    rig.run(100);
+    CHECK(rig.out.state == ALTHOLD_ACTIVE);
+    checkNear(rig.ah.h_ref, 0.3, 1e-6, "external target kept");
+    CHECK(rig.out.candidate_us < -5.0f);
   });
 
   runCase("althold_no_positive_clamps_output", [] {

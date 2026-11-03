@@ -376,6 +376,11 @@ static inline AltHoldOutput altHoldStep(AltHold &ah, const AltHoldGains &g,
   if (in.external_ref) {
     ah.h_ref = in.h_ref_ext;
     ah.ref_throttle = in.base_throttle;
+    // 조종자 스로틀 변경(ADJUST) 중에 외부 목표로 넘어오면 ADJUST 를 끝낸다. 남겨 두면
+    // ADJUST 분기가 목표를 현재 높이로 덮는다(Codex 코드 검토 Task 2 P2).
+    if (ah.state == ALTHOLD_ADJUST) {
+      ah.state = in.height_valid ? ALTHOLD_ACTIVE : ALTHOLD_SUSPENDED;
+    }
   }
 
   ah.since_valid_s = in.height_valid ? 0.0f : ah.since_valid_s + dt_s;

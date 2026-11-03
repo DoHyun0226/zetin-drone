@@ -342,21 +342,37 @@ int main() {
   });
 
   runCase("near_ground_prediction_does_not_move", [] {
-    // 바닥 근접에서는 목표 속도 0 — 예측 중심도 그대로다. 30 mm 다음 35 ms 에 99 mm 는
-    // 오차 69 ≤ 허용 71 이라 채택, 102 mm 는 72 로 거부.
-    for (int32_t next : {99, 102}) {
-      Rig rig;
-      rig.start(300);
-      rig.descend(3000, 300, 30);
-      CHECK(rig.max_stage >= RL_STAGE_NEAR_GROUND);
-      CHECK(rig.st.ref_mm == 30);
-      rig.run(1, [](int) { return 0; });               // 직전 프레임 정렬용 빈 tick
-      const uint16_t before = rig.st.reject_count;
-      const uint32_t last = rig.st.ref_ms;
-      while (rig.now < last + 34) rig.step(kNoFrame);
-      rig.step(next);
-      CHECK(rig.st.reject_count == before + (next == 99 ? 0 : 1));
+    // 바닥 근접·접촉 단계에서는 목표 속도 0 — 예측 중심이 마지막 채택값에 머문다.
+    // 80 mm 다음 35 ms 에 149 mm 는 오차 69 ≤ 허용 71 이라 채택, 152 mm 는 72 로 거부.
+    for (uint8_t stage : {RL_STAGE_NEAR_GROUND, RL_STAGE_CONTACT}) {
+      for (int32_t next : {149, 152}) {
+        Rig rig;
+        rig.start(300);
+        for (int i = 1; i <= 4000 && rig.out.stage < stage; i++) {
+          const int32_t v = std::max(80, 300 - (int)lround(0.12 * i));
+          rig.step(i % kFrameMs == 0 ? v : kNoFrame);
+        }
+        CHECK(rig.out.stage == stage);
+        // 같은 단계에서 80 mm 프레임 하나를 더 채택해 기준 시각을 맞춘다.
+        rig.step(80);
+        CHECK(rig.st.ref_mm == 80 && rig.out.stage == stage);
+        const uint16_t before = rig.st.reject_count;
+        const uint32_t last = rig.st.ref_ms;
+        while (rig.now < last + 34) rig.step(kNoFrame);
+        rig.step(next);
+        CHECK(rig.out.stage == stage);
+        CHECK(rig.st.reject_count == before + (next == 149 ? 0 : 1));
+      }
     }
+  });
+
+  runCase("ref_stops_while_height_is_out_of_range", [] {
+    Rig rig;
+    rig.start(1790);
+    rig.hold(35, 1850);                // 추적은 통과하지만 높이 범위(≤ 1.80 m) 밖
+    const float ref = rig.out.h_ref;
+    rig.hold(100, 1850);
+    checkNear(rig.out.h_ref, ref, 1e-6, "target held while height invalid");
   });
 
   runCase("landed_requires_contact_drop", [] {
