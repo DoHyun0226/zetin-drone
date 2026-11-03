@@ -513,8 +513,10 @@ E-0~E-3의 프롭 OFF 검사와 선행 물리 검증을 마친 뒤, 제한된 �
 
 ## Stage F — flow-hold 스케치: 거리 기반 자동착륙
 
-`dual_imu_cascade_flow_hold` 에만 있다. RC 가 끊기는 순간 거리 추정이 신선하면
-거리 기반 하강(`Land_Mode=1`), 아니면 Stage E 의 시간 기반 하강(`Land_Mode=2`)이다.
+`dual_imu_cascade_flow_hold` 에만 있다. RC 가 끊기는 순간 거리 추정이 신선하고 **그 직전 0.5 s
+동안 거리 추적이 끊김·거부 없이 이어졌으면** 거리 기반 하강(`Land_Mode=1`), 아니면 Stage E 의 시간 기반
+하강(`Land_Mode=2`)이다. 패드를 분리하기 전 0.5 s 넘게 높이를 고정해 든다 — 들어 올리거나 내리는 중
+(0.6 m/s 넘게)이거나 센서 앞에 무언가 갑자기 들어왔으면 `Land_Mode=2` 가 정상이다.
 둘 다 `Phase=1` 이므로 모드는 대시보드 `Land` 줄(텔레메트리 92~96, [udp_protocol.md](udp_protocol.md))로
 본다. 상수·판정 규칙의 정본은 [range_land.h](../firmware/flight/dual_imu_cascade_flow_hold/range_land.h),
 설계는 [스펙](superpowers/specs/2026-11-03-range-autoland-design.md)이다.
@@ -557,8 +559,8 @@ F-1 처럼 든 채 거리 기반 하강 중 기체를 수평으로 유지하며 
 바닥 근접까지 내린 뒤 **원값 61~99 mm(예: 80 mm)** 에서 멈춰 든다. 10~60 mm 는 착지
 대역이라 접촉 감소 뒤 착지 컷(`Land_Cut_Reason=1`)이 될 수 있다 — 그 대역에 오래 들고
 있는 것은 정체 시험이 아니다. `Land_Stage=3` 진입 3 s 뒤 `Phase=3`,
-`Land_Cut_Reason=3`(NEAR_GROUND_STUCK)이다. 바닥 근접 뒤 센서 앞을 비우면(수평 유지한 채
-높이 들기) 0.3 s 뒤 `Land_Cut_Reason=2`(NEAR_GROUND_LOSS)다.
+`Land_Cut_Reason=3`(NEAR_GROUND_STUCK)이다. 바닥 근접 뒤 천천히 150 mm 넘게 들어 올리면
+바닥 근접이 철회되어 `Land_Stage` 가 2(APPROACH)로 돌아가야 한다(컷 없음).
 
 ### F-4. 테더 비행 (프롭 장착)
 
@@ -574,7 +576,7 @@ F-1 처럼 든 채 거리 기반 하강 중 기체를 수평으로 유지하며 
 - [ ] F-0: `Hover_Est`=___, 유효까지 ___ s
 - [ ] F-1: 모드·단계 전이 시각 ___, 착지 컷까지 ___ s, `Land_Cut_Reason`=___
 - [ ] F-2: 허공 → 폴백 ___ ms, 폴백 → 컷 ___ ms, `Land_Req_US` 상승 여부 ___
-- [ ] F-3: 정체 컷 ___ ms, 상실 컷 ___ ms
+- [ ] F-3: 정체 컷 ___ ms, 150 mm 넘게 천천히 들었을 때 철회(`Land_Stage` 3→2) ___
 - [ ] F-4: 진입 높이 ___, 착지 컷 여부 ___, 수평 이탈 ___, 테더 간섭 ___
 
 ---

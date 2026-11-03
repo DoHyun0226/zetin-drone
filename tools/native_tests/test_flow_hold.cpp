@@ -652,7 +652,8 @@ int main() {
     checkNear(g.out_max_us, 100.0, 1e-6, "out_max");
     checkNear(g.i_max_us, 60.0, 1e-6, "i_max");
     checkNear(g.k_i, 40.0, 1e-6, "k_i");
-    CHECK(g.k_h == d.k_h && g.k_vz == d.k_vz);
+    checkNear(g.k_vz, 120.0, 1e-6, "k_vz");
+    CHECK(g.k_h == d.k_h);
     CHECK(g.out_max_us < 150.0f);    // CTRL_MARGIN
   });
 

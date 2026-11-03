@@ -216,6 +216,19 @@ runCase("sil_mode_switch_is_smooth", ...);
 - [ ] 테더 비행: 0.5 m 안팎에서 RC 상실 → 착지 컷, 줄은 착지 높이까지 느슨하게
 - [ ] 결과·로그를 원장과 노션 기록 페이지에, 주력 머지 판단은 사용자에게
 
+## 구현 중 바뀐 것 (2026-11-03, 태스크별·최종 Codex 검토 반영)
+
+아래는 위 태스크 본문보다 우선한다. 근거와 시험 이름은 원장(`.superpowers/sdd/2026-11-03-range-autoland/progress.md`)과 커밋 메시지에 있다.
+
+- 진입: 거리 기반 모드는 진입 전 추적(`RangeTrack`, `rangeTrackUpdate`/`rangeTrackStable`)이 `RL_ENTRY_STABLE_MS` 500 ms 동안 거부 없이 이어졌을 때만. 가까운 쪽 점프는 재기준 없음, 먼 쪽 점프는 `RL_TRACK_RESET_MS` 1 s 뒤 재기준, 300 ms 넘는 공백은 재시작. 추적 시각은 millis 축.
+- 추적: 프레임 허용폭(고정 50 mm + 0.6 m/s·공백, 거부 중 고정)에 더해 300 ms 창 검사 `|raw − anchor| ≤ 50 + 0.6·dt`, anchor 자체도 0.6 m/s 로만 움직임. 바닥 근접·접촉에서 예측 속도 0. 목표 고도는 신선한 높이에서만 낮춤.
+- 바닥 근접: 채택값 ≥ `RL_NEAR_REVOKE_MM` 150 mm 이면 철회(접근 하강으로, `drop_us` 천천히 되돌림, 래칫 해제). 래칫이 비상승을 맡고 `no_positive` 는 쓰지 않는다.
+- 하강 이득: `k_vz` 120(나머지 계획값). 시작 높이 × 편향 ±30 µs × 처짐 행렬 SIL 로 확정.
+- 프레임 처리: 도착 시각 전 프레임은 다음 tick, 소비 때 이미 150 ms 지난 프레임·`range_timing_ok=false` 프레임은 높이 추정·추적에 넣지 않음. 거부 프레임은 높이 추정을 되돌림. 거리 판정은 광류·위치 유지 계산보다 먼저.
+- resume 인계 중 재진입은 그 순간 요청 collective 를 에피소드 기준 스로틀 상한으로 고정.
+- 텔레메트리 96 `Land_Req_US` 추가. 92–96 과 36 `Failsafe_Phase` 는 allocation 스냅숏에서 같은 tick 값으로 나간다.
+- 벤치: 거리 상실은 기체를 수평으로 1.9 m 넘게 들어 시험(센서를 기울이면 오버틸트), 정체 컷은 원값 61–99 mm.
+
 ## 자체 검토
 
 - 설계 대응: 4.1 → Task 4 진입, 4.2 → Task 1·2·4, 4.3 → Task 1·4, 4.4 → Task 1·4, 4.5 → Task 4, 5 → Task 5, 6 → Global Constraints, 7 → Task 1·3·4·7.

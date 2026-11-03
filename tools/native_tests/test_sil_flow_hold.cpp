@@ -531,9 +531,9 @@ struct LandCase {
     setTrueCalibration(0);
   }
 
-  void warmup(uint32_t ticks = 6000) {
+  void warmup(uint32_t ticks = 6000, bool pilot_althold = true) {
     run.arm(1340);
-    sendUdp("althold 1");
+    if (pilot_althold) sendUdp("althold 1");
     sendUdp("poshold 1");
     run.runTicks(ticks);
   }
@@ -1253,7 +1253,19 @@ int main() {
   runCase("sil_poshold_applied_during_range_descent", [] {
     LandCase c(1.0, 3.0);
     c.warmup(10000);                   // 위치 유지가 외란을 흡수할 때까지
+    // 바닥 근접 뒤 적용 보정은 후보 × hold_scale(500 ms 에 1→0) 을 넘지 않는다.
+    double worst_excess = 0.0;
+    c.extra = [&](uint32_t) {
+      if (fs_phase != FS_DESCENDING || rl_stage < RL_STAGE_NEAR_GROUND) return;
+      const FlowHoldTelemetry t = readFlowHoldTelemetry();
+      const float since = (float)(millis() - rangeLand.near_ground_since_ms);
+      const float scale = std::max(0.0f, 1.0f - since / (float)RL_HOLD_FADE_MS);
+      const double cand = std::max(std::fabs(t.candidate_roll_deg), std::fabs(t.candidate_pitch_deg));
+      const double appl = std::max(std::fabs(t.applied_roll_deg), std::fabs(t.applied_pitch_deg));
+      worst_excess = std::max(worst_excess, appl - (scale + 0.01) * cand - 1e-3);
+    };
     c.land();
+    CHECK_MSG(worst_excess <= 0.0, "applied exceeded the faded candidate by " + fmt(worst_excess));
     CHECK(c.w.saw_range);
     CHECK(c.w.applied_seen);
     CHECK_MSG(c.w.max_horiz_dev < 0.5, "drift=" + fmt(c.w.max_horiz_dev));
@@ -1599,14 +1611,14 @@ int main() {
     c.land();
     CHECK(spiked != 0);
     CHECK(!c.w.saw_fallback);
-    CHECK_MSG(worst < 0.05, "vertical speed disturbed by " + fmt(worst));
+    CHECK_MSG(worst < 0.1, "vertical speed disturbed by " + fmt(worst));
     CHECK(c.w.end_phase == FS_CUT_LANDED);
   });
 
   runCase("sil_single_rejected_frame_does_not_kick_althold", [] {
     // 1500→200→1500 mm 처럼 한 프레임만 튀면 거부되지만, 그 프레임으로 차분한 수직속도가
-    // 다음 정상 프레임 뒤 고도 제어에 들어가면 하강을 크게 밀어낸다(Codex P2). 수정 전
-    // 0.22 m/s, 추정을 비우면 0.087, 되돌리면 0.016.
+    // 다음 정상 프레임 뒤 고도 제어에 들어가면 하강을 크게 밀어낸다(Codex P2). 하강 이득
+    // k_vz 60 에서 수정 전 0.22 m/s, 추정을 비우면 0.087, 되돌리면 0.016. k_vz 120 에서 0.06.
     LandCase c(1.6);
     c.warmup();
     uint32_t spike = 0;
@@ -1628,7 +1640,7 @@ int main() {
     c.land();
     CHECK(spike != 0);
     CHECK(!c.w.saw_fallback);
-    CHECK_MSG(worst < 0.05, "vertical speed disturbed by " + fmt(worst));
+    CHECK_MSG(worst < 0.1, "vertical speed disturbed by " + fmt(worst));
     CHECK(c.w.end_phase == FS_CUT_LANDED);
   });
 
@@ -1653,6 +1665,84 @@ int main() {
     CHECK(bumped > 20);
     CHECK(!c.w.saw_fallback);
     CHECK(c.w.end_phase == FS_CUT_LANDED);
+  });
+
+  runCase("sil_bias_sag_matrix_lands_softly", [] {
+    // 시작 높이 × 호버 편향(±30 us, 계획 범위) × 배터리 처짐 10 %. 모두 폴백 없이 착지 컷,
+    // 접지 직전 하강 속도 0.5 m/s 미만(최종 검토: −30 us·처짐이 겹치면 정상 값을 거부하고
+    // 폴백해 −2.2 m/s 로 접지했다).
+    std::string bad;
+    for (double h0 : {0.6, 1.0, 1.7}) {
+      for (float bias : {-30.0f, 0.0f, 30.0f}) {
+        for (int sag : {0, 1}) {
+          LandCase c(h0);
+          c.warmup();
+          if (sag) {
+            const uint32_t from = c.run.globalTick + 600;
+            c.run.P.thrust_scale_at = [from](uint32_t tick) {
+              return tick <= from ? 1.0 : std::max(0.9, 1.0 - 0.1 * (tick - from) / 5000.0);
+            };
+          }
+          c.extra = [&c, bias](uint32_t tick) {
+            if (bias != 0.0f && tick >= c.w.disconnect_tick && fs_phase == FS_NONE) {
+              forceHoverEstimate(1340.0f + bias);
+            }
+          };
+          c.land();
+          if (c.w.end_phase != FS_CUT_LANDED || c.w.saw_fallback || c.w.vh_at_touch <= -0.5) {
+            bad += " [h0=" + fmt(h0) + " bias=" + fmt(bias) + " sag=" + fmt(sag) +
+                   " phase=" + fmt(c.w.end_phase) + " fb=" + fmt(c.w.saw_fallback) +
+                   " vh=" + fmt(c.w.vh_at_touch) + "]";
+          }
+        }
+      }
+    }
+    CHECK_MSG(bad.empty(), bad);
+  });
+
+  runCase("sil_held_near_object_before_rc_loss_does_not_land", [] {
+    // 1.5 m 에서 RC 상실 2.5 s 전부터 원값이 200 mm 로 유지되고, 진입 뒤 30 mm 로 내려간다
+    // (최종 검토 Critical: 1.226 m 에서 CUT_LANDED). 조종자 고도 유지는 끈다 — 켜 두면 200 mm 를
+    // 보고 기체를 끌어올려 다른 시나리오가 된다.
+    LandCase c(1.5);
+    c.warmup(6000, false);
+    c.run.sensor.range_override = [&c](uint32_t tick, int32_t mm) {
+      if (tick + 2500 < c.w.disconnect_tick + RC_TIMEOUT_MS) return mm;
+      if (!c.w.entry_tick) return (int32_t)200;
+      // 진입 뒤 0.4 m/s 로 낮춘다(추적 허용 안의 속도).
+      return std::max((int32_t)30, 200 - (int32_t)lround(0.4 * (tick - c.w.entry_tick)));
+    };
+    c.land(11000, 3000);             // 끊김을 늦춰 근접값이 진입 전 2.5 s 유지되게
+    CHECK(c.w.entry_tick != 0);
+    CHECK(!c.w.saw_range);
+    CHECK(c.w.end_phase != FS_CUT_LANDED);
+  });
+
+  runCase("sil_outlier_frame_does_not_disturb_flow_velocity", [] {
+    // 광류 프레임과 같은 tick 에 1800 mm 이상값이 오면, 판정 전에 광류가 그 높이로 속도를
+    // 환산해 수평 속도·가속도 추정이 튄다(최종 검토 Important: 0.29 → 1.55 m/s).
+    LandCase c(0.8, 1.0);
+    c.warmup(8000);
+    uint32_t spike = 0;
+    double base_v = 0.0, worst = 0.0;
+    c.run.sensor.range_override = [&](uint32_t tick, int32_t mm) {
+      if (!spike && rl_mode == RL_MODE_RANGE && c.run.s.h < 0.4 && tick % 700 == 0) {
+        spike = tick;
+        const FlowHoldTelemetry t = readFlowHoldTelemetry();
+        base_v = std::hypot(t.c_roll, t.c_pitch);
+        return (int32_t)1800;
+      }
+      return mm;
+    };
+    c.extra = [&](uint32_t tick) {
+      if (spike && tick > spike && tick < spike + 400) {
+        const FlowHoldTelemetry t = readFlowHoldTelemetry();
+        worst = std::max(worst, std::hypot(t.c_roll, t.c_pitch) - base_v);
+      }
+    };
+    c.land();
+    CHECK(spike != 0);
+    CHECK_MSG(worst < 0.15, "flow velocity jumped by " + fmt(worst));
   });
 
   runCase("sil_tether_floor_5cm_cuts_near_ground", [] {

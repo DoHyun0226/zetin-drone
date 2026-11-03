@@ -289,11 +289,15 @@ static inline AltHoldGains altHoldDefaultGains() {
   return g;
 }
 
-// 거리 기반 자동착륙 하강 전용. 호버 추정이 ±30 us 틀리거나 배터리가 처져도 목표
-// 속도로 내려가도록 출력·적분 한도를 넓힌다(SIL 1 us ≈ 0.029 m/s²). 실기 추력 계수는
-// 미측정이라 SIL 로 정하고 벤치에서 다시 본다. 100 us < CTRL_MARGIN 150 us.
+// 거리 기반 자동착륙 하강 전용. 호버 추정이 ±30 us 틀리거나 배터리가 10 % 처져도 목표
+// 속도로 내려가도록 출력·적분 한도와 속도 이득을 키운다(SIL 1 us ≈ 0.029 m/s²). k_vz 60 은
+// −30 us 편향과 처짐이 겹치면 0.6 m/s 넘게 떨어져 폴백했다 — 시작 높이 0.6/1.0/1.7 m ×
+// 편향 ±30 × 처짐 행렬에서 120 이 전부 착지 컷, 접지 속도 0.36 m/s 이하(SIL
+// sil_bias_sag_matrix_lands_softly). 실기 추력 계수는 미측정이라 벤치에서 다시 본다.
+// 100 us < CTRL_MARGIN 150 us.
 static inline AltHoldGains altHoldDescentGains() {
   AltHoldGains g = altHoldDefaultGains();
+  g.k_vz = 120.0f;
   g.k_i = 40.0f;
   g.i_max_us = 60.0f;
   g.out_max_us = 100.0f;

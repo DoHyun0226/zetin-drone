@@ -90,6 +90,12 @@ struct AllocationTelemetrySample {
   float i_yaw_us;
   int yaw_authority_state;
   int requested_us;          // allocator 입력 collective(같은 tick)
+  // 같은 tick 의 failsafe·착지 상태. Core 0 가 따로 읽으면 resume 초기화와 섞인다.
+  uint8_t fs_phase;
+  uint8_t land_mode;
+  uint8_t land_stage;
+  uint8_t land_cut;
+  float land_ref_m;
 };
 
 static_assert(sizeof(ImuRawSample) == 27, "ZIMU v2 sample must be 27 bytes");
@@ -1593,7 +1599,7 @@ static inline void resetAllocationTelemetry() {
   mixer_yaw_scale = 1.0f;
   allocationTelemetry = {
       false, 1.0f, 1.0f, 1000.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-      YAW_AUTH_NORMAL, 1000};
+      YAW_AUTH_NORMAL, 1000, fs_phase, rl_mode, rl_stage, rl_cut_reason, rl_h_ref};
   portEXIT_CRITICAL(&allocationTelemetryMux);
 }
 
@@ -1604,7 +1610,7 @@ static inline void publishAllocationTelemetry(
   const AllocationTelemetrySample sample = {
       mix.scaled, mix.rp_scale, mix.yaw_scale, mix.collective_us,
       pidRoll, pidPitch, pidYaw, iRoll, iPitch, iYaw, yawAuthorityState,
-      requestedUs};
+      requestedUs, fs_phase, rl_mode, rl_stage, rl_cut_reason, rl_h_ref};
   portENTER_CRITICAL(&allocationTelemetryMux);
   mixer_scaled = sample.scaled;
   allocationTelemetry = sample;
@@ -2020,6 +2026,32 @@ void pid_task(void *pv) {
     }
     const bool rlRangeFresh =
         rlRangeSeen && (uint32_t)(nowUs - rlRangeTUs) <= FLOW_HEIGHT_MAX_AGE_US;
+    // 거리 기반 하강의 판정은 광류·위치 유지보다 먼저 한다. 거부한 프레임의 높이가 광류 속도
+    // 환산·수평 가속도 추정에 들어가지 않게 그 자리에서 되돌린다(최종 검토 Important).
+    RangeLandOutput rlOut;
+    const bool rlStepped =
+        !safety_lock && fs_phase == FS_DESCENDING && rl_mode == RL_MODE_RANGE;
+    if (rlStepped) {
+      RangeLandInput rlIn;
+      rlIn.height_fresh =
+          heightEst.valid &&
+          (uint32_t)(nowUs - heightEst.last_t_us) <= FLOW_HEIGHT_MAX_AGE_US;
+      rlIn.h_m = heightEst.h_m;
+      rlIn.range_mm = rlRangeMm;
+      rlIn.range_fresh = rlRangeFresh;
+      rlIn.range_trusted_new = rlTrustedNew;
+      rlIn.hover_us = hover_est;
+      rlIn.delivered_collective_us = rl_delivered_collective_us;
+      rlIn.dt_s = realDt;
+      rlIn.now_ms = nowMs;
+      rlOut = rangeLandStep(rangeLand, rlIn);
+      if (rlTrustedNew && rangeLand.rejecting) {
+        // 거부된 프레임은 높이 추정에 이미 들어갔다. 그 차분 수직속도가 다음 정상 프레임
+        // 뒤 고도 제어에 남지 않게, 그 프레임을 받기 전 추정으로 되돌린다(Codex 코드 검토
+        // Task 4 P2). 비우면 수직속도를 0 부터 다시 쌓아 그동안 하강을 밀어낸다.
+        heightEst = heightBeforeFrame;
+      }
+    }
     const bool heightFresh =
         heightEst.valid &&
         (uint32_t)(nowUs - heightEst.last_t_us) <= FLOW_HEIGHT_MAX_AGE_US;
@@ -2219,26 +2251,9 @@ void pid_task(void *pv) {
       targetAngleZ = fs_hold_yaw;
       targetYawRate = 0.0f;
     }
-    if (fs_phase == FS_DESCENDING && rl_mode == RL_MODE_RANGE) {
-      // 거리 기반 하강: 판정은 range_land.h, 고도는 외부 목표를 따르는 AltHold.
-      RangeLandInput rlIn;
-      rlIn.height_fresh = heightFresh;
-      rlIn.h_m = heightEst.h_m;
-      rlIn.range_mm = rlRangeMm;
-      rlIn.range_fresh = rlRangeFresh;
-      rlIn.range_trusted_new = rlTrustedNew;
-      rlIn.hover_us = hover_est;
-      rlIn.delivered_collective_us = rl_delivered_collective_us;
-      rlIn.dt_s = realDt;
-      rlIn.now_ms = nowMs;
-      const RangeLandOutput rlOut = rangeLandStep(rangeLand, rlIn);
+    if (rlStepped && fs_phase == FS_DESCENDING && rl_mode == RL_MODE_RANGE) {
+      // 거리 기반 하강: 판정은 위(광류 앞)에서 했다. 고도는 외부 목표를 따르는 AltHold.
       rl_h_ref = rlOut.h_ref;
-      if (rlTrustedNew && rangeLand.rejecting) {
-        // 거부된 프레임은 높이 추정에 이미 들어갔다. 그 차분 수직속도가 다음 정상 프레임
-        // 뒤 고도 제어에 남지 않게, 그 프레임을 받기 전 추정으로 되돌린다(Codex 코드 검토
-        // Task 4 P2). 비우면 수직속도를 0 부터 다시 쌓아 그동안 하강을 밀어낸다.
-        heightEst = heightBeforeFrame;
-      }
       if (rlOut.stage != rl_stage) {
         rl_stage = rlOut.stage;
         Serial.printf(">>> RANGE LAND stage=%d range=%ld\n", (int)rl_stage,
@@ -2276,15 +2291,20 @@ void pid_task(void *pv) {
         rlAh.external_ref = true;
         rlAh.h_ref_ext = rlOut.h_ref;
         rlAh.vz_ref_ext = rlOut.vz_ref;
-        rlAh.no_positive = rlOut.stage >= RL_STAGE_NEAR_GROUND;
+        // 바닥 근접에서 올리는 보정을 막는 것은 아래 래칫이다. 고도 보정 자체를 0 이하로
+        // 자르면(no_positive) 호버 편향을 메우던 적분이 한 번에 빠져 −30 us 편향에서 접지
+        // 속도가 0.64 m/s 가 됐다(최종 검토). 래칫은 합계가 오르지 않게만 한다.
+        rlAh.no_positive = false;
         const AltHoldOutput rlAhOut =
             altHoldStep(rlAltHold, rlAltHoldGains, rlAh, realDt);
         rlAltUs = (int)lroundf(rlAhOut.applied_us);
         if (rlOut.stage >= RL_STAGE_NEAR_GROUND) {
-          // 바닥 근접 뒤 요청 collective 는 오르지 않는다.
+          // 바닥 근접에 있는 동안 요청 collective 는 오르지 않는다.
           const int total = min(rlBase + rlAltUs, rl_collective_cap);
           rl_collective_cap = total;
           rlAltUs = total - rlBase;
+        } else {
+          rl_collective_cap = RL_NO_CAP;   // 철회됐다(떠올랐다): 래칫을 푼다
         }
         rlHoldScale = rlOut.hold_scale;
       }
@@ -2730,11 +2750,11 @@ static void sendTelemetry() {
       readAllocationTelemetrySnapshot();
   const ImuTelemetrySample imuSample = readImuSampleSnapshot();
   const FlowHoldTelemetry flowT = readFlowHoldTelemetry();
-  // 거리 기반 자동착륙(92~96). 1바이트·정렬된 4바이트 값이라 한 번씩 읽어 둔다.
-  const uint8_t landModeSnapshot = rl_mode;
-  const uint8_t landStageSnapshot = rl_stage;
-  const float landRefSnapshot = rl_h_ref;
-  const uint8_t landCutSnapshot = rl_cut_reason;
+  // 거리 기반 자동착륙(92~96)과 36번 단계는 allocation 스냅숏의 같은 tick 값이다.
+  const uint8_t landModeSnapshot = allocationSample.land_mode;
+  const uint8_t landStageSnapshot = allocationSample.land_stage;
+  const float landRefSnapshot = allocationSample.land_ref_m;
+  const uint8_t landCutSnapshot = allocationSample.land_cut;
   const int landReqSnapshot = allocationSample.requested_us;   // 68번과 같은 스냅숏
   float magTelemXSnapshot = 0.0f;
   float magTelemYSnapshot = 0.0f;
@@ -2760,7 +2780,7 @@ static void sendTelemetry() {
              tgtRate[0], tgtRate[1], tgtRate[2], magHeading,
              magTelemXSnapshot, magTelemYSnapshot, magTelemZSnapshot,
              (int)yaw_hold_now,
-             (int)fs_phase, trim_roll, trim_pitch,
+             (int)allocationSample.fs_phase, trim_roll, trim_pitch,
              hoverEstSnapshot, (int)hoverValidSnapshot,
              (int)probeStateSnapshot, (int)probeNoResponseSnapshot,
              probeResponseSnapshot,

@@ -36,6 +36,9 @@ static const uint32_t RL_TOUCHDOWN_MAX_MS = 3000;
 static const uint32_t RL_HOLD_FADE_MS = 500;      // 바닥 근접 뒤 위치 유지 감쇠
 static const uint32_t RL_INVALID_GRACE_MS = 300;  // ALTHOLD_SUSPEND_S 와 같은 성격
 static const uint32_t RL_MAX_MS = 12000;
+// 바닥 근접 뒤 신선한 채택값이 이만큼 이상으로 돌아오면 바닥 근접을 철회한다(상승 외란).
+// 철회하지 않으면 1.27 m 를 채택하면서도 정체 컷을 냈다(최종 검토 Important).
+static const int32_t RL_NEAR_REVOKE_MM = 150;
 // 프레임마다의 허용폭(한 프레임 71 mm, 약 2 m/s) 안 걸음을 이어 붙여 근접값으로 걸어
 // 내려가지 못하게, 300 ms 창의 기준(anchor)에서 본 변화도 50 mm + RL_MAX_VZ_MPS·경과
 // 안이어야 한다. 명령 속도가 아니라 기체가 낼 수 있는 속도에 대한 한계다 — 명령에 대한
@@ -44,8 +47,10 @@ static const uint32_t RL_RATE_WINDOW_MS = 300;
 // 진입 전 추적(RangeTrack). 거리 기반 모드는 이 추적이 RL_ENTRY_STABLE_MS 동안 거부 없이
 // 이어졌을 때만 고른다. RC 가 끊기는 순간 센서 앞에 온 근접 물체 값을 진입 기준으로 잡지
 // 않기 위해서다(Codex 코드 검토 Task 4 P1 — 연속 프레임 수만 세면 세 프레임 유지된 근접값이
-// 통과했다). 거부가 RL_TRACK_RESET_MS 넘게 이어지면 그 값을 새 바닥으로 다시 잡는다(그만큼
-// 가만히 있는 것은 면이다).
+// 통과했다). **더 가까운 쪽으로 뛴 값은 아무리 오래 유지돼도 기준이 되지 않는다** — 유지된
+// 근접 물체를 면으로 보면 1.2 m 공중 착지 컷이 났다(최종 검토 Critical). 더 먼 쪽으로 뛴
+// 값(빠른 상승, 근접 물체가 치워짐)만 RL_TRACK_RESET_MS 유지되면 새 기준이다. 탁자 위로 날아
+// 올라간 경우처럼 진짜로 바닥이 가까워진 경우는 그동안 시간 기반 하강을 쓴다.
 static const uint32_t RL_ENTRY_STABLE_MS = 500;
 static const uint32_t RL_TRACK_RESET_MS = 1000;
 // 진입 전 추적에서 프레임이 이만큼 끊기면 이전 안정 이력을 버리고 다시 쌓는다. 공백만큼
@@ -196,14 +201,16 @@ static inline void rangeTrackUpdate(RangeTrack &t, int32_t raw_mm, uint32_t now_
     t.last_frame_ms = now_ms;
     return;
   }
-  const bool gap = t.have && now_ms - t.last_frame_ms > RL_TRACK_MAX_GAP_MS;
+  const uint32_t frame_gap = now_ms - t.last_frame_ms;
   t.last_frame_ms = now_ms;
-  if (!t.have || gap) {
+  if (!t.have || frame_gap > RL_TRACK_MAX_GAP_MS) {
     rangeTrackRestart(t, raw_mm, now_ms);
     return;
   }
+  // 허용폭은 직전 프레임과의 공백으로 잰다. 마지막 채택 시각으로 재면 거부가 이어지는 동안
+  // 허용폭이 계속 넓어져 유지된 근접값을 결국 받아들인다(하강 추적의 허용폭 고정과 같은 이유).
   const bool ok =
-      rangeLandFramesConsistent(t.ref_mm, raw_mm, now_ms - t.ref_ms) &&
+      rangeLandFramesConsistent(t.ref_mm, raw_mm, frame_gap) &&
       rangeLandWindowOk(t.anchor_mm, t.anchor_ms, raw_mm, now_ms);
   if (ok) {
     t.ref_mm = raw_mm;
@@ -216,7 +223,7 @@ static inline void rangeTrackUpdate(RangeTrack &t, int32_t raw_mm, uint32_t now_
   } else if (!t.rejecting) {
     t.rejecting = true;
     t.reject_since_ms = now_ms;
-  } else if (now_ms - t.reject_since_ms >= RL_TRACK_RESET_MS) {
+  } else if (raw_mm > t.ref_mm && now_ms - t.reject_since_ms >= RL_TRACK_RESET_MS) {
     rangeTrackRestart(t, raw_mm, now_ms);
   }
 }
@@ -294,6 +301,11 @@ static inline RangeLandOutput rangeLandStep(RangeLandState &st,
       if (st.stage < RL_STAGE_NEAR_GROUND && raw < RL_NEAR_GROUND_MM) {
         st.stage = RL_STAGE_NEAR_GROUND;
         st.near_ground_since_ms = now;
+      } else if (st.stage >= RL_STAGE_NEAR_GROUND && raw >= RL_NEAR_REVOKE_MM) {
+        // 떠올랐다. 바닥 근접 컷 권한을 거두고 접근 하강으로 돌아간다. 기준 스로틀 감소는
+        // 같은 속도로 천천히 되돌린다(아래).
+        st.stage = raw <= rangeLandApproachMm() ? RL_STAGE_APPROACH : RL_STAGE_DESCENT;
+        st.landed_timing = false;
       }
     } else {
       st.rejecting = true;
@@ -319,6 +331,8 @@ static inline RangeLandOutput rangeLandStep(RangeLandState &st,
     // 신선한 높이가 있을 때만 목표를 낮춘다(거리 끊김·거부·높이 범위 밖에서는 멈춤).
     // 끊긴 동안 내려 두면 복귀 순간 큰 하강 오차가 된다.
     if (in.height_fresh && !st.rejecting) st.h_ref += out.vz_ref * in.dt_s;
+    st.drop_us -= RL_TOUCHDOWN_RAMP_US_S * in.dt_s;   // 철회 뒤 되돌림
+    if (st.drop_us < 0.0f) st.drop_us = 0.0f;
   } else {
     // 바닥 근접에서는 기준 스로틀 감소로 내려간다. 고도 보정은 .ino 가 올리는
     // 방향을 자른다. 목표는 느린 속도로 계속 낮춰 위로 끌지 않게 한다.

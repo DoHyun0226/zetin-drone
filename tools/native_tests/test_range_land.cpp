@@ -410,18 +410,30 @@ int main() {
   });
 
   runCase("pre_entry_track_rejects_a_held_near_object", [] {
-    // 진입 −70/−35/0 ms 에 200 mm 가 세 프레임 이어져도 기준이 되지 않는다(Codex P1).
+    // 1.5 m 에서 갑자기 200 mm 로 바뀐 값은 아무리 오래 유지돼도 기준이 되지 않는다.
+    // 거부 1 s 뒤 그 값으로 다시 잡던 규칙은 1.2 m 공중 착지 컷을 냈다(최종 검토 Critical).
     PreRig r;
     r.feed(1000, 1500);
     CHECK(r.stable());
     r.feed(105, 200);
     CHECK(!r.stable());
-    CHECK(r.tr.ref_mm == 1500);
-    r.feed(800, 200);                 // 1 s 가 안 됐다: 아직 거부 중
+    r.feed(3000, 200);
     CHECK(!r.stable());
-    r.feed(700, 200);                 // 1 s 넘게 그대로면 새 바닥으로 다시 잡고 500 ms 를 쌓는다
+    CHECK(r.tr.ref_mm == 1500);
+    r.feed(35, 1500);                 // 원래 값으로 돌아오면 다시 이어진다
+    r.feed(600, 1500);
     CHECK(r.stable());
-    CHECK(r.tr.ref_mm == 200);
+  });
+
+  runCase("pre_entry_track_reanchors_after_a_fast_climb", [] {
+    // 더 먼 쪽으로의 점프(조종자의 빠른 상승, 근접 물체가 치워짐)는 1 s 유지되면 새 기준이다.
+    PreRig r;
+    r.feed(1000, 500);
+    r.feed(1100, 1500);
+    CHECK(!r.stable());
+    r.feed(600, 1500);
+    CHECK(r.stable());
+    CHECK(r.tr.ref_mm == 1500);
   });
 
   runCase("pre_entry_track_breaks_on_out_of_range", [] {
@@ -510,6 +522,26 @@ int main() {
     rig.run(1000, [](int i) { return 1000 + (int32_t)lround(0.4 * i); });
     CHECK(rig.st.reject_count == 0);
     CHECK(rig.action == RL_CONTINUE);
+  });
+
+  runCase("near_ground_is_revoked_by_a_fresh_far_range", [] {
+    // 80 mm 까지 온 뒤 거리가 0.4 m/s 로 다시 커지면(상승 외란) 바닥 근접을 철회한다.
+    // 철회하지 않으면 1.27 m 를 채택하면서도 3 s 뒤 정체 컷을 냈다(최종 검토 Important).
+    Rig rig;
+    rig.start(300);
+    for (int i = 1; i <= 4000 && rig.out.stage < RL_STAGE_NEAR_GROUND; i++) {
+      rig.step(i % kFrameMs == 0 ? std::max(80, 300 - (int)lround(0.12 * i)) : kNoFrame);
+    }
+    CHECK(rig.out.stage == RL_STAGE_NEAR_GROUND);
+    float peak_drop = 0.0f;
+    rig.run(3500, [&rig, &peak_drop](int i) {
+      peak_drop = std::max(peak_drop, rig.out.drop_us);
+      return std::min(1270, 80 + (int32_t)lround(0.4 * i));
+    });
+    CHECK(rig.action == RL_CONTINUE);
+    CHECK(rig.out.stage == RL_STAGE_APPROACH || rig.out.stage == RL_STAGE_DESCENT);
+    CHECK(peak_drop > 0.0f);
+    CHECK(rig.out.drop_us == 0.0f);   // 기준 스로틀 감소를 천천히 되돌렸다
   });
 
   runCase("landed_requires_contact_drop", [] {
