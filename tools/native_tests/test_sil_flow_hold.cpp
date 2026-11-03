@@ -1538,6 +1538,83 @@ int main() {
     CHECK(c.w.end_phase != FS_CUT_LANDED);
   });
 
+  runCase("sil_near_object_at_entry_tick_uses_timed", [] {
+    // 1.5 m 에서 RC 가 끊기는 순간 근접 물체 값(200 mm)이 들어오고 130→60→30 mm 로
+    // 이어진다. 그 값을 진입 기준으로 잡으면 공중 1 m 위에서 착지로 간다(Codex P1).
+    LandCase c(1.5);
+    c.warmup();
+    uint32_t first = 0;
+    int idx = 0;
+    c.run.sensor.range_override = [&](uint32_t tick, int32_t mm) {
+      if (tick + 40 < c.w.disconnect_tick + RC_TIMEOUT_MS) return mm;
+      if (!first) first = tick;
+      static const int32_t seq[] = {200, 130, 60, 30};
+      return idx < 4 ? seq[idx++] : (int32_t)30;
+    };
+    double h_at_cut = -1.0;
+    c.extra = [&](uint32_t) {
+      if (c.w.end_tick && h_at_cut < 0.0) h_at_cut = c.run.s.h;
+    };
+    c.land(8000);
+    CHECK(first != 0);
+    CHECK(c.w.entry_tick != 0);
+    CHECK(first <= c.w.entry_tick);
+    CHECK_MSG(!c.w.saw_range, "range mode chosen from a near-object entry value");
+    CHECK(c.w.end_phase != FS_CUT_LANDED);
+  });
+
+  runCase("sil_single_rejected_frame_does_not_kick_althold", [] {
+    // 1500→200→1500 mm 처럼 한 프레임만 튀면 거부되지만, 그 프레임으로 차분한 수직속도가
+    // 다음 정상 프레임 뒤 고도 제어에 들어가면 하강을 크게 밀어낸다(Codex P2). 수정 전
+    // 0.22 m/s, 추정을 비우면 0.087, 되돌리면 0.016.
+    LandCase c(1.6);
+    c.warmup();
+    uint32_t spike = 0;
+    double vh_before = 0.0, worst = 0.0;
+    c.run.sensor.range_override = [&](uint32_t tick, int32_t mm) {
+      if (!spike && rl_mode == RL_MODE_RANGE && c.w.entry_tick &&
+          tick >= c.w.entry_tick + 1000) {
+        spike = tick;
+        vh_before = c.run.s.vh;
+        return (int32_t)200;
+      }
+      return mm;
+    };
+    c.extra = [&](uint32_t tick) {
+      if (spike && tick > spike && tick < spike + 600) {
+        worst = std::max(worst, std::fabs(c.run.s.vh - vh_before));
+      }
+    };
+    c.land();
+    CHECK(spike != 0);
+    CHECK(!c.w.saw_fallback);
+    CHECK_MSG(worst < 0.05, "vertical speed disturbed by " + fmt(worst));
+    CHECK(c.w.end_phase == FS_CUT_LANDED);
+  });
+
+  runCase("sil_frame_published_after_tick_start_is_not_lost", [] {
+    // Core 0 가 pid tick 시작 뒤 프레임을 게시하면(도착 시각 > tick 시각) 그 tick 에는
+    // 아직 오지 않은 프레임이다. 먼저 소비하고 stale 로 버리면 정상 거리로도 폴백한다.
+    LandCase c(1.0);
+    c.warmup();
+    uint32_t seen = 0;
+    int bumped = 0;
+    c.extra = [&](uint32_t) {
+      if (rl_mode != RL_MODE_RANGE) return;
+      portENTER_CRITICAL(&flowSensorMux);
+      if (flowSensorSnapshot.range_seq != seen) {
+        seen = flowSensorSnapshot.range_seq;
+        flowSensorSnapshot.range_t_us += 500;   // tick 시작 0.5 ms 뒤 게시
+        bumped++;
+      }
+      portEXIT_CRITICAL(&flowSensorMux);
+    };
+    c.land();
+    CHECK(bumped > 20);
+    CHECK(!c.w.saw_fallback);
+    CHECK(c.w.end_phase == FS_CUT_LANDED);
+  });
+
   runCase("sil_tether_floor_5cm_cuts_near_ground", [] {
     LandCase c(0.6);
     c.run.P.tether_floor = [](uint32_t) { return 0.05; };
@@ -1660,6 +1737,12 @@ int main() {
     while (std::getline(ss, f, ',')) after.push_back(f);
     CHECK(after.size() == 96);
     CHECK(after[94] == "1");           // Land_Cut_Reason CONTACT, kept after the cut
+    // 요청·실제 collective 는 같은 스냅숏이다: 컷 뒤 둘 다 1000(차이 0).
+    CHECK_MSG(std::fabs(std::stod(after[67]) - std::stod(after[95])) < 0.5,
+              "collective " + after[67] + " vs requested " + after[95]);
+    // 하강 중에도 같은 tick 의 값이다(이 하강은 allocator 상승이 없다).
+    CHECK_MSG(std::fabs(std::stod(during[67]) - std::stod(during[95])) < 0.5,
+              "collective " + during[67] + " vs requested " + during[95]);
   });
 
   runCase("sil_mode_switch_is_smooth", [] {

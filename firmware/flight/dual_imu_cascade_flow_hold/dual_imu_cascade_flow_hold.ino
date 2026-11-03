@@ -89,6 +89,7 @@ struct AllocationTelemetrySample {
   float i_pitch_us;
   float i_yaw_us;
   int yaw_authority_state;
+  int requested_us;          // allocator 입력 collective(같은 tick)
 };
 
 static_assert(sizeof(ImuRawSample) == 27, "ZIMU v2 sample must be 27 bytes");
@@ -834,6 +835,7 @@ volatile float rl_h_ref = 0.0f;
 int32_t rlRangeMm = -1;
 uint32_t rlRangeTUs = 0;
 bool rlRangeSeen = false;
+uint8_t rlRangeStable = 0;   // 연달아 서로 이어진 신뢰 프레임 수
 // 요청 = allocator 입력(base + 고도 보정), 전달 = allocator 출력 collective.
 volatile int rl_requested_collective_us = 1000;
 volatile float rl_delivered_collective_us = 1000.0f;
@@ -916,6 +918,7 @@ static inline void resetFlowHoldForHarness() {
   rlRangeMm = -1;
   rlRangeTUs = 0;
   rlRangeSeen = false;
+  rlRangeStable = 0;
   rl_requested_collective_us = 1000;
   rl_delivered_collective_us = 1000.0f;
   publishFlowHoldTelemetry(FlowHoldTelemetry());
@@ -1588,16 +1591,18 @@ static inline void resetAllocationTelemetry() {
   mixer_yaw_scale = 1.0f;
   allocationTelemetry = {
       false, 1.0f, 1.0f, 1000.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-      YAW_AUTH_NORMAL};
+      YAW_AUTH_NORMAL, 1000};
   portEXIT_CRITICAL(&allocationTelemetryMux);
 }
 
 static inline void publishAllocationTelemetry(
     const MotorMix &mix, float pidRoll, float pidPitch, float pidYaw,
-    float iRoll, float iPitch, float iYaw, int yawAuthorityState) {
+    float iRoll, float iPitch, float iYaw, int yawAuthorityState,
+    int requestedUs) {
   const AllocationTelemetrySample sample = {
       mix.scaled, mix.rp_scale, mix.yaw_scale, mix.collective_us,
-      pidRoll, pidPitch, pidYaw, iRoll, iPitch, iYaw, yawAuthorityState};
+      pidRoll, pidPitch, pidYaw, iRoll, iPitch, iYaw, yawAuthorityState,
+      requestedUs};
   portENTER_CRITICAL(&allocationTelemetryMux);
   mixer_scaled = sample.scaled;
   allocationTelemetry = sample;
@@ -1981,13 +1986,26 @@ void pid_task(void *pv) {
     sensorSnap = flowSensorSnapshot;
     portEXIT_CRITICAL(&flowSensorMux);
     bool rlTrustedNew = false;
-    if (sensorSnap.range_seq != rangeSeqSeen) {
+    // 이번 신뢰 프레임을 넣기 전 높이 추정. 거리 기반 하강이 그 프레임을 거부하면 되돌린다.
+    HeightEstimator heightBeforeFrame = heightEst;
+    // 도착 시각이 이번 tick 보다 늦은 프레임(Core 0 가 tick 시작 뒤 게시)은 아직 소비하지
+    // 않는다. 먼저 소비하면 시각 차분이 음수(unsigned 로 거대)라 stale 로 버려진다.
+    const bool rangeReady =
+        sensorSnap.range_seq != rangeSeqSeen &&
+        (int32_t)(nowUs - sensorSnap.range_t_us) >= 0;
+    if (rangeReady) {
       rangeSeqSeen = sensorSnap.range_seq;
       // Core 0 가 막혔다 풀리며 꺼낸 프레임은 시각을 믿을 수 없다. 현재 시각으로
       // 차분하면 가짜 수직속도가 고도 유지에 들어간다(재검토 코드 P1-3). 버린다.
       if (sensorSnap.range_timing_ok) {
+        heightBeforeFrame = heightEst;
         heightUpdate(heightEst, sensorSnap.range_mm, sensorSnap.range_t_us,
                      angleX, angleY);
+        const uint32_t gapMs = (sensorSnap.range_t_us - rlRangeTUs) / 1000U;
+        rlRangeStable =
+            rlRangeSeen && rangeLandFramesConsistent(rlRangeMm, sensorSnap.range_mm, gapMs)
+                ? (uint8_t)min((int)rlRangeStable + 1, 255)
+                : (uint8_t)(sensorSnap.range_mm > 0 ? 1 : 0);
         rlRangeMm = sensorSnap.range_mm;
         rlRangeTUs = sensorSnap.range_t_us;
         rlRangeSeen = true;
@@ -2167,7 +2185,8 @@ void pid_task(void *pv) {
         rangeLandResetFirmware();
         rl_base_ceiling = ceiling;
         startTimedDescent();
-        if (heightFresh && rlRangeFresh && rlRangeMm > 0) {
+        if (heightFresh && rlRangeFresh && rlRangeMm > 0 &&
+            rlRangeStable >= RL_ENTRY_STABLE_FRAMES) {
           rl_mode = RL_MODE_RANGE;
           rangeLandStart(rangeLand, heightEst.h_m, rlRangeMm, nowMs);
           rl_stage = rangeLand.stage;
@@ -2208,6 +2227,12 @@ void pid_task(void *pv) {
       rlIn.now_ms = nowMs;
       const RangeLandOutput rlOut = rangeLandStep(rangeLand, rlIn);
       rl_h_ref = rlOut.h_ref;
+      if (rlTrustedNew && rangeLand.rejecting) {
+        // 거부된 프레임은 높이 추정에 이미 들어갔다. 그 차분 수직속도가 다음 정상 프레임
+        // 뒤 고도 제어에 남지 않게, 그 프레임을 받기 전 추정으로 되돌린다(Codex 코드 검토
+        // Task 4 P2). 비우면 수직속도를 0 부터 다시 쌓아 그동안 하강을 밀어낸다.
+        heightEst = heightBeforeFrame;
+      }
       if (rlOut.stage != rl_stage) {
         rl_stage = rlOut.stage;
         Serial.printf(">>> RANGE LAND stage=%d range=%ld\n", (int)rl_stage,
@@ -2459,7 +2484,7 @@ void pid_task(void *pv) {
     rl_delivered_collective_us = mix.collective_us;
     publishAllocationTelemetry(
         mix, pidRoll, pidPitch, pidYaw,
-        iRollUsed, iPitchUsed, iYawUsed, yaw_authority_state);
+        iRollUsed, iPitchUsed, iYawUsed, yaw_authority_state, throttle);
     if (checkProbeDelivery) {
       const float deliveredUs =
           (float)probeReferenceThrottle - mix.collective_us;
@@ -2704,7 +2729,7 @@ static void sendTelemetry() {
   const uint8_t landStageSnapshot = rl_stage;
   const float landRefSnapshot = rl_h_ref;
   const uint8_t landCutSnapshot = rl_cut_reason;
-  const int landReqSnapshot = rl_requested_collective_us;
+  const int landReqSnapshot = allocationSample.requested_us;   // 68번과 같은 스냅숏
   float magTelemXSnapshot = 0.0f;
   float magTelemYSnapshot = 0.0f;
   float magTelemZSnapshot = 0.0f;

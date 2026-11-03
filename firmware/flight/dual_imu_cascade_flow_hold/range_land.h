@@ -36,6 +36,10 @@ static const uint32_t RL_TOUCHDOWN_MAX_MS = 3000;
 static const uint32_t RL_HOLD_FADE_MS = 500;      // 바닥 근접 뒤 위치 유지 감쇠
 static const uint32_t RL_INVALID_GRACE_MS = 300;  // ALTHOLD_SUSPEND_S 와 같은 성격
 static const uint32_t RL_MAX_MS = 12000;
+// 거리 기반 모드로 들어가려면 진입 직전 신뢰 프레임이 이만큼 연달아 서로 이어져야 한다.
+// RC 가 끊기는 순간의 근접 물체 값을 진입 기준으로 잡지 않기 위해서다(Codex 코드 검토
+// Task 4 P1). 35 ms 주기에 약 105 ms.
+static const uint8_t RL_ENTRY_STABLE_FRAMES = 3;
 
 // 텔레메트리 번호다. 뒤에만 덧붙인다.
 enum RangeLandMode : uint8_t {
@@ -117,6 +121,19 @@ static inline int32_t rangeLandApproachMm() {
   return (int32_t)lroundf(RL_APPROACH_M * 1000.0f);
 }
 
+// 마지막 채택 뒤 첫 프레임까지의 공백(ms)에 대한 허용폭(mm). m/s × ms = mm.
+static inline int32_t rangeLandTolMm(float gap_ms) {
+  return (int32_t)lroundf(RL_MAX_STEP_M * 1000.0f + RL_MAX_VZ_MPS * gap_ms);
+}
+
+// 두 원값이 이어지는가(둘 다 양수이고 차이가 공백 허용폭 안).
+static inline bool rangeLandFramesConsistent(int32_t prev_mm, int32_t raw_mm,
+                                             uint32_t gap_ms) {
+  if (prev_mm <= 0 || raw_mm <= 0) return false;
+  const int64_t d = (int64_t)raw_mm - (int64_t)prev_mm;
+  return (d < 0 ? -d : d) <= (int64_t)rangeLandTolMm((float)gap_ms);
+}
+
 // 단계의 목표 하강 속도(예측에도 쓴다). 바닥 근접 뒤에는 0 — 기준 스로틀 감소로
 // 내려가며, 예측 중심은 마지막 채택값에 머문다.
 static inline float rangeLandStageSpeed(uint8_t stage) {
@@ -153,7 +170,7 @@ static inline RangeLandOutput rangeLandStep(RangeLandState &st,
     if (!st.tol_fixed) {
       const float gap_ms = (float)(now - st.ref_ms);
       // m/s × ms = mm
-      st.tol_mm = (int32_t)lroundf(RL_MAX_STEP_M * 1000.0f + RL_MAX_VZ_MPS * gap_ms);
+      st.tol_mm = rangeLandTolMm(gap_ms);
       st.pred_mm = st.ref_mm -
                    (int32_t)lroundf(rangeLandStageSpeed(st.stage) * gap_ms);
       st.tol_fixed = true;

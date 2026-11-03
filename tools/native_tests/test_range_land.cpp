@@ -375,6 +375,19 @@ int main() {
     checkNear(rig.out.h_ref, ref, 1e-6, "target held while height invalid");
   });
 
+  runCase("entry_history_consistency", [] {
+    // 진입 전 신뢰 프레임이 서로 이어지는지. 허용폭은 추적과 같은 식(50 mm + 0.6·공백).
+    CHECK(rangeLandFramesConsistent(1500, 1490, 35));
+    CHECK(rangeLandFramesConsistent(1500, 1430, 35));     // 70 ≤ 71
+    CHECK(!rangeLandFramesConsistent(1500, 1428, 35));    // 72 > 71
+    CHECK(!rangeLandFramesConsistent(1500, 200, 35));     // 근접 물체
+    CHECK(!rangeLandFramesConsistent(-1, 1500, 35));
+    CHECK(!rangeLandFramesConsistent(1500, -1, 35));
+    CHECK(!rangeLandFramesConsistent(1500, INT32_MIN, 35));
+    CHECK(rangeLandFramesConsistent(1500, 1300, 300));    // 결손 300 ms 뒤면 230 mm 까지
+    CHECK(RL_ENTRY_STABLE_FRAMES == 3);
+  });
+
   runCase("landed_requires_contact_drop", [] {
     Rig rig;
     rig.start(300);
