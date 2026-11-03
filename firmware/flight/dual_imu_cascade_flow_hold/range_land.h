@@ -117,10 +117,12 @@ static inline int32_t rangeLandApproachMm() {
   return (int32_t)lroundf(RL_APPROACH_M * 1000.0f);
 }
 
-// 예측에 쓰는 하강 속도. 바닥 근접 뒤에도 느린 속도로 둔다(정지해 있어도 한
-// 프레임 4 mm 라 허용폭 안이다).
-static inline float rangeLandPredictSpeed(uint8_t stage) {
-  return stage == RL_STAGE_DESCENT ? RL_DESCENT_FAST_MPS : RL_DESCENT_SLOW_MPS;
+// 단계의 목표 하강 속도(예측에도 쓴다). 바닥 근접 뒤에는 0 — 기준 스로틀 감소로
+// 내려가며, 예측 중심은 마지막 채택값에 머문다.
+static inline float rangeLandStageSpeed(uint8_t stage) {
+  if (stage == RL_STAGE_DESCENT) return RL_DESCENT_FAST_MPS;
+  if (stage == RL_STAGE_APPROACH) return RL_DESCENT_SLOW_MPS;
+  return 0.0f;
 }
 
 static inline void rangeLandStart(RangeLandState &st, float h_now,
@@ -144,19 +146,23 @@ static inline RangeLandOutput rangeLandStep(RangeLandState &st,
   const uint32_t now = in.now_ms;
 
   // ---- 추적: 새 신뢰 프레임 하나를 채택하거나 거부한다 ----
+  // 늦게 소비돼 이미 신선하지 않은 프레임은 증거로 쓰지 않는다. 공백이 길수록 허용폭이
+  // 넓어 공간 조건을 통과할 수 있다(Codex 코드 검토 P1). 무효는 !range_fresh 가 센다.
   bool accepted = false;
-  if (in.range_trusted_new) {
+  if (in.range_trusted_new && in.range_fresh) {
     if (!st.tol_fixed) {
       const float gap_ms = (float)(now - st.ref_ms);
       // m/s × ms = mm
       st.tol_mm = (int32_t)lroundf(RL_MAX_STEP_M * 1000.0f + RL_MAX_VZ_MPS * gap_ms);
       st.pred_mm = st.ref_mm -
-                   (int32_t)lroundf(rangeLandPredictSpeed(st.stage) * gap_ms);
+                   (int32_t)lroundf(rangeLandStageSpeed(st.stage) * gap_ms);
       st.tol_fixed = true;
     }
     const int32_t raw = in.range_mm;
-    const int32_t err = raw - st.pred_mm;
-    accepted = raw > 0 && (err < 0 ? -err : err) <= st.tol_mm;
+    if (raw > 0) {
+      const int64_t err = (int64_t)raw - (int64_t)st.pred_mm;
+      accepted = (err < 0 ? -err : err) <= (int64_t)st.tol_mm;
+    }
     // 바닥 근접 진입은 바로 전에 낮은 높이를 지나왔을 때만이다.
     const bool low_recent = st.have_low && now - st.last_low_ms <= RL_CONTINUITY_MS;
     if (accepted && st.stage < RL_STAGE_NEAR_GROUND &&
@@ -197,8 +203,10 @@ static inline RangeLandOutput rangeLandStep(RangeLandState &st,
   // ---- 목표 고도와 바닥 근접 스로틀 감소 ----
   const bool near = st.stage >= RL_STAGE_NEAR_GROUND;
   if (!near) {
-    out.vz_ref = -rangeLandPredictSpeed(st.stage);
-    st.h_ref += out.vz_ref * in.dt_s;
+    out.vz_ref = -rangeLandStageSpeed(st.stage);
+    // 거리를 믿을 수 있을 때만 목표를 낮춘다. 끊긴 동안 내려 두면 복귀 순간 큰
+    // 하강 오차가 된다.
+    if (in.range_fresh && !st.rejecting) st.h_ref += out.vz_ref * in.dt_s;
   } else {
     // 바닥 근접에서는 기준 스로틀 감소로 내려간다. 고도 보정은 .ino 가 올리는
     // 방향을 자른다. 목표는 느린 속도로 계속 낮춰 위로 끌지 않게 한다.

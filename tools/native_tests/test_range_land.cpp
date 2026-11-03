@@ -1,3 +1,4 @@
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -30,7 +31,7 @@ static void runCase(const std::string &name, const std::function<void()> &body) 
 
 static void checkNear(double actual, double expected, double tol,
                       const char *what) {
-  if (std::fabs(actual - expected) > tol) {
+  if (!std::isfinite(actual) || std::fabs(actual - expected) > tol) {
     throw std::runtime_error(std::string(what) + ": got " +
                              std::to_string(actual) + " want " +
                              std::to_string(expected));
@@ -63,12 +64,13 @@ struct Rig {
     rangeLandStart(st, raw0 * 0.001f, raw0, now);
   }
 
-  void step(int32_t value, bool trusted = true) {
+  // age_ms: 신뢰 프레임이지만 늦게 소비돼 이미 이만큼 지난 경우(Core 0 정체 등).
+  void step(int32_t value, bool trusted = true, uint32_t age_ms = 0) {
     now++;
     const bool frame = value != kNoFrame;
     if (frame && trusted) {
       raw = value;
-      frame_ms = now;
+      frame_ms = now - age_ms;
     }
     RangeLandInput in;
     in.range_trusted_new = frame && trusted;
@@ -304,6 +306,57 @@ int main() {
     }
     CHECK(rig.action == RL_FALLBACK);
     CHECK(rig.action_ms == last + 151 + RL_INVALID_GRACE_MS);
+  });
+
+  runCase("stale_trusted_frame_is_not_evidence", [] {
+    // 마지막 채택 뒤 200 ms 공백이면 허용폭이 170 mm 라, 늦게 소비된 30 mm 프레임이
+    // 공간 조건을 통과한다. 신선하지 않은 프레임은 증거가 아니다(Codex 코드 검토 P1).
+    Rig rig;
+    rig.start(150);
+    for (int i = 0; i < 199; i++) rig.step(kNoFrame);
+    rig.step(30, true, 200);           // 신뢰 프레임이지만 200 ms 지난 값
+    CHECK(rig.max_stage < RL_STAGE_NEAR_GROUND);
+    CHECK(rig.st.ref_mm == 150);
+    while (rig.action == RL_CONTINUE && rig.now < rig.start_ms + 3000) rig.step(kNoFrame);
+    CHECK(rig.action == RL_FALLBACK);
+  });
+
+  runCase("extreme_negative_raw_is_rejected_without_overflow", [] {
+    Rig rig;
+    rig.start(300);
+    rig.run(35, [](int) { return (int32_t)INT32_MIN; });
+    CHECK(rig.st.reject_count == 1);
+    CHECK(rig.st.ref_mm == 300);
+    rig.run(35, [](int) { return (int32_t)INT32_MAX; });
+    CHECK(rig.st.reject_count == 2);
+  });
+
+  runCase("ref_does_not_descend_without_a_fresh_range", [] {
+    Rig rig;
+    rig.start(1000);
+    for (int i = 0; i < 140; i++) rig.step(kNoFrame);   // 아직 신선(≤ 150 ms)
+    const float fresh_ref = rig.out.h_ref;
+    checkNear(fresh_ref, 1.0 - 0.140 * RL_DESCENT_FAST_MPS, 0.002, "fresh descent");
+    for (int i = 0; i < 160; i++) rig.step(kNoFrame);   // 150 ms 넘게 프레임 없음
+    checkNear(rig.out.h_ref, 1.0 - 0.150 * RL_DESCENT_FAST_MPS, 0.002, "stops when stale");
+  });
+
+  runCase("near_ground_prediction_does_not_move", [] {
+    // 바닥 근접에서는 목표 속도 0 — 예측 중심도 그대로다. 30 mm 다음 35 ms 에 99 mm 는
+    // 오차 69 ≤ 허용 71 이라 채택, 102 mm 는 72 로 거부.
+    for (int32_t next : {99, 102}) {
+      Rig rig;
+      rig.start(300);
+      rig.descend(3000, 300, 30);
+      CHECK(rig.max_stage >= RL_STAGE_NEAR_GROUND);
+      CHECK(rig.st.ref_mm == 30);
+      rig.run(1, [](int) { return 0; });               // 직전 프레임 정렬용 빈 tick
+      const uint16_t before = rig.st.reject_count;
+      const uint32_t last = rig.st.ref_ms;
+      while (rig.now < last + 34) rig.step(kNoFrame);
+      rig.step(next);
+      CHECK(rig.st.reject_count == before + (next == 99 ? 0 : 1));
+    }
   });
 
   runCase("landed_requires_contact_drop", [] {
