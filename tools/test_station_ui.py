@@ -284,19 +284,19 @@ class DashboardUITest(unittest.TestCase):
     def tearDown(self):
         if self.thread is not None and self.thread.is_alive():
             try:
-                self.pipe.send_text("\x04")
+                self.pipe.send_text("\x03")  # Ctrl+C exits whatever the input line holds
             except Exception:
                 pass
             self.thread.join(timeout=WAIT_SEC)
         if self.thread is not None:
             self.assertFalse(self.thread.is_alive(), "dashboard did not stop")
 
-    def _start(self, handler=None):
+    def _start(self, handler=None, on_eof=None):
         def run():
             self.ui.run(
                 handler or self.handled.append,
                 lambda: self.calls.append("interrupt"),
-                lambda: self.calls.append("eof"),
+                on_eof or (lambda: self.calls.append("eof")),
             )
 
         self.thread = threading.Thread(target=run, daemon=True)
@@ -344,6 +344,81 @@ class DashboardUITest(unittest.TestCase):
         self.pipe.send_text("\x04")
         self._join()
         self.assertEqual(self.calls, ["eof"])
+
+    def test_ctrl_d_with_text_on_the_line_does_not_exit(self):
+        self._start()
+        self.pipe.send_text("pr 0.9")
+        self.assertTrue(_wait_until(lambda: self.ui._textarea.text == "pr 0.9"))
+        self.pipe.send_text("\x04")
+        time.sleep(0.3)
+        self.assertTrue(self.ui.running)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.ui._textarea.text, "pr 0.9")
+        self.pipe.send_text("\x1b")
+        self.assertTrue(_wait_until(lambda: self.ui._textarea.text == ""))
+        self.pipe.send_text("\x04")
+        self._join()
+        self.assertEqual(self.calls, ["eof"])
+        self.assertEqual(self.handled, [])
+
+    def test_closed_input_runs_the_eof_safety_before_teardown_output(self):
+        # Output blocks once the input has been seen closed, until the EOF
+        # callback (the conditional disarm) has run; every such write records
+        # whether the safety callback came first.
+        from prompt_toolkit.output import DummyOutput
+
+        disarmed = threading.Event()
+        writes = []
+        pipe = self.pipe
+
+        class _BlockingOutput(DummyOutput):
+            def flush(self):
+                if pipe.closed:
+                    writes.append(disarmed.is_set())
+                    disarmed.wait(timeout=0.5)
+
+        self.ui = DashboardUI(input=pipe, output=_BlockingOutput())
+
+        def on_eof():
+            self.calls.append("eof")
+            disarmed.set()
+
+        self._start(on_eof=on_eof)
+        pipe.close()
+        self._join()
+        self.assertEqual(self.calls, ["eof"])
+        self.assertTrue(writes, "no teardown output was observed")
+        self.assertTrue(all(writes), writes)
+        self.assertFalse(
+            any(text.startswith("[STDIN] 입력 오류") for text in self.ui._event_texts()),
+            self.ui._event_texts(),
+        )
+
+    def test_console_fallback_forwards_every_output_method(self):
+        out = io.StringIO()
+        with (
+            mock.patch.object(DashboardUI, "_build_app",
+                              side_effect=RuntimeError("synthetic build failure")),
+            mock.patch.object(builtins, "input", side_effect=EOFError),
+            contextlib.redirect_stdout(out),
+        ):
+            self.ui.event("[ARM] before")
+            self.ui.run(self.handled.append,
+                        lambda: self.calls.append("interrupt"),
+                        lambda: self.calls.append("eof"))
+            self.ui.periodic("[STATUS] Roll=0.00")
+            self.ui.alert("[ERR] x")
+            self.ui.event("[LOG] 저장 완료: x.csv")
+            self.ui.transition("[STATE] x")
+            self.ui.update(_fake_snapshot())
+            self.ui.after_run()
+        text = out.getvalue()
+        self.assertEqual(self.calls, ["eof"])
+        self.assertIn("[WARN] 대시보드 시작 실패: RuntimeError: synthetic build failure", text)
+        self.assertIn("[ARM] before", text)
+        self.assertTrue(
+            text.endswith("[STATUS] Roll=0.00\n[ERR] x\n[LOG] 저장 완료: x.csv\n"), text,
+        )
 
     def test_handler_exception_is_logged_and_app_keeps_running(self):
         def handler(msg):

@@ -21,6 +21,7 @@ They only touch the UI's own leaf lock (never a station lock, never
 """
 
 import collections
+import importlib.util
 import sys
 import threading
 import time
@@ -152,6 +153,9 @@ class DashboardUI:
     ``update`` swaps in the latest snapshot. ``Application`` coalesces the
     redraw requests (``min_redraw_interval``) and redraws on its own every
     ``refresh_interval`` so the "수신 없음 N.Ns" age keeps moving.
+
+    Once the dashboard is gone (``after_run`` or a failed start) every output
+    method forwards to a ``ConsoleUI``, so later lines reach the terminal.
     """
 
     def __init__(self, help_lines=(), *, input=None, output=None, clock=time.monotonic):
@@ -171,8 +175,8 @@ class DashboardUI:
         self._rate = dashboard_view.LinkRateTracker()
         self._rate_time = None
         self._link_hz = None
-        self._finished = False
-        self._ended = False
+        self._console = None   # ConsoleUI once the dashboard is gone
+        self._ended = False    # a safety callback (on_interrupt/on_eof) has run
         self._app = None
         self._textarea = None
         self._panel_cache = None    # (render_counter, rows) for one frame
@@ -191,10 +195,18 @@ class DashboardUI:
 
     def periodic(self, text):
         """[STATUS]/[DIAG]/[AUTO-LAND]/[AXIS]/[TH]: the panels show these values."""
+        console = self._console
+        if console is not None:
+            with self._print_lock:
+                console.periodic(text)
 
     def update(self, snap):
         """Latest station snapshot; called once per telemetry packet."""
         try:
+            console = self._console
+            if console is not None:
+                console.update(snap)
+                return
             now = self._clock()
             with self._lock:
                 self._snap = snap
@@ -212,14 +224,14 @@ class DashboardUI:
             lines = [line for line in str(text).split("\n") if line.strip()]
             stamp = time.strftime("%H:%M:%S")
             with self._lock:
-                finished = self._finished
-                if not finished:
+                console = self._console
+                if console is None:
                     for line in lines:
                         self._events.append((stamp, line, _event_style(kind, line)))
-            if finished:
+            if console is not None:
                 # 대시보드가 끝난 뒤(로그 저장·raw 변환): 일반 출력으로 바로 낸다.
                 with self._print_lock:
-                    print(text)
+                    getattr(console, method)(text)
                 return
             self._invalidate()
         except Exception as error:
@@ -319,6 +331,8 @@ class DashboardUI:
     # --- the application ---------------------------------------------------
     def _build_app(self, input_handler, on_interrupt, on_eof):
         from prompt_toolkit.application import Application
+        from prompt_toolkit.application.current import get_app_session
+        from prompt_toolkit.filters import Condition
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.keys import Keys
         from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
@@ -351,7 +365,9 @@ class DashboardUI:
         def _interrupt(event):
             self._end(event.app, "on_interrupt", on_interrupt)
 
-        @bindings.add("c-d", eager=True)
+        # 지금의 터미널 input()과 같이 빈 줄에서만 입력 종료(EOF)로 본다. 글자가
+        # 있으면 기본 동작(커서 위치 글자 지우기)을 둔다.
+        @bindings.add("c-d", eager=True, filter=Condition(lambda: textarea.text == ""))
         def _eof(event):
             self._end(event.app, "on_eof", on_eof)
 
@@ -376,6 +392,13 @@ class DashboardUI:
             ], height=1),
         ]), focused_element=textarea)
 
+        # 입력이 닫히면 prompt_toolkit은 EOFError를 내기 전에 마지막 그리기를
+        # 한다(출력이 막히면 거기서 멈춘다). 닫힘을 처음 보는 순간 EOF 안전
+        # 콜백(조건부 disarm)을 먼저 돌린다.
+        real_input = self._input if self._input is not None else get_app_session().input
+        watched_input = _InputClosedWatch(
+            real_input, lambda: self._run_safety("on_eof", on_eof),
+        )
         app = Application(
             layout=layout,
             key_bindings=bindings,
@@ -383,17 +406,21 @@ class DashboardUI:
             full_screen=True,
             min_redraw_interval=REDRAW_INTERVAL_SEC,
             refresh_interval=REDRAW_INTERVAL_SEC,
-            input=self._input,
+            input=watched_input,
             output=self._output,
         )
         app_ref = [app]
         return app
 
-    def _end(self, app, name, callback):
-        """Ctrl+C / Ctrl+D: the safety callback first, then leave the app."""
+    def _run_safety(self, name, callback):
+        """Run the first safety callback (on_interrupt/on_eof) exactly once."""
         if not self._ended:
             self._ended = True
             ConsoleUI._call_safely(name, callback)
+
+    def _end(self, app, name, callback):
+        """Ctrl+C / Ctrl+D: the safety callback first, then leave the app."""
+        self._run_safety(name, callback)
         try:
             app.exit()
         except Exception:
@@ -410,44 +437,79 @@ class DashboardUI:
         try:
             app = self._build_app(input_handler, on_interrupt, on_eof)
         except Exception as error:
-            # 대시보드를 못 띄우면 줄 출력으로 계속 조종할 수 있게 한다.
-            self.after_run()
-            self.event(f"[WARN] 대시보드 시작 실패: {type(error).__name__}: {error} - 줄 출력으로 실행")
-            ConsoleUI().run(input_handler, on_interrupt, on_eof)
+            # 대시보드를 못 띄우면 줄 출력으로 계속 조종할 수 있게 한다. 이후의
+            # 모든 출력(주기 줄 포함)은 ConsoleUI로 넘긴다.
+            console = self._switch_to_console()
+            console.event(
+                f"[WARN] 대시보드 시작 실패: {type(error).__name__}: {error} - 줄 출력으로 실행"
+            )
+            console.run(input_handler, on_interrupt, on_eof)
             return
         self._app = app
         error = None
         try:
             app.run()
         except KeyboardInterrupt:
-            if not self._ended:
-                self._ended = True
-                ConsoleUI._call_safely("on_interrupt", on_interrupt)
+            self._run_safety("on_interrupt", on_interrupt)
+        except EOFError:
+            pass  # 입력이 닫혔다: on_eof는 닫힘을 본 순간 이미 돌았다(아래가 예비)
         except BaseException as caught:  # noqa: BLE001 - run() must not raise
             error = caught
         finally:
             self._app = None
-        if not self._ended:
-            # 입력이 키 없이 끝났거나 앱이 오류로 끝났다: EOF와 같이 조건부 disarm부터.
-            self._ended = True
-            ConsoleUI._call_safely("on_eof", on_eof)
+        # 입력이 키 없이 끝났거나 앱이 오류로 끝났다: EOF와 같이 조건부 disarm부터.
+        self._run_safety("on_eof", on_eof)
         if error is not None:
             self.event(
                 f"[STDIN] 입력 오류: {type(error).__name__}: {error} - 입력 종료로 처리"
             )
 
     def after_run(self):
-        """Dashboard closed: print the event list, then print later events directly."""
+        """Dashboard closed: print the event list; later output goes to a ConsoleUI."""
+        console = self._console
+        if console is not None:
+            console.after_run()
+            return
+        self._switch_to_console()
+
+    def _switch_to_console(self):
+        """Print the buffered event list, then forward every output method."""
+        console = ConsoleUI()
         try:
             with self._print_lock:
                 with self._lock:
+                    if self._console is not None:
+                        return self._console
                     entries = list(self._events)
                     self._events.clear()
-                    self._finished = True
+                    self._console = console
                 for stamp, text, _style in entries:
                     print(f"{stamp} {text}")
         except Exception as error:
             _report_ui_failure("after_run", error)
+        return console
+
+
+class _InputClosedWatch:
+    """prompt_toolkit input wrapper: calls ``on_closed`` when ``closed`` is first seen True.
+
+    prompt_toolkit checks ``input.closed`` right after reading the keys and,
+    when it is True, ends the app with EOFError after one last redraw.
+    """
+
+    def __init__(self, inner, on_closed):
+        self._inner = inner
+        self._on_closed = on_closed
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    @property
+    def closed(self):
+        closed = self._inner.closed
+        if closed:
+            self._on_closed()
+        return closed
 
 
 def make_ui(args, isatty=None, *, help_lines=()):
@@ -464,10 +526,10 @@ def make_ui(args, isatty=None, *, help_lines=()):
     if not on_terminal:
         return ConsoleUI()
     try:
-        import prompt_toolkit  # noqa: F401
-
+        if importlib.util.find_spec("prompt_toolkit") is None:
+            raise ImportError("prompt_toolkit")
         return DashboardUI(help_lines=help_lines)
-    except ImportError:
+    except (ImportError, ValueError):
         console = ConsoleUI()
         console.event("[WARN] prompt_toolkit 없음 - 줄 출력으로 실행")
         return console
