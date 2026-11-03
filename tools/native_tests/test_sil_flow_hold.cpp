@@ -70,6 +70,12 @@ struct Params {
   double thrust_per_us = 0.0025;
   double mass = 4.0 * 0.0025 * (1340.0 - 1000.0) / kG;   // 1340 us 호버
   double drag = 0.05;                                     // N/(m/s)
+  // 배터리 처짐: tick → 추력 배율(없으면 1)
+  std::function<double(uint32_t)> thrust_scale_at;
+  // 바닥 근처 추력 증가: h = 0 에서 +gain, 0.2 m 에서 0 으로 선형
+  double ground_effect_gain = 0.0;
+  // 테더 줄: tick → 이 높이 아래로 내려가지 않는다(없으면 지면만)
+  std::function<double(uint32_t)> tether_floor;
   double arm_proj() const { return arm_m / std::sqrt(2.0); }
   double yaw_arm() const { return 0.06 * arm_proj(); }
 };
@@ -103,10 +109,15 @@ struct Disturbance {
 };
 
 // 한 tick 적분. 반환은 월드 NED 가속도(가속도계 주입용).
-std::array<double, 3> integrate(State &s, const Params &P, const Disturbance &d) {
+std::array<double, 3> integrate(State &s, const Params &P, const Disturbance &d,
+                                uint32_t tick) {
+  double scale = P.thrust_scale_at ? P.thrust_scale_at(tick) : 1.0;
+  if (P.ground_effect_gain != 0.0) {
+    scale *= 1.0 + P.ground_effect_gain * std::max(0.0, 1.0 - s.h / 0.2);
+  }
   std::array<double, 4> thrust;
   for (int i = 0; i < 4; i++) {
-    thrust[i] = P.thrust_per_us * std::max(0.0, (double)motorOut[i] - 1000.0);
+    thrust[i] = scale * P.thrust_per_us * std::max(0.0, (double)motorOut[i] - 1000.0);
   }
   const double a = P.arm_proj();
   const double tx = a * (thrust[0] - thrust[1] - thrust[2] + thrust[3]);
@@ -135,6 +146,13 @@ std::array<double, 3> integrate(State &s, const Params &P, const Disturbance &d)
     s.h = 0.0;
     s.vh = std::max(0.0, s.vh);
     s.vn = s.ve = 0.0;
+  }
+  if (P.tether_floor) {
+    const double floor_h = P.tether_floor(tick);
+    if (s.h < floor_h) {
+      s.h = floor_h;
+      s.vh = std::max(0.0, s.vh);
+    }
   }
 
   s.phi += s.p * kDt;
@@ -213,6 +231,15 @@ struct SensorModel {
   int corrupt_every = 0;    // n 번째 광류 프레임마다 CRC 손상
   uint32_t range_off_from = std::numeric_limits<uint32_t>::max();
   uint32_t range_off_to = 0;
+  // 착지 상태에서 센서가 읽는 거리(착륙장치 높이). 실측 착지 원값 중앙값 약 30 mm.
+  int ground_offset_mm = 0;
+  // 참이면 80 mm 미만도 보고한다(실기 3901-L0X 는 착지 상태 18–37 mm 를 보고).
+  bool report_short = false;
+  // 결정적 의사난수 ±noise_mm
+  int noise_mm = 0;
+  uint32_t noise_state = 0x1234567u;
+  // (tick, 모델 원값) → 보낼 원값. 근접 물체·끊김 주입용.
+  std::function<int32_t(uint32_t, int32_t)> range_override;
 
   // 지난 경계에서 광축이 맞힌 지면점(NED)
   bool have_point = false;
@@ -272,9 +299,14 @@ struct SensorModel {
     if (tick % 35 == 0) {
       const auto R = rotation(s);
       const double slant = s.h / std::max(1e-6, R[2][2]);
-      int32_t mm = (int32_t)std::lround(slant * 1000.0);
-      if (mm < 80 || mm > 2000) mm = -1;
+      int32_t mm = (int32_t)std::lround(slant * 1000.0) + ground_offset_mm;
+      if (noise_mm > 0) {
+        noise_state = noise_state * 1664525u + 1013904223u;
+        mm += (int32_t)((noise_state >> 16) % (uint32_t)(2 * noise_mm + 1)) - noise_mm;
+      }
+      if ((report_short ? mm <= 0 : mm < 80) || mm > 2000) mm = -1;
       if (tick >= range_off_from && tick < range_off_to) mm = -1;
+      if (range_override) mm = range_override(tick, mm);
       std::vector<uint8_t> payload = {255};
       putI32(payload, mm);
       pending.push_back({tick, mspFrame(0x1F01, payload, false)});
@@ -389,7 +421,7 @@ struct Run {
         kinematic(tick, s);
         acc = {0, 0, 0};
       } else if (tick > 0) {
-        acc = integrate(s, P, disturbance ? disturbance(tick) : Disturbance{});
+        acc = integrate(s, P, disturbance ? disturbance(tick) : Disturbance{}, tick);
       }
       arduino_fake::millis_value += 1U;
       arduino_fake::micros_value += 1000U;
@@ -434,6 +466,13 @@ struct Run {
   double speed() const { return std::sqrt(s.vn * s.vn + s.ve * s.ve); }
 };
 
+// 자동착륙 진입 직전에 호버 추정을 편향시킨다(추정이 틀린 경우를 흉내). 진입 뒤에는
+// fs_phase 가 FS_NONE 이 아니라 추정이 더 갱신되지 않는다.
+void forceHoverEstimate(float us) {
+  hoverTracker.estimate_us = us;
+  hover_est = us;
+}
+
 void setTrueCalibration(uint32_t delay_us, double sign = 1.0) {
   const auto Mt = trueCalibration();
   float M[2][2] = {{(float)(sign * Mt[0][0]), (float)(sign * Mt[0][1])},
@@ -459,6 +498,91 @@ Run hoverRun(double height, double v0, double force_tilt_deg) {
 }  // namespace
 
 int main() {
+  runCase("sil_sensor_reports_landed_range", [] {
+    // 실측(2026-11-03): 착륙장치로 바닥에 선 기체의 원값 18–37 mm, 품질 255.
+    Run run;
+    run.s.h = 0.0;
+    resetFirmware(run.s);
+    run.sensor.ground_offset_mm = 30;
+    run.sensor.report_short = true;
+    run.sensor.noise_mm = 8;
+    int32_t lo = 100000, hi = -100000;
+    int frames = 0;
+    uint32_t seen = 0;
+    run.on_tick = [&](uint32_t) {
+      FlowSensorSnapshot snap;
+      portENTER_CRITICAL(&flowSensorMux);
+      snap = flowSensorSnapshot;
+      portEXIT_CRITICAL(&flowSensorMux);
+      if (snap.range_seq != seen) {
+        seen = snap.range_seq;
+        frames++;
+        lo = std::min(lo, snap.range_mm);
+        hi = std::max(hi, snap.range_mm);
+      }
+    };
+    run.runTicks(2000);
+    CHECK_MSG(frames >= 50, "frames=" + fmt(frames));
+    CHECK_MSG(lo >= 18 && hi <= 38, "lo=" + fmt(lo) + " hi=" + fmt(hi));
+    CHECK_MSG(hi - lo >= 8, "noise spread=" + fmt(hi - lo));
+  });
+
+  runCase("sil_tether_floor_and_override_shape_the_range", [] {
+    Run run;
+    run.s.h = 0.3;
+    resetFirmware(run.s);
+    run.sensor.ground_offset_mm = 30;
+    run.sensor.report_short = true;
+    run.P.tether_floor = [](uint32_t) { return 0.05; };
+    run.sensor.range_override = [](uint32_t tick, int32_t mm) {
+      return tick >= 1000 && tick < 1100 ? (int32_t)30 : mm;
+    };
+    std::vector<int32_t> seen;
+    uint32_t seq = 0;
+    run.on_tick = [&](uint32_t) {
+      FlowSensorSnapshot snap;
+      portENTER_CRITICAL(&flowSensorMux);
+      snap = flowSensorSnapshot;
+      portEXIT_CRITICAL(&flowSensorMux);
+      if (snap.range_seq != seq) {
+        seq = snap.range_seq;
+        seen.push_back(snap.range_mm);
+      }
+    };
+    run.runTicks(1500);               // 시동 안 함: 떨어져 줄에 걸린다
+    CHECK_MSG(std::fabs(run.s.h - 0.05) < 1e-9, "h=" + fmt(run.s.h));
+    CHECK(std::count(seen.begin(), seen.end(), 30) >= 2);
+    CHECK(seen.back() == 80);
+  });
+
+  runCase("sil_thrust_scale_and_ground_effect_change_thrust", [] {
+    State s;
+    s.h = 0.5;
+    Params P;
+    for (int i = 0; i < 4; i++) motorOut[i] = 1340;
+    const auto base = integrate(s, P, Disturbance{}, 0);
+    s = State(); s.h = 0.5;
+    P.thrust_scale_at = [](uint32_t) { return 0.9; };
+    const auto sag = integrate(s, P, Disturbance{}, 0);
+    CHECK(sag[2] > base[2] + 0.5);    // NED: 추력이 줄면 아래로 더 가속
+    s = State(); s.h = 0.02;
+    P.thrust_scale_at = nullptr;
+    P.ground_effect_gain = 0.1;
+    const auto ge = integrate(s, P, Disturbance{}, 0);
+    CHECK(ge[2] < base[2] - 0.5);
+    for (int i = 0; i < 4; i++) motorOut[i] = 1000;
+  });
+
+  runCase("forceHoverEstimate biases the failsafe reference", [] {
+    Run run = hoverRun(0.6, 0.0, 0.0);
+    run.arm(1340);
+    run.runTicks(3000);
+    CHECK(hover_valid);
+    forceHoverEstimate(1370.0f);
+    CHECK(hover_est == 1370.0f && hoverTracker.estimate_us == 1370.0f);
+    CHECK(hover_valid);
+  });
+
   runCase("true calibration of the sensor model is a signed permutation", [] {
     const auto M = trueCalibration();
     CHECK(std::fabs(M[0][0]) < 0.01 * kCountsPerRad);
