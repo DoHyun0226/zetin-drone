@@ -35,8 +35,8 @@
 | `firmware/platformio_config/platformio.ini` | `firmware/archive/platformio_skeleton/platformio.ini` | 보관 |
 | `test/README` | `firmware/archive/platformio_skeleton/test/README` | 보관 |
 | `scripts/Drone_Control_Dualsense.py` | `scripts/ground/control_station.py` | 현행 |
-| `scripts/Drone_Tuning.py` | `scripts/tune_pid.py` | 현행 |
-| `scripts/Drone_Reciever.py` | `scripts/receive_telemetry.py` | 현행 |
+| `scripts/Drone_Tuning.py` | `scripts/drone_control.py` | 현행 |
+| `scripts/Drone_Reciever.py` | `scripts/drone_control.py` | 현행 |
 | `scripts/Drone_Monitor.py` | `scripts/monitor_telemetry.py` | 현행 |
 | `scripts/Drone_Analasys.py` | `scripts/ground/flight_log.py` | 현행 |
 | `scripts/drone_telemetry.py` | `scripts/ground/telemetry_schema.py` | 현행 |

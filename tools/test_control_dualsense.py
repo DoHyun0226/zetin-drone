@@ -3446,6 +3446,277 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         visit(tree, False)
         self.assertEqual(offenders, [])
 
+    # --- Task 7: --keyboard / --listen modes and bad-packet counting ---
+
+    KEYBOARD_REFUSAL = "[STDIN] 키보드 모드: 시동·복구는 패드로만 합니다"
+    LISTEN_REFUSAL = "[STDIN] 수신 전용 모드"
+
+    def _load_mode_module(self, argv, name, **kwargs):
+        module_name = f"_control_dualsense_{name}_under_test"
+        module, sock = self._load_module(
+            argv=argv, module_name=module_name, **kwargs,
+        )
+        self.addCleanup(sys.modules.pop, module_name, None)
+        module.shutdown_event.clear()
+        return module, sock
+
+    @staticmethod
+    def _arm_locally(module):
+        module.is_armed = True
+        module.is_streaming = True
+        module.arm_state = "armed"
+
+    def _started_threads(self, module, recording):
+        started = []
+
+        class _Recording(_FakeThread):
+            def __init__(self, *_, target=None, **__):
+                self.target = target
+
+            def start(self):
+                started.append(self.target)
+
+        with (
+            mock.patch.object(threading, "Thread", _Recording),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            module.main(ui=recording)
+        return started
+
+    def _replay(self, module, samples):
+        """Feed parsed samples through telemetry_thread on the module's socket."""
+        rows = []
+        module.csv_writer = types.SimpleNamespace(writerow=rows.append)
+        module.csv_file = types.SimpleNamespace(flush=lambda: None)
+        module.sock.packets = iter([b"packet"] * len(samples))
+        with (
+            mock.patch.object(module, "parse_telemetry_packet", side_effect=samples),
+            mock.patch.object(module, "sample_to_csv_row", return_value=[]),
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaises(_LoopComplete),
+        ):
+            module.telemetry_thread()
+        return rows
+
+    def test_modes_are_parsed_and_mutually_exclusive(self):
+        parse = self.module._parse_cli_args
+        self.assertTrue(parse(["--keyboard"]).keyboard)
+        self.assertTrue(parse(["--listen", "--no-raw"]).listen)
+        self.assertEqual(self.module.mode, "pad")
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            parse(["--keyboard", "--listen"])
+
+    def test_keyboard_mode_refuses_start_and_resume(self):
+        m, sock = self._load_mode_module(("--keyboard",), "kb_refuse")
+        self.assertEqual(m.mode, "keyboard")
+        recording = _RecordingUI()
+        m.ui = recording
+        # 무장·복구가 가능한 상태로 만들어 두어도 키보드 모드는 거부한다.
+        m.last_telem_time = m.time.monotonic()
+        m.telem_calibration_ok = 1
+        m.telem_armed = 0
+        m.telem_fault_critical = 0
+        for cmd in ("start", "resume", "START", "Resume", "start 1"):
+            m.handle_stdin_command(cmd)
+        sent = [d for d, _ in sock.sent]
+        self.assertFalse(
+            any(d.split()[0].lower() in (b"start", b"resume") for d in sent if d),
+            sent,
+        )
+        self.assertFalse(any(d.startswith(b"mag ") for d in sent), sent)
+        self.assertEqual(m.arm_state, "idle")
+        self.assertEqual(m.resume_state, "idle")
+        self.assertEqual(recording.texts("event"), [self.KEYBOARD_REFUSAL] * 5)
+
+    def test_keyboard_mode_still_passes_settings_and_stop_through(self):
+        m, sock = self._load_mode_module(("--keyboard",), "kb_pass")
+        m.ui = _RecordingUI()
+        with mock.patch.object(m.time, "sleep", return_value=None):
+            m.handle_stdin_command("pr 0.9")
+            m.handle_stdin_command("stop")
+        sent = [d for d, _ in sock.sent]
+        self.assertIn(b"pr 0.9", sent)
+        self.assertIn(b"stop", sent)
+
+    def test_keyboard_mode_sends_nothing_on_exit(self):
+        for index, exit_error in enumerate((KeyboardInterrupt, EOFError)):
+            with self.subTest(exit=exit_error.__name__):
+                # 로컬 무장 상태를 억지로 만들어도 종료 시 stop을 보내지 않는다:
+                # 이전 패드 세션이 남긴 자동착륙 하강 중일 수 있다.
+                m, sock = self._load_mode_module(
+                    ("--keyboard",), f"kb_exit_{index}",
+                    input_side_effect=exit_error,
+                    before_main=self._arm_locally,
+                )
+                self.assertEqual(sock.sent, [])
+
+    def test_keyboard_mode_does_not_start_controller_thread(self):
+        m, _sock = self._load_mode_module(("--keyboard",), "kb_threads")
+        recording = _RecordingUI()
+        started = self._started_threads(m, recording)
+        self.assertEqual(started, [m.telemetry_worker])
+        # 패드가 없으니 입력줄 명령 목록은 main이 띄운다.
+        events = recording.texts("event")
+        self.assertEqual(events[:len(m.startup_help_lines())], m.startup_help_lines())
+
+    def test_pad_mode_still_starts_both_workers(self):
+        started = self._started_threads(self.module, _RecordingUI())
+        self.assertEqual(
+            started, [self.module.telemetry_worker, self.module.controller_worker],
+        )
+
+    def test_keyboard_mode_creates_no_log_files(self):
+        module_name = "_control_dualsense_kb_files_under_test"
+        sys.modules.pop(module_name, None)
+        self.addCleanup(sys.modules.pop, module_name, None)
+        spec = importlib.util.spec_from_file_location(module_name, CONTROL_PATH)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        good = ",".join(str(value) for value in range(55)).encode("ascii")
+        zimu = (
+            struct.pack("<4sBBHIII", b"ZIMU", 1, 1, 0, 1, 1000, 0)
+            + struct.pack("<H12h", 0, *range(12))
+        )
+        recording = _RecordingUI()
+        with (
+            mock.patch.dict(sys.modules, {"pygame": types.ModuleType("pygame")}),
+            mock.patch.object(socket, "socket", return_value=_FakeSocket()),
+            mock.patch.object(pathlib.Path, "mkdir") as mkdir,
+            mock.patch.object(pathlib.Path, "open") as path_open,
+            mock.patch.object(threading, "Thread", _FakeThread),
+            mock.patch.object(sys, "argv", [str(CONTROL_PATH), "--keyboard"]),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            spec.loader.exec_module(module)
+            module.main(ui=recording)
+            module.shutdown_event.clear()
+            module.sock = _FakeSocket([zimu, good, b"\xff"])
+            with self.assertRaises(_LoopComplete):
+                module.telemetry_thread()
+            module.shutdown_workers_and_close_log(())
+        path_open.assert_not_called()
+        mkdir.assert_not_called()
+        self.assertIsNone(module.log_path)
+        self.assertIsNone(module.raw_log_path)
+        self.assertIsNone(module.csv_file)
+        self.assertIsNone(module.raw_file)
+        self.assertIsNone(module.snapshot()["log_path"])
+        self.assertIsNotNone(module.last_sample)
+        events = recording.texts("event")
+        self.assertFalse(any(t.startswith("[LOG] 저장 완료") for t in events))
+        self.assertIn("[LOG] 저장 0개, 잘못된 패킷 1개", events)
+
+    def test_keyboard_mode_trim_follows_the_drone_without_resending(self):
+        m, sock = self._load_mode_module(("--keyboard",), "kb_trim")
+        m.ui = _RecordingUI()
+        m.handle_stdin_command("trim 1 2")
+        self._replay(m, [
+            _telemetry_sample(Armed=0, Failsafe_Phase=0, Trim_Roll=0.0, Trim_Pitch=0.0),
+            _telemetry_sample(Armed=0, Failsafe_Phase=0, Trim_Roll=1.0, Trim_Pitch=2.0),
+        ])
+        trims = [d for d, _ in sock.sent if d.startswith(b"trim ")]
+        self.assertEqual(trims, [b"trim 1 2"])
+        self.assertAlmostEqual(m.trim_roll, 1.0)
+        self.assertAlmostEqual(m.trim_pitch, 2.0)
+
+    def test_listen_mode_sends_only_connect(self):
+        # trim (0,0) → (1,2) 두 패킷 재생 + 입력줄 명령 + --no-raw 시작 + 종료
+        for index, exit_error in enumerate((KeyboardInterrupt, EOFError)):
+            with self.subTest(exit=exit_error.__name__):
+                m, sock = self._load_mode_module(
+                    ("--listen", "--no-raw"), f"listen_only_{index}",
+                    input_side_effect=exit_error,
+                    before_main=self._arm_locally,
+                )
+                self.assertEqual(m.mode, "listen")
+                recording = _RecordingUI()
+                m.ui = recording
+                m.is_armed = m.is_streaming = False
+                m.arm_state = "idle"
+                m.trim_synced = False
+                rows = self._replay(m, [
+                    _telemetry_sample(Armed=0, Failsafe_Phase=0,
+                                      Trim_Roll=0.0, Trim_Pitch=0.0),
+                    _telemetry_sample(Armed=0, Failsafe_Phase=0,
+                                      Trim_Roll=1.0, Trim_Pitch=2.0),
+                ])
+                commands = ("pr 0.9", "stop", "start", "resume", "th 1200",
+                            "raw on", "mag off", "rcr 1 0 0 0", "trim 1 2")
+                with mock.patch.object(m.time, "sleep", return_value=None):
+                    for command in commands:
+                        m.handle_stdin_command(command)
+                    # 송신 관문 자체도 connect만 통과시킨다.
+                    m.send_cmd("trim 1.00 2.00")
+                    m.reliable_send("stop")
+                    m.send_trim()
+                    self._arm_locally(m)
+                    m._on_stdin_interrupt()
+                    m._on_stdin_eof()
+                self.assertEqual({d for d, _ in sock.sent}, {b"connect"})
+                self.assertEqual(
+                    recording.texts("event").count(self.LISTEN_REFUSAL),
+                    len(commands),
+                )
+                self.assertEqual(m.current_throttle, 1000)
+                self.assertTrue(m.mag_enabled_choice)
+                # CSV는 기록한다.
+                self.assertEqual(len(rows), 2)
+                self.assertIsNotNone(m.log_path)
+
+    def test_listen_mode_no_raw_neither_sends_raw_zero_nor_claims_to(self):
+        recording = _RecordingUI()
+        m, _sock = self._load_mode_module(("--listen", "--no-raw"), "listen_raw")
+        self.assertFalse(m.raw_capture_enabled)
+        started = self._started_threads(m, recording)
+        self.assertEqual(started, [m.telemetry_worker])
+        self.assertFalse(any(t.startswith("[RAW]") for t in recording.texts("event")))
+
+    def test_listen_mode_keeps_raw_logging_on(self):
+        m, _sock = self._load_mode_module(("--listen",), "listen_rawlog")
+        self.assertTrue(m.raw_capture_enabled)
+        self.assertIsNotNone(m.raw_log_path)
+
+    def test_bad_packets_are_counted(self):
+        good = ",".join(str(value) for value in range(55)).encode("ascii")
+        rows = []
+        self.module.bad_packet_count = 0
+        self._run_datagrams([b"\xff\xfe", b"not,a,packet", good], rows)
+        self.assertEqual(self.module.bad_packet_count, 2)
+        self.assertEqual(self.module.snapshot()["bad_packet_count"], 2)
+        self.assertEqual(len(rows), 1)
+
+    def test_shutdown_reports_saved_and_bad_packet_counts(self):
+        good = ",".join(str(value) for value in range(55)).encode("ascii")
+        rows = []
+        self.module.bad_packet_count = 0
+        self._run_datagrams([good, b"\xff\xfe", good, b"x"], rows)
+        recording = _RecordingUI()
+        self.module.ui = recording
+        self.module.csv_file = io.StringIO()
+        self.module.shutdown_workers_and_close_log(())
+        self.assertIn("[LOG] 저장 2개, 잘못된 패킷 2개", recording.texts("event"))
+
+    def test_entry_point_accepts_every_station_option(self):
+        # drone_control.py는 station을 import하기 전에 인자를 검사한다.
+        # 두 파서가 어긋나면 진입점이 통과시킨 인자를 station이 거부한다.
+        import drone_control
+
+        def options(parser):
+            return {
+                flag for action in parser._actions for flag in action.option_strings
+            }
+
+        self.assertLessEqual(
+            options(self.module._cli_parser()), options(drone_control._parser()),
+        )
+
+    def test_main_refuses_a_mode_other_than_the_import_time_one(self):
+        with self.assertRaises(ValueError):
+            self.module.main(["--keyboard"], ui=_RecordingUI())
+
 
 class BenchTrimResetTests(unittest.TestCase):
     @classmethod

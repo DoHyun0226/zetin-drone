@@ -135,8 +135,8 @@ M4 = T + P + R + Y
 | 도구 | 역할 |
 |---|---|
 | [`ground/control_station.py`](../scripts/ground/control_station.py) | **정상 조종·벤치의 유일한 대화형 지상국.** RC 스트리밍·stdin 명령·상태 표시·CSV·raw 기록을 한 프로세스에서 처리 |
-| [`tune_pid.py`](../scripts/tune_pid.py) | 게임패드 없이 UDP 명령·게인만 다루는 보조 도구 |
-| [`receive_telemetry.py`](../scripts/receive_telemetry.py) | 터미널 수신기 겸 CSV 로거 |
+| [`drone_control.py --keyboard`](../scripts/drone_control.py) | 게임패드 없이 명령·게인만 다루는 설정·읽기용 콘솔. `start`·`resume` 거부, 로그 파일 없음 |
+| [`drone_control.py --listen`](../scripts/drone_control.py) | 수신 전용 표시 겸 CSV·raw 로거. `connect` 외에는 보내지 않음 |
 | [`monitor_telemetry.py`](../scripts/monitor_telemetry.py) | 실시간 플롯 겸 CSV 로거 |
 | [`drone_logs.py flight`](../scripts/ground/flight_log.py) | 20Hz CSV 오프라인 분석 |
 | [`drone_logs.py probe`](../scripts/ground/probe_response.py) | 자동착륙 프로브 판정·응답 분포 분석 |

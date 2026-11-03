@@ -229,7 +229,7 @@ ar|at|ay <value>      # roll / pitch / yaw
   실패한 명령은 무시된다. 자동착륙 하강 중에는 유효한 값도 변경하지 않는다.
 
 수신된 데이터그램은 그 출발지 주소를 텔레메트리 목적지로도 등록한다.
-[`receive_telemetry.py`](../scripts/receive_telemetry.py)와
+[`drone_control.py`](../scripts/drone_control.py)(모든 모드)와
 [`monitor_telemetry.py`](../scripts/monitor_telemetry.py)는 이를 위해 주기적으로
 `connect`를 보낸다.
 
@@ -434,7 +434,7 @@ Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw
 
 위 이름은 설명을 위한 것이며 실제 패킷에는 같은 순서의 숫자 12개만 들어간다.
 수신기는 `GAINS,` 접두사를 먼저 분리하므로 이 응답을 텔레메트리 불량으로
-계수하지 않는다. `tune_pid.py`는 각 이름과 값을 한 줄로 출력한다.
+계수하지 않는다. `drone_control.py`는 각 이름과 값을 `[GAINS]` 한 줄로 출력한다.
 
 
 `telemetry_schema.py`는 과거 패킷도 받아들인다. 아래 길이는 역사적 확장

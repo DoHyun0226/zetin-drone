@@ -47,9 +47,21 @@ from ground.telemetry_schema import (
 ui = ConsoleUI()
 
 
-def _parse_cli_args(argv=None):
+def _cli_parser():
     parser = argparse.ArgumentParser(
         description="DualSense flight controller and telemetry logger",
+    )
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
+        "--keyboard",
+        action="store_true",
+        help="no gamepad: command line only for settings and reading; "
+             "start/resume refused, nothing sent on exit, no log files",
+    )
+    modes.add_argument(
+        "--listen",
+        action="store_true",
+        help="receive only: display and CSV/raw logging, sends nothing but connect",
     )
     parser.add_argument(
         "--no-raw",
@@ -66,10 +78,26 @@ def _parse_cli_args(argv=None):
         action="store_true",
         help="plain line output instead of the full-screen dashboard",
     )
-    return parser.parse_args(argv)
+    return parser
 
 
+def _parse_cli_args(argv=None):
+    return _cli_parser().parse_args(argv)
+
+
+def _mode_of(args):
+    if args.keyboard:
+        return "keyboard"
+    if args.listen:
+        return "listen"
+    return "pad"
+
+
+# 모드는 import 시점에 정해진다: 로그 파일 생성 여부가 모드에 달려 있다.
 cli_args = _parse_cli_args()
+mode = _mode_of(cli_args)
+KEYBOARD_REFUSAL = "[STDIN] 키보드 모드: 시동·복구는 패드로만 합니다"
+LISTEN_REFUSAL = "[STDIN] 수신 전용 모드"
 
 # === 설정 ===
 UDP_IP        = "192.168.4.1"
@@ -109,20 +137,27 @@ except OSError:
     raise SystemExit(1)
 sock.settimeout(0.1)
 
-# --- 비행 CSV 로그 (receive/monitor와 같은 스키마, logs/에 저장) ---
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-LOG_TIMESTAMP = f"{datetime.datetime.now():%Y-%m-%d_%H%M%S}"
-log_path = LOG_DIR / f"flight_log_{LOG_TIMESTAMP}.csv"
-raw_log_path = LOG_DIR / f"imuraw_{LOG_TIMESTAMP}.bin"
-csv_file = log_path.open("w", newline="", encoding="utf-8")
-csv_writer = csv.writer(csv_file)
-csv_writer.writerow(CSV_FIELDS)
-ui.event(f"[LOG] 비행 로그: {log_path}")
+# --- 비행 CSV 로그 (monitor와 같은 스키마, logs/에 저장) ---
+# --keyboard는 로그 파일을 만들지 않는다: 빈 flight_log_*.csv가 분석 도구의
+# "가장 최근 비행 로그" 기본값을 가리지 않게 한다.
+logging_enabled = mode != "keyboard"
+if logging_enabled:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_TIMESTAMP = f"{datetime.datetime.now():%Y-%m-%d_%H%M%S}"
+    log_path = LOG_DIR / f"flight_log_{LOG_TIMESTAMP}.csv"
+    raw_log_path = LOG_DIR / f"imuraw_{LOG_TIMESTAMP}.bin"
+    csv_file = log_path.open("w", newline="", encoding="utf-8")
+    csv_writer = csv.writer(csv_file)
+    csv_writer.writerow(CSV_FIELDS)
+    ui.event(f"[LOG] 비행 로그: {log_path}")
+else:
+    log_path = raw_log_path = None
+    csv_file = csv_writer = None
 raw_file = None
 raw_batch_count = 0
 raw_last_dropped = 0
 raw_last_receive_time = 0.0
-raw_capture_enabled = not cli_args.no_raw
+raw_capture_enabled = logging_enabled and not cli_args.no_raw
 mag_enabled_choice = not cli_args.no_mag
 
 # === 상태 변수 ===
@@ -144,8 +179,8 @@ arm_next_retry   = 0.0
 worker_fault     = None
 WORKER_LABELS    = {"telemetry": "수신", "controller": "조종"}
 RC_COMMANDS      = ("rc", "rcr")
-mode             = "pad"
-bad_packet_count = 0        # 잘못된 텔레메트리 패킷 수 (집계는 Task 7)
+bad_packet_count = 0        # 디코드·파싱에 실패한 텔레메트리 패킷 수 (telem_lock)
+logged_packet_count = 0     # CSV에 저장한 텔레메트리 행 수 (수신 스레드만 쓴다)
 last_sample      = None     # 마지막으로 파싱한 텔레메트리 샘플
 STATE_TRANSITION_FIELDS = (
     "Failsafe_Phase",
@@ -239,6 +274,10 @@ def _worker_fault_lock_reason():
 
 
 def _sendto(cmd: str):
+    # 모든 송신(send_cmd·reliable_send)이 지나는 관문. 수신 전용 모드는
+    # 텔레메트리 목적지 등록(connect)만 내보낸다.
+    if mode == "listen" and cmd != "connect":
+        return
     try:
         sock.sendto(cmd.encode(), (UDP_IP, UDP_PORT))
     except OSError:
@@ -671,6 +710,14 @@ def handle_stdin_command(msg: str):
         return
     parts = command.split()
     command_lower = command.lower()
+    if mode == "listen":
+        # 수신 전용: 입력줄 명령은 상태도 바꾸지 않고 보내지도 않는다.
+        ui.event(LISTEN_REFUSAL)
+        return
+    if mode == "keyboard" and parts[0].lower() in ("start", "resume"):
+        # 조종은 패드로만 한다. RC가 없으니 시동이 걸리면 RC 타임아웃 failsafe가 난다.
+        ui.event(KEYBOARD_REFUSAL)
+        return
     if command_lower == "resume":
         request_resume("stdin")
     elif command_lower == "start":
@@ -864,7 +911,7 @@ def telemetry_thread():
     global telem_total_pkts, telem_dropped_pkts
     global telem_failsafe_phase, telem_hover_est, telem_hover_valid
     global trim_roll, trim_pitch, trim_synced, last_trim_resend
-    global last_sample
+    global last_sample, bad_packet_count, logged_packet_count
 
     ui.event("[TELEM] 수신 스레드 시작")
     prev_fault_rc = False
@@ -947,6 +994,8 @@ def telemetry_thread():
                 continue
             sample = parse_telemetry_packet(line)
         except (UnicodeDecodeError, ValueError):
+            with telem_lock:
+                bad_packet_count += 1
             continue
 
         received_at = time.monotonic()
@@ -969,8 +1018,10 @@ def telemetry_thread():
             last_sample        = sample
             received_trim_roll = sample["Trim_Roll"]
             received_trim_pitch = sample["Trim_Pitch"]
-            if not trim_synced:
+            if not trim_synced or mode != "pad":
                 # 조종자가 아직 트림을 건드리지 않았다: 드론이 권위다.
+                # 패드가 없는 모드(--keyboard·--listen)에서는 계속 드론을 따르고
+                # 재전송하지 않는다(입력줄 trim 명령을 되돌리지 않게).
                 if received_trim_roll is not None and received_trim_pitch is not None:
                     trim_roll = received_trim_roll
                     trim_pitch = received_trim_pitch
@@ -995,10 +1046,12 @@ def telemetry_thread():
         # 텔레메트리 샘플에서 건강 상태와 Armed=1을 확인한 뒤에만 RC를 연다.
         advance_arm_attempt(sample)
 
-        now_str = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        csv_writer.writerow(sample_to_csv_row(now_str, sample))
+        if csv_writer is not None:
+            now_str = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            csv_writer.writerow(sample_to_csv_row(now_str, sample))
+            logged_packet_count += 1
         packet_count += 1
-        if packet_count % 20 == 0:
+        if csv_file is not None and packet_count % 20 == 0:
             csv_file.flush()
 
         if received_at - last_status >= STATUS_PERIOD:
@@ -1315,9 +1368,13 @@ def shutdown_workers_and_close_log(workers):
                 f"[WARN] {worker_name} 스레드가 "
                 f"{THREAD_JOIN_TIMEOUT_SEC:.1f}s 안에 종료되지 않음"
             )
-    csv_file.flush()
-    csv_file.close()
-    ui.event(f"[LOG] 저장 완료: {log_path}")
+    if csv_file is not None:
+        csv_file.flush()
+        csv_file.close()
+        ui.event(f"[LOG] 저장 완료: {log_path}")
+    with telem_lock:
+        bad_packets = bad_packet_count
+    ui.event(f"[LOG] 저장 {logged_packet_count}개, 잘못된 패킷 {bad_packets}개")
     if raw_file is not None:
         raw_file.flush()
         raw_file.close()
@@ -1447,47 +1504,61 @@ def snapshot():
 
 
 def _on_stdin_interrupt():
-    if is_armed or arm_state == "arming":
+    # 종료 시 조건부 disarm은 패드 모드에서만 한다. --keyboard는 종료 시 아무것도
+    # 보내지 않고(자동착륙 하강 중 stop은 모터를 끈다), --listen은 connect만 보낸다.
+    if mode == "pad" and (is_armed or arm_state == "arming"):
         disarm("키보드 인터럽트")
 
 
 def _on_stdin_eof():
     # Ctrl+D도 Ctrl+C와 같이 무장·시동 중이면 disarm한다.
-    if is_armed or arm_state == "arming":
+    if mode == "pad" and (is_armed or arm_state == "arming"):
         disarm("입력 종료(EOF)")
 
 
 def main(argv=None, ui=None):
     """Start the workers, run the stdin loop, then save the logs.
 
-    Socket, log files and state are set up at import time. ``argv`` (when
-    given) re-reads --no-raw/--no-mag/--plain; ``ui`` replaces the module's
-    output object for this and every later call. Without ``ui``, ``make_ui``
-    picks the dashboard on a terminal and the line console otherwise.
+    Socket, log files, state and the mode (--keyboard/--listen) are set up
+    at import time. ``argv`` (when given) re-reads --no-raw/--no-mag/--plain
+    and must name the import-time mode; ``ui`` replaces the module's output
+    object for this and every later call. Without ``ui``, ``make_ui`` picks
+    the dashboard on a terminal and the line console otherwise.
     """
     global cli_args, raw_capture_enabled, mag_enabled_choice
     if argv is not None:
-        cli_args = _parse_cli_args(argv)
-        raw_capture_enabled = not cli_args.no_raw
+        parsed = _parse_cli_args(argv)
+        if _mode_of(parsed) != mode:
+            raise ValueError(
+                f"mode {_mode_of(parsed)!r} differs from the import-time mode {mode!r}"
+            )
+        cli_args = parsed
+        raw_capture_enabled = logging_enabled and not cli_args.no_raw
         mag_enabled_choice = not cli_args.no_mag
     if ui is None:
         ui = make_ui(cli_args, help_lines=startup_help_lines())
     globals()["ui"] = ui
     station_ui = ui
 
-    t_telem = threading.Thread(target=telemetry_worker, daemon=True)
-    t_ctrl  = threading.Thread(target=controller_worker, daemon=True)
-    if not raw_capture_enabled:
+    # 패드 모드만 조종 스레드를 띄운다. --keyboard·--listen은 RC를 보내지 않는다.
+    workers = [threading.Thread(target=telemetry_worker, daemon=True)]
+    if mode == "pad":
+        workers.append(threading.Thread(target=controller_worker, daemon=True))
+    elif mode == "keyboard":
+        # 조종 스레드가 찍던 시작 도움말(입력줄 명령 목록)을 여기서 띄운다.
+        for line in startup_help_lines():
+            station_ui.event(line)
+    if cli_args.no_raw and mode != "listen":
         station_ui.event("[RAW] --no-raw: 시작 시 드론 raw 스트림을 끕니다.")
         reliable_send("raw 0")
-    t_telem.start()
-    t_ctrl.start()
+    for worker in workers:
+        worker.start()
 
     try:
         station_ui.run(handle_stdin_command, _on_stdin_interrupt, _on_stdin_eof)
     finally:
         station_ui.after_run()
-        shutdown_workers_and_close_log((t_telem, t_ctrl))
+        shutdown_workers_and_close_log(workers)
     return 0
 
 
