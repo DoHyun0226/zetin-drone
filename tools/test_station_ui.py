@@ -589,62 +589,95 @@ class DashboardUITest(unittest.TestCase):
             self._run_catching_interrupt(self.ui)
         self.assertEqual(self.calls, ["interrupt"])
 
-    def test_event_loop_exception_runs_the_safety_callback_then_exits(self):
-        # A renderer flush that starts failing mid-run (a broken terminal) is an
-        # event-loop exception. prompt_toolkit's default handler would print it
-        # and wait for ENTER with the app still up; the safety callback must run
-        # first and the dashboard must leave cleanly.
+    # Amendment (finding 2): an internal dashboard error is a fault, not an
+    # operator stop. The station's fault handler runs first (latch, RC stop,
+    # no disarm), then the UI falls back to line output and keeps running
+    # until the operator presses Ctrl+C.
+
+    def _run_fault_fallback(self, trigger, output=None):
+        """Start the dashboard, call ``trigger(app)``, then drive the fallback console."""
+        faults = []
+        seen_at_fault = []
+        console_lines = []
+        input_started = threading.Event()
+        release_input = threading.Event()
+
+        def on_fault(error):
+            seen_at_fault.append((list(self.ui._event_texts()), list(self.calls)))
+            faults.append(error)
+
+        def fallback_input(*_args):
+            input_started.set()
+            if not release_input.wait(timeout=WAIT_SEC):
+                raise AssertionError("fallback input was never released")
+            raise KeyboardInterrupt   # the operator's Ctrl+C on the line console
+
+        self.ui = DashboardUI(input=self.pipe, output=output or self._dummy_output())
+        self.ui.set_fault_handler(on_fault)
+        out = io.StringIO()
+        with (
+            mock.patch.object(builtins, "input", side_effect=fallback_input),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(io.StringIO()) as err,
+        ):
+            self.thread = threading.Thread(
+                target=self.ui.run,
+                args=(self.handled.append,
+                      lambda: self.calls.append("interrupt"),
+                      lambda: self.calls.append("eof")),
+                daemon=True,
+            )
+            self.thread.start()
+            self.assertTrue(_wait_until(lambda: self.ui.running))
+            self.assertTrue(_wait_until(lambda: self.ui._app.render_counter > 0))
+            trigger(self.ui._app)
+            self.assertTrue(input_started.wait(timeout=WAIT_SEC), "no console fallback")
+            self.assertEqual(self.calls, [])   # no on_interrupt / on_eof (no disarm)
+            self.ui.event("[WARN] after the fallback")
+            console_lines.append(out.getvalue())
+            release_input.set()
+            self._join()
+        self.assertEqual(self.calls, ["interrupt"])   # only the operator's Ctrl+C
+        self.assertNotIn("Press ENTER", err.getvalue())
+        return faults, seen_at_fault, console_lines[0]
+
+    def test_render_failure_is_a_fault_and_falls_back_to_the_console(self):
         from prompt_toolkit.output import DummyOutput
 
         broken = threading.Event()
-        seen_at_safety = []
 
         class _FailingFlushOutput(DummyOutput):
             def flush(self):
                 if broken.is_set():
                     raise OSError(5, "synthetic terminal write failure")
 
-        self.ui = DashboardUI(input=self.pipe, output=_FailingFlushOutput())
-
-        def run():
-            self.ui.run(
-                self.handled.append,
-                lambda: (seen_at_safety.append(list(self.ui._event_texts())),
-                         self.calls.append("interrupt")),
-                lambda: self.calls.append("eof"),
-            )
-
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            self.thread = threading.Thread(target=run, daemon=True)
-            self.thread.start()
-            self.assertTrue(_wait_until(lambda: self.ui.running))
-            self.assertTrue(_wait_until(lambda: self.ui._app.render_counter > 0))
+        def trigger(_app):
             broken.set()
             self.ui.event("[WARN] trigger a redraw")
-            self._join()
-        self.assertEqual(self.calls, ["interrupt"])
-        self.assertFalse(any("대시보드 오류" in t for t in seen_at_safety[0]), seen_at_safety)
-        texts = self.ui._event_texts()
-        self.assertTrue(
-            any(t.startswith("[ERR] 대시보드 오류: OSError") for t in texts), texts,
-        )
-        self.assertNotIn("Press ENTER", err.getvalue())
 
-    def test_background_task_exception_also_runs_the_safety_callback(self):
-        self._start()
-        app = self.ui._app
+        faults, seen_at_fault, console = self._run_fault_fallback(
+            trigger, output=_FailingFlushOutput())
+        self.assertEqual(len(faults), 1)
+        self.assertIsInstance(faults[0], OSError)
+        events_then, calls_then = seen_at_fault[0]
+        self.assertFalse(any("대시보드 오류" in t for t in events_then), events_then)
+        self.assertEqual(calls_then, [])
+        self.assertIn("[WARN] 대시보드 오류: OSError", console)
+        self.assertIn("[WARN] after the fallback", console)
 
+    def test_background_task_failure_is_a_fault_and_falls_back_to_the_console(self):
         async def broken_task():
             raise RuntimeError("synthetic background failure")
 
-        app.loop.call_soon_threadsafe(lambda: app.create_background_task(broken_task()))
-        self._join()
-        self.assertEqual(self.calls, ["interrupt"])
-        self.assertTrue(any(
-            t.startswith("[ERR] 대시보드 오류: RuntimeError: synthetic background failure")
-            for t in self.ui._event_texts()
-        ), self.ui._event_texts())
+        def trigger(app):
+            app.loop.call_soon_threadsafe(
+                lambda: app.create_background_task(broken_task()))
+
+        faults, _seen, console = self._run_fault_fallback(trigger)
+        self.assertEqual([str(f) for f in faults], ["synthetic background failure"])
+        self.assertIn("[WARN] 대시보드 오류: RuntimeError: synthetic background failure",
+                      console)
+        self.assertIn("[WARN] after the fallback", console)
 
     def test_interrupt_request_ends_the_running_dashboard_like_ctrl_c(self):
         # SIGTERM path: the signal handler asks the running dashboard to stop.

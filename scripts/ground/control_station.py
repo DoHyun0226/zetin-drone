@@ -180,10 +180,11 @@ arm_state        = "idle"  # idle | arming | armed
 arm_deadline     = 0.0
 arm_next_retry   = 0.0
 
-# 수신·조종 워커가 예상 못 한 예외로 죽은 기록(래치). "telemetry" | "controller".
-# 한 번 서면 재시작 전에는 풀지 않는다. 래치 중에는 시동·복구·rc/rcr 송신을 막는다.
+# 수신·조종 워커가 예상 못 한 예외로 죽은 기록(래치). "telemetry" | "controller" |
+# "dashboard"(대시보드 내부 오류). 한 번 서면 재시작 전에는 풀지 않는다. 래치 중에는
+# 시동·복구·rc/rcr 송신을 막는다.
 worker_fault     = None
-WORKER_LABELS    = {"telemetry": "수신", "controller": "조종"}
+WORKER_LABELS    = {"telemetry": "수신", "controller": "조종", "dashboard": "대시보드"}
 RC_COMMANDS      = ("rc", "rcr")
 bad_packet_count = 0        # 디코드·파싱에 실패한 텔레메트리 패킷 수 (telem_lock)
 logged_packet_count = 0     # CSV에 저장한 텔레메트리 행 수 (수신 스레드만 쓴다)
@@ -1581,6 +1582,16 @@ def _on_stdin_eof():
         disarm("입력 종료(EOF)")
 
 
+def _on_dashboard_fault(error):
+    """Internal dashboard error (event loop, redraw): a fault, not an operator stop.
+
+    Same handling as a dead worker: latch, cancel arm/resume, stop RC without
+    a stop packet (the drone's RC-timeout autoland takes over). The UI then
+    continues as a line console; Ctrl+C keeps its conditional disarm.
+    """
+    _handle_worker_fault("dashboard", error)
+
+
 def _on_ui_run_escape(error):
     """``ui.run`` must not raise; if anything escapes it, make the drone safe first.
 
@@ -1675,6 +1686,10 @@ def main(argv=None, ui=None):
     set_provider = getattr(station_ui, "set_snapshot_provider", None)
     if set_provider is not None:
         set_provider(snapshot)
+    # 대시보드 내부 오류는 조작자의 정지가 아니다: 래치·RC 중단(stop 없음) 뒤 줄 출력.
+    set_fault_handler = getattr(station_ui, "set_fault_handler", None)
+    if set_fault_handler is not None:
+        set_fault_handler(_on_dashboard_fault)
     station_ui.update(snapshot())
 
     if mode == "keyboard":

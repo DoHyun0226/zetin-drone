@@ -3908,6 +3908,83 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertFalse(runner.is_alive())
         self.assertEqual(result, [0])
 
+    def test_dashboard_render_failure_latches_a_fault_without_stop(self):
+        # Amendment (finding 2): an internal dashboard error while armed and
+        # streaming is a fault, not an operator stop: latch, RC stops, the
+        # drone's RC-timeout autoland takes over, no stop packet; the station
+        # keeps running on line output until the operator's Ctrl+C.
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+        from ground.station_ui import DashboardUI
+
+        m, sock = self._load_mode_module((), "final_dashboard_fault")
+        self._arm_locally(m)
+        m.last_sample = _telemetry_sample(Failsafe_Phase=0)
+        m.last_telem_time = m.time.monotonic()
+        m.csv_file = io.StringIO()
+        sock.sent.clear()
+        broken = threading.Event()
+
+        class _FailingFlushOutput(DummyOutput):
+            def flush(self):
+                if broken.is_set():
+                    raise OSError(5, "synthetic terminal write failure")
+
+        pipe_context = create_pipe_input()
+        pipe = pipe_context.__enter__()
+        self.addCleanup(pipe_context.__exit__, None, None, None)
+        dash = DashboardUI(input=pipe, output=_FailingFlushOutput())
+        input_started = threading.Event()
+        release_input = threading.Event()
+        state_at_fallback = []
+
+        def fallback_input(*_args):
+            state_at_fallback.append((m.worker_fault, m.is_streaming, m.is_armed,
+                                      b"stop" in [d for d, _ in sock.sent]))
+            input_started.set()
+            release_input.wait(timeout=5.0)
+            raise KeyboardInterrupt   # the operator's Ctrl+C on the line console
+
+        result = []
+
+        def run_main():
+            with mock.patch.object(m, "threading", self._threading_with(m, _FakeThread)):
+                result.append(m.main(ui=dash))
+
+        output = io.StringIO()
+        runner = threading.Thread(target=run_main, daemon=True)
+        with (
+            mock.patch.object(builtins, "input", side_effect=fallback_input),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            runner.start()
+            try:
+                self.assertTrue(self._wait(lambda: dash.running))
+                self.assertTrue(self._wait(lambda: dash._app.render_counter > 0))
+                broken.set()
+                dash.event("[WARN] trigger a redraw")
+                self.assertTrue(input_started.wait(timeout=5.0), "no console fallback")
+                self.assertEqual(state_at_fallback, [("dashboard", False, True, False)])
+                self.assertEqual(m.worker_fault, "dashboard")
+                self.assertFalse(m.is_streaming)
+                self.assertNotIn(b"stop", [d for d, _ in sock.sent])
+                # the latch holds: no RC, no arm
+                m.send_cmd("rcr 1 0.00 0.00 0.0")
+                self.assertFalse(any(d.startswith(b"rcr") for d, _ in sock.sent))
+                # later station events reach the fallback console
+                m.ui.event("[WARN] after the fallback")
+                self.assertIn("[WARN] after the fallback", output.getvalue())
+            finally:
+                release_input.set()
+                runner.join(timeout=5.0)
+        self.assertFalse(runner.is_alive())
+        self.assertEqual(result, [0])
+        text = output.getvalue()
+        self.assertIn("[ERR] 대시보드 스레드 오류: OSError", text)
+        # the operator's Ctrl+C afterwards keeps the conditional-disarm semantics
+        self.assertIn(b"stop", [d for d, _ in sock.sent])
+
     def _observe_every_ui_call(self, sent_socket):
         module = self.module
         observed = []

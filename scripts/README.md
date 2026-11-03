@@ -69,7 +69,8 @@ stdin `start`만으로 주기적인 RC가 생기지는 않으므로 비행 조�
 | D-pad | roll/pitch 트림 0.2°씩 변경, 각 축 ±10° 제한 |
 | PS | 트림을 0으로 초기화 |
 | stdin `stop` | 지상국의 무장 추정과 무관하게 `stop` 반복 전송 |
-| Ctrl+C·SIGTERM | `ARMED`이거나 `ARMING`이면 `stop` 후 종료·로그 닫기 (대시보드가 오류로 끝날 때도 같음) |
+| Ctrl+C·SIGTERM | `ARMED`이거나 `ARMING`이면 `stop` 후 종료·로그 닫기 |
+| (대시보드 내부 오류) | 조작자 정지가 아니다. 고장 래치·RC 중단(`stop` 미전송, 드론 RC 타임아웃 자동착륙)한 뒤 줄 출력으로 계속. 종료는 Ctrl+C |
 
 RC `rcr` 송신 목표는 **20Hz**(`CTRL_LOOP_HZ=20`)다. 스로틀과 트림 입력은
 RC 송신 중에만 처리된다. 버튼 번호는 OS/연결 방식에 따라 확인해야 하며,

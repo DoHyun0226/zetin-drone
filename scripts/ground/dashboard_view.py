@@ -182,7 +182,7 @@ def _top_bar(snap, sample, now, stale, age):
         if sample.get("Fault_Critical") == 1:
             alerts.append("치명 고장")
     if snap.get("worker_fault"):
-        label = {"telemetry": "수신", "controller": "조종"}.get(
+        label = {"telemetry": "수신", "controller": "조종", "dashboard": "대시보드"}.get(
             snap["worker_fault"], str(snap["worker_fault"]))
         alerts.append(f"{label} 스레드 오류")
     for alert in alerts:
