@@ -24,6 +24,7 @@
 #include "flow_calibration.h"
 #include "flow_odometry.h"
 #include "flow_hold.h"
+#include "range_land.h"
 
 static const uint32_t IMU_RAW_RING_SIZE = 512;
 static const uint32_t IMU_RAW_RING_MASK = IMU_RAW_RING_SIZE - 1;
@@ -812,6 +813,49 @@ AltHoldGains altHoldGains = altHoldDefaultGains();
 uint32_t flowSeqSeen = 0, rangeSeqSeen = 0;
 uint8_t flowcal_state = FLOWCAL_IDLE;
 
+// ---- 거리 기반 자동착륙(range_land.h). pid_task 가 쓰고 텔레메트리는 읽기만 한다. ----
+// RC 가 끊길 때 거리가 신선하면 RL_MODE_RANGE, 아니면 지금의 시간 기반 하강
+// (RL_MODE_TIMED). 거리 기반 하강 중 거리를 못 믿게 되면 RL_MODE_TIMED_FALLBACK.
+// 단계 번호(fs_phase)는 둘 다 FS_DESCENDING 이다(공유 헤더 failsafe_land.h 불변).
+static const int RL_NO_CAP = 100000;
+static const float RL_RESUME_SLEW_US_S = ALTHOLD_SLEW_US_S;
+RangeLandState rangeLand;
+AltHold rlAltHold;
+AltHoldGains rlAltHoldGains = altHoldDescentGains();
+volatile uint8_t rl_mode = RL_MODE_NONE;
+volatile uint8_t rl_stage = RL_STAGE_IDLE;
+volatile uint8_t rl_cut_reason = RL_CUT_NONE;
+volatile float rl_h_ref = 0.0f;
+// 마지막 신뢰 거리 프레임(range_timing_ok). Core 0 지연 뒤 꺼낸 프레임은 증거로도
+// 무효로도 쓰지 않는다.
+int32_t rlRangeMm = -1;
+uint32_t rlRangeTUs = 0;
+bool rlRangeSeen = false;
+// 요청 = allocator 입력(base + 고도 보정), 전달 = allocator 출력 collective.
+volatile int rl_requested_collective_us = 1000;
+volatile float rl_delivered_collective_us = 1000.0f;
+// 바닥 근접 뒤 요청 collective 래칫. 감쇠 중인 음수 보정이 0 쪽으로 돌아와도 오르지 않는다.
+int rl_collective_cap = RL_NO_CAP;
+// 이 에피소드의 기준 스로틀 상한. 폴백 때, 그리고 resume 인계 중 재진입 때 그 순간
+// 요청 collective 로 고정한다(위로 튀지 않음).
+int rl_base_ceiling = RL_NO_CAP;
+// resume 뒤 기준 스로틀을 그 순간 collective 에서 호버까지 천천히 옮기는 중.
+volatile bool rl_resume_handover = false;
+float rlHandoverBase = 0.0f;
+int rlHandoverSet = 0;
+
+static inline void rangeLandResetFirmware() {
+  rangeLand = RangeLandState{};
+  altHoldReset(rlAltHold);
+  rl_mode = RL_MODE_NONE;
+  rl_stage = RL_STAGE_IDLE;
+  rl_cut_reason = RL_CUT_NONE;
+  rl_h_ref = 0.0f;
+  rl_collective_cap = RL_NO_CAP;
+  rl_base_ceiling = RL_NO_CAP;
+  rl_resume_handover = false;
+}
+
 FlowHoldTelemetry flowHoldTelemetry = {};
 portMUX_TYPE flowTelemetryMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -865,6 +909,12 @@ static inline void resetFlowHoldForHarness() {
   altHoldGains = altHoldDefaultGains();
   flowSeqSeen = rangeSeqSeen = 0;
   flowcal_state = FLOWCAL_IDLE;
+  rangeLandResetFirmware();
+  rlRangeMm = -1;
+  rlRangeTUs = 0;
+  rlRangeSeen = false;
+  rl_requested_collective_us = 1000;
+  rl_delivered_collective_us = 1000.0f;
   publishFlowHoldTelemetry(FlowHoldTelemetry());
 }
 
@@ -1843,12 +1893,41 @@ void pid_task(void *pv) {
       if (refusal != RESUME_ALLOWED) {
         logResumeRefusal(refusal);
       } else {
+        const bool rangeEpisode = rl_mode == RL_MODE_RANGE ||
+                                  rl_mode == RL_MODE_TIMED_FALLBACK ||
+                                  rl_base_ceiling != RL_NO_CAP;
         fs_phase = FS_NONE;
         fault_rc = false;
         base_throttle = (int)lroundf(hover_est);
+        if (rangeEpisode) {
+          // 거리 기반 하강의 collective 는 호버와 한참 다를 수 있다(바닥 근접 감소).
+          // 호버로 계단을 만들지 않고 그 순간 값에서 천천히 옮긴다.
+          rl_resume_handover = true;
+          rlHandoverBase = (float)rl_requested_collective_us;
+          base_throttle = rl_requested_collective_us;
+          rlHandoverSet = base_throttle;
+        }
         min_throttle = max(1050, base_throttle - CTRL_MARGIN);
         max_throttle = min(1900, base_throttle + CTRL_MARGIN);
-        Serial.printf(">>> RESUME hover=%d\n", base_throttle);
+        Serial.printf(">>> RESUME hover=%d start=%d\n", (int)lroundf(hover_est),
+                      base_throttle);
+        rangeLandResetFirmware();
+        rl_resume_handover = rangeEpisode;
+      }
+    }
+    if (rl_resume_handover) {
+      if (fs_phase != FS_NONE || safety_lock || base_throttle != rlHandoverSet) {
+        rl_resume_handover = false;   // 조종자가 스로틀을 바꿨거나 잠금
+      } else {
+        const float target = hover_est;
+        const float step = RL_RESUME_SLEW_US_S * realDt;
+        const float d = target - rlHandoverBase;
+        rlHandoverBase += d > step ? step : (d < -step ? -step : d);
+        base_throttle = (int)lroundf(rlHandoverBase);
+        min_throttle = max(1050, base_throttle - CTRL_MARGIN);
+        max_throttle = min(1900, base_throttle + CTRL_MARGIN);
+        rlHandoverSet = base_throttle;
+        if (fabsf(target - rlHandoverBase) < 0.5f) rl_resume_handover = false;
       }
     }
     // 잠금 해제 첫 tick의 D kick과 이전 목표 rate 잔류를 제거한다.
@@ -1864,6 +1943,7 @@ void pid_task(void *pv) {
       outerCnt = 0;
       fs_first_enter_ms = 0;
       fs_first_enter_valid = false;
+      rangeLandResetFirmware();
       resetYawAuthority(yawAuthority);
       yaw_authority_state = YAW_AUTH_NORMAL;
       resetAllocationTelemetry();
@@ -1897,6 +1977,7 @@ void pid_task(void *pv) {
     portENTER_CRITICAL(&flowSensorMux);
     sensorSnap = flowSensorSnapshot;
     portEXIT_CRITICAL(&flowSensorMux);
+    bool rlTrustedNew = false;
     if (sensorSnap.range_seq != rangeSeqSeen) {
       rangeSeqSeen = sensorSnap.range_seq;
       // Core 0 가 막혔다 풀리며 꺼낸 프레임은 시각을 믿을 수 없다. 현재 시각으로
@@ -1904,8 +1985,14 @@ void pid_task(void *pv) {
       if (sensorSnap.range_timing_ok) {
         heightUpdate(heightEst, sensorSnap.range_mm, sensorSnap.range_t_us,
                      angleX, angleY);
+        rlRangeMm = sensorSnap.range_mm;
+        rlRangeTUs = sensorSnap.range_t_us;
+        rlRangeSeen = true;
+        rlTrustedNew = true;
       }
     }
+    const bool rlRangeFresh =
+        rlRangeSeen && (uint32_t)(nowUs - rlRangeTUs) <= FLOW_HEIGHT_MAX_AGE_US;
     const bool heightFresh =
         heightEst.valid &&
         (uint32_t)(nowUs - heightEst.last_t_us) <= FLOW_HEIGHT_MAX_AGE_US;
@@ -1954,9 +2041,13 @@ void pid_task(void *pv) {
 
     // 후보 출력. 적용 여부는 failsafe 판정이 끝난 뒤(아래 safety_lock 블록 직전)
     // 이번 tick 의 최종 상태로 다시 가른다.
-    const bool holdEnabled = !safety_lock && fs_phase == FS_NONE;
+    // 거리 기반 자동착륙 중에는 위치 유지를 켠다. 조종 입력은 0 으로 본다(OVERRIDE
+    // 로 기준이 끌려가지 않게). 적분·출력은 이어받는다.
+    const bool rangeHoldEnabled =
+        !safety_lock && fs_phase == FS_DESCENDING && rl_mode == RL_MODE_RANGE;
+    const bool holdEnabled = (!safety_lock && fs_phase == FS_NONE) || rangeHoldEnabled;
     PosHoldInput phIn;
-    phIn.requested = poshold_requested;
+    phIn.requested = poshold_requested || rangeHoldEnabled;
     phIn.enabled = holdEnabled;
     phIn.calibrated = flowOdomCfg.calibrated;
     phIn.has_meas = flowNew;
@@ -1965,9 +2056,9 @@ void pid_task(void *pv) {
     phIn.c_pitch = flowOut.c_pitch;
     phIn.meas_dt_s = flowOut.dt_s;
     phIn.meas_span_s = flowOut.span_s;
-    phIn.pilot_roll_deg = pilotRollCmd;
-    phIn.pilot_pitch_deg = pilotPitchCmd;
-    phIn.yaw_rate_cmd_dps = targetYawRate;
+    phIn.pilot_roll_deg = rangeHoldEnabled ? 0.0f : pilotRollCmd;
+    phIn.pilot_pitch_deg = rangeHoldEnabled ? 0.0f : pilotPitchCmd;
+    phIn.yaw_rate_cmd_dps = rangeHoldEnabled ? 0.0f : targetYawRate;
     phIn.gyro_z_dps = bodyGz;
     phIn.yaw_deg = angleZ;
     const PosHoldOutput phOut = posHoldStep(posHold, posHoldGains, phIn, realDt);
@@ -2007,7 +2098,7 @@ void pid_task(void *pv) {
     // (직전 tick 의 적용값, 1 ms 지연).
     const int hoverCollective = base_throttle + altHoldAppliedPrevUs;
     const bool hoverSampleEligible =
-        !safety_lock && fs_phase == FS_NONE &&
+        !safety_lock && fs_phase == FS_NONE && !rl_resume_handover &&
         fabsf(angleX) < HOVER_LEVEL_MAX_DEG &&
         fabsf(angleY) < HOVER_LEVEL_MAX_DEG &&
         fabsf(accelMag - 1.0f) <= HOVER_ACCEL_TOL_G &&
@@ -2025,53 +2116,149 @@ void pid_task(void *pv) {
     // rcTimedOut이 참이라 이 블록이 1kHz로 재실행되고, Serial.println이 TX
     // 버퍼를 포화시켜 pid_task를 블로킹하면 500ms 태스크 워치독이 비행 중
     // 재부팅을 일으킨다.
+    // 시간 기반 하강의 시작 상태. RC 상실 진입과 거리 기반 하강의 폴백이 같이 쓴다.
+    auto startTimedDescent = [&]() {
+      fs_enter_ms = nowMs;
+      landDet = {};
+      landProbeConfig = FS_LAND_PROBE_CONFIG;
+      bool dipClamped = false;
+      fs_probe_dip_us = failsafeProbeDipUs(
+          hover_est, FS_PROBE_DIP_FRAC, FS_PROBE_DIP_MIN_US,
+          CTRL_MARGIN, dipClamped);
+      landProbeConfig.dip_us = fs_probe_dip_us;
+      if (dipClamped) {
+        Serial.printf(
+            "[WARN] AUTO-LAND PROBE DIP CLAMPED hover=%.1f applied=%d\n",
+            hover_est, fs_probe_dip_us);
+      }
+      fs_probe_state = FS_PROBE_WAIT;
+      fs_probe_no_response = 0;
+      fs_probe_response_g = 0.0f;
+      fs_probe_blocked_logged = false;
+      base_throttle = min(failsafeDescentThrottle(
+                              (int)lroundf(hover_est), FS_DESCENT_DELTA_US),
+                          rl_base_ceiling);
+    };
     if (fs_phase == FS_NONE && !safety_lock && rcTimedOut(nowMs, lastRcMs)) {
       fault_rc = true;
+      // resume 인계 중의 낮은 base 는 지상이라서가 아니라 인계 중이라서다. 그 base 로
+      // 지상 컷을 판정하면 공중 컷이 된다.
+      const bool reentry = rl_resume_handover;
+      const int groundJudgeUs =
+          reentry ? max((int)base_throttle, (int)lroundf(hover_est)) : (int)base_throttle;
+      rl_resume_handover = false;
       if (!hover_valid) {
         safety_lock = true;
         Serial.println("[FAULT] RC TIMEOUT -> CUT (NO HOVER EST)");  // 한 번만
-      } else if (base_throttle <= FS_GROUND_CUT_MAX_US) {
+      } else if (groundJudgeUs <= FS_GROUND_CUT_MAX_US) {
         safety_lock = true;
         Serial.println("[FAULT] RC TIMEOUT -> GROUND CUT");  // 한 번만
       } else {
         fs_phase = FS_DESCENDING;
         fs_hold_yaw = angleZ;
-        fs_enter_ms = nowMs;
         if (!fs_first_enter_valid) {
           fs_first_enter_ms = nowMs;
           fs_first_enter_valid = true;
         }
-        landDet = {};
-        landProbeConfig = FS_LAND_PROBE_CONFIG;
-        bool dipClamped = false;
-        fs_probe_dip_us = failsafeProbeDipUs(
-            hover_est, FS_PROBE_DIP_FRAC, FS_PROBE_DIP_MIN_US,
-            CTRL_MARGIN, dipClamped);
-        landProbeConfig.dip_us = fs_probe_dip_us;
-        if (dipClamped) {
-          Serial.printf(
-              "[WARN] AUTO-LAND PROBE DIP CLAMPED hover=%.1f applied=%d\n",
-              hover_est, fs_probe_dip_us);
+        const int ceiling = reentry ? rl_requested_collective_us : RL_NO_CAP;
+        rangeLandResetFirmware();
+        rl_base_ceiling = ceiling;
+        startTimedDescent();
+        if (heightFresh && rlRangeFresh && rlRangeMm > 0) {
+          rl_mode = RL_MODE_RANGE;
+          rangeLandStart(rangeLand, heightEst.h_m, rlRangeMm, nowMs);
+          rl_stage = rangeLand.stage;
+          rl_h_ref = rangeLand.h_ref;
+          base_throttle = min((int)lroundf(hover_est), rl_base_ceiling);
+          // 위치 유지 기준점을 진입 위치로 옮긴다. 적분·출력은 그대로 이어받는다.
+          posHold.p_ref[0] = posHold.p[0];
+          posHold.p_ref[1] = posHold.p[1];
+          Serial.println("[FAULT] RC TIMEOUT -> AUTO-LAND (RANGE)");   // 한 번만
+        } else {
+          rl_mode = RL_MODE_TIMED;
+          Serial.println("[FAULT] RC TIMEOUT -> AUTO-LAND");   // 한 번만
         }
-        fs_probe_state = FS_PROBE_WAIT;
-        fs_probe_no_response = 0;
-        fs_probe_response_g = 0.0f;
-        fs_probe_blocked_logged = false;
-        base_throttle = failsafeDescentThrottle(
-            (int)lroundf(hover_est), FS_DESCENT_DELTA_US);
-        Serial.println("[FAULT] RC TIMEOUT -> AUTO-LAND");   // 한 번만
       }
     }
 
     // 하강 중에는 목표를 매 tick 덮어쓴다. rc/rcr 파서도 하강 중 목표 변경을
     // 막으며, 링크 복구만으로는 하강을 끝내지 않는다(명시적 resume 필요).
+    int rlAltUs = 0;
+    float rlHoldScale = 1.0f;
     if (fs_phase == FS_DESCENDING) {
       targetAngleX = trim_roll;
       targetAngleY = trim_pitch;
       targetAngleZ = fs_hold_yaw;
       targetYawRate = 0.0f;
-      const int descentThrottle = failsafeDescentThrottle(
-          (int)lroundf(hover_est), FS_DESCENT_DELTA_US);
+    }
+    if (fs_phase == FS_DESCENDING && rl_mode == RL_MODE_RANGE) {
+      // 거리 기반 하강: 판정은 range_land.h, 고도는 외부 목표를 따르는 AltHold.
+      RangeLandInput rlIn;
+      rlIn.height_fresh = heightFresh;
+      rlIn.h_m = heightEst.h_m;
+      rlIn.range_mm = rlRangeMm;
+      rlIn.range_fresh = rlRangeFresh;
+      rlIn.range_trusted_new = rlTrustedNew;
+      rlIn.hover_us = hover_est;
+      rlIn.delivered_collective_us = rl_delivered_collective_us;
+      rlIn.dt_s = realDt;
+      rlIn.now_ms = nowMs;
+      const RangeLandOutput rlOut = rangeLandStep(rangeLand, rlIn);
+      rl_h_ref = rlOut.h_ref;
+      if (rlOut.stage != rl_stage) {
+        rl_stage = rlOut.stage;
+        Serial.printf(">>> RANGE LAND stage=%d range=%ld\n", (int)rl_stage,
+                      (long)rlRangeMm);   // 전이 때 한 번
+      }
+      if (rlOut.action == RL_FALLBACK) {
+        // 바닥 근접 전에 거리를 잃었다. 시간 기반 하강을 새로 시작하되(한 번의 예산
+        // FS_MAX_MS) 에피소드 내내 지금 요청 collective 를 넘지 않는다.
+        rl_mode = RL_MODE_TIMED_FALLBACK;
+        rl_base_ceiling = min(rl_base_ceiling, (int)rl_requested_collective_us);
+        startTimedDescent();
+        Serial.println(">>> RANGE LAND -> TIMED FALLBACK");   // 한 번
+      } else if (rlOut.action != RL_CONTINUE) {
+        // 착지 컷은 접촉이 확인된 경우뿐이다. 바닥 근접 뒤 상실·정체, 백스톱은 TIMEOUT.
+        const FailsafePhase next =
+            rlOut.action == RL_LANDED ? FS_CUT_LANDED : FS_CUT_TIMEOUT;
+        rl_cut_reason = rlOut.cut_reason;
+        fs_phase = next;
+        safety_lock = true;      // 아래 safety_lock 블록이 이번 tick에 정리한다
+        Serial.printf(">>> AUTO-LAND END phase=%d reason=%d\n", (int)next,
+                      (int)rl_cut_reason);
+      } else {
+        const int rlBase = min((int)lroundf(hover_est - rlOut.drop_us), rl_base_ceiling);
+        base_throttle = rlBase;
+        min_throttle = max(1050, rlBase - CTRL_MARGIN);
+        max_throttle = min(1900, rlBase + CTRL_MARGIN);
+        AltHoldInput rlAh;
+        rlAh.requested = true;
+        rlAh.enabled = true;
+        // 거부된 프레임이 만든 높이로 고도를 맞추지 않는다.
+        rlAh.height_valid = heightFresh && !rangeLand.rejecting;
+        rlAh.h_m = heightEst.h_m;
+        rlAh.vz_ms = heightEst.vz_ms;
+        rlAh.base_throttle = rlBase;
+        rlAh.external_ref = true;
+        rlAh.h_ref_ext = rlOut.h_ref;
+        rlAh.vz_ref_ext = rlOut.vz_ref;
+        rlAh.no_positive = rlOut.stage >= RL_STAGE_NEAR_GROUND;
+        const AltHoldOutput rlAhOut =
+            altHoldStep(rlAltHold, rlAltHoldGains, rlAh, realDt);
+        rlAltUs = (int)lroundf(rlAhOut.applied_us);
+        if (rlOut.stage >= RL_STAGE_NEAR_GROUND) {
+          // 바닥 근접 뒤 요청 collective 는 오르지 않는다.
+          const int total = min(rlBase + rlAltUs, rl_collective_cap);
+          rl_collective_cap = total;
+          rlAltUs = total - rlBase;
+        }
+        rlHoldScale = rlOut.hold_scale;
+      }
+    }
+    if (fs_phase == FS_DESCENDING && rl_mode != RL_MODE_RANGE) {
+      const int descentThrottle =
+          min(failsafeDescentThrottle((int)lroundf(hover_est), FS_DESCENT_DELTA_US),
+              rl_base_ceiling);
 
       const uint32_t elapsed = nowMs - fs_enter_ms;
       // 프로브는 계속 돌리되 **착지 판정에는 쓰지 않는다.**
@@ -2127,18 +2314,24 @@ void pid_task(void *pv) {
     }
     // 위치·고도 유지 적용값 확정. failsafe 에 들어간 바로 이 tick 부터 0 이다.
     // failsafe 가 끝나도 자동으로 다시 켜지지 않도록 요청을 끈다.
-    const bool holdApply = !safety_lock && fs_phase == FS_NONE;
+    // 거리 기반 자동착륙 중에는 위치 유지(바닥 근접 뒤 감쇠)와 하강 고도 제어를 적용한다.
+    const bool rangeHoldApply =
+        !safety_lock && fs_phase == FS_DESCENDING && rl_mode == RL_MODE_RANGE;
+    const bool holdApply = (!safety_lock && fs_phase == FS_NONE) || rangeHoldApply;
     if (fs_phase != FS_NONE) {
       poshold_requested = false;
       althold_requested = false;
     }
-    const float holdRollDeg = holdApply ? phOut.applied_roll_deg : 0.0f;
-    const float holdPitchDeg = holdApply ? phOut.applied_pitch_deg : 0.0f;
+    const float holdScale = rangeHoldApply ? rlHoldScale : 1.0f;
+    const float holdRollDeg = holdApply ? phOut.applied_roll_deg * holdScale : 0.0f;
+    const float holdPitchDeg = holdApply ? phOut.applied_pitch_deg * holdScale : 0.0f;
     // base ≤ FS_GROUND_CUT_MAX_US 에서는 보정을 더하지 않는다. RC 끊김 판정이 그
     // base 를 "지상"으로 보므로, 그때 +Δ 로 떠 있으면 공중 컷이 된다(재검토 코드
     // P1-2). 그 위 60 us 구간에서는 inhibit 로 미리 감쇠시켜 이 경계의 계단을 줄인다.
+    // 거리 기반 하강은 이미 failsafe 안이라 그 경계를 쓰지 않는다.
     const int altHoldUs =
-        (holdApply && base_throttle > FS_GROUND_CUT_MAX_US)
+        rangeHoldApply ? rlAltUs
+        : (holdApply && base_throttle > FS_GROUND_CUT_MAX_US)
             ? (int)lroundf(ahOut.applied_us) : 0;
     altHoldAppliedPrevUs = altHoldUs;
     // 적용 보정이 꺼지는 tick 에는 outer loop 를 바로 다시 계산한다. 250 Hz 분주
@@ -2259,6 +2452,8 @@ void pid_task(void *pv) {
     MotorMix mix = mixAndDesaturate(pidRoll, pidPitch, pidYaw,
                                     throttle, mixMin, mixMax);
     mixer_yaw_scale = mix.yaw_scale;
+    rl_requested_collective_us = throttle;
+    rl_delivered_collective_us = mix.collective_us;
     publishAllocationTelemetry(
         mix, pidRoll, pidPitch, pidYaw,
         iRollUsed, iPitchUsed, iYawUsed, yaw_authority_state);

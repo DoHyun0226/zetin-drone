@@ -106,6 +106,7 @@ std::array<double, 3> toBody(const std::array<std::array<double, 3>, 3> &R,
 
 struct Disturbance {
   double force_n = 0, force_e = 0, force_up = 0;   // N
+  double torque_roll = 0;                          // N·m (자세 외란)
 };
 
 // 한 tick 적분. 반환은 월드 NED 가속도(가속도계 주입용).
@@ -158,7 +159,7 @@ std::array<double, 3> integrate(State &s, const Params &P, const Disturbance &d,
   s.phi += s.p * kDt;
   s.theta += s.q * kDt;
   s.psi += s.r * kDt;
-  s.p += tx / P.ix * kDt;
+  s.p += (tx + d.torque_roll) / P.ix * kDt;
   s.q += ty / P.iy * kDt;
   s.r += tz / P.iz * kDt;
   return acc;
@@ -494,6 +495,116 @@ Run hoverRun(double height, double v0, double force_tilt_deg) {
   };
   return run;
 }
+
+// ---------------- 거리 기반 자동착륙 ----------------
+
+// 호버 중 링크를 끊고 끝까지 지켜본다. 관측은 pid tick 앞(hook)이라 전역 값은 직전
+// tick 의 결과다.
+struct LandWatch {
+  uint32_t disconnect_tick = 0, entry_tick = 0, end_tick = 0, near_tick = 0;
+  uint32_t fallback_tick = 0, touch_tick = 0;
+  uint8_t end_phase = FS_NONE, cut_reason = RL_CUT_NONE;
+  bool saw_range = false, saw_timed = false, saw_fallback = false;
+  double h_at_end = -1.0, h_at_near = -1.0, vh_at_touch = 0.0, prev_vh = 0.0;
+  int prev_req = 0, req_before_fallback = 0, req_at_entry_before = 0, req_at_entry = 0;
+  bool req_rose_after_near = false, req_rose_after_fallback = false;
+  double min_h_near = 1e9, max_rise_near = 0.0, max_vh_up_near = 0.0;
+  double max_tilt_deg = 0.0, max_horiz_dev = 0.0, n_entry = 0.0, e_entry = 0.0;
+  float applied_at_end = 0.0f;
+  bool applied_seen = false;
+};
+
+struct LandCase {
+  Run run;
+  LandWatch w;
+  std::function<void(uint32_t)> extra;   // 사건 주입(링크·거리·외란·resume)
+
+  explicit LandCase(double h0, double tilt_deg = 0.0) : run(hoverRun(h0, 0.0, tilt_deg)) {
+    run.sensor.ground_offset_mm = 30;
+    run.sensor.report_short = true;
+    run.sensor.noise_mm = 8;
+    setTrueCalibration(0);
+  }
+
+  void warmup(uint32_t ticks = 6000) {
+    run.arm(1340);
+    sendUdp("althold 1");
+    sendUdp("poshold 1");
+    run.runTicks(ticks);
+  }
+
+  // 한 번의 runTicks 안에서 링크를 끊고 끝까지 본다.
+  void land(uint32_t ticks = 20000, uint32_t disconnect_after = 100) {
+    w.disconnect_tick = run.globalTick + disconnect_after;
+    run.rc_disconnect_tick = w.disconnect_tick;
+    run.on_tick = [this](uint32_t tick) {
+      observe(tick);
+      if (extra) extra(tick);
+    };
+    run.runTicks(ticks);
+  }
+
+  void observe(uint32_t tick) {
+    const State &s = run.s;
+    const int req = rl_requested_collective_us;
+    if (!w.entry_tick && fs_phase == FS_DESCENDING) {
+      w.entry_tick = tick;
+      w.req_at_entry_before = w.prev_req;
+      w.req_at_entry = req;
+      w.n_entry = s.n;
+      w.e_entry = s.e;
+    }
+    const bool descending = fs_phase == FS_DESCENDING && !safety_lock;
+    if (descending) {
+      if (rl_mode == RL_MODE_RANGE) w.saw_range = true;
+      if (rl_mode == RL_MODE_TIMED) w.saw_timed = true;
+      w.max_tilt_deg = std::max({w.max_tilt_deg, std::fabs(s.phi) * kRadToDeg,
+                                 std::fabs(s.theta) * kRadToDeg});
+      w.max_horiz_dev = std::max(w.max_horiz_dev,
+                                 std::hypot(s.n - w.n_entry, s.e - w.e_entry));
+      const FlowHoldTelemetry t = readFlowHoldTelemetry();
+      w.applied_at_end = std::max(std::fabs(t.applied_roll_deg), std::fabs(t.applied_pitch_deg));
+      if (w.applied_at_end > 0.2f) w.applied_seen = true;
+    }
+    if (descending && rl_mode == RL_MODE_TIMED_FALLBACK && !w.fallback_tick) {
+      w.fallback_tick = tick;
+      w.saw_fallback = true;
+      w.req_before_fallback = w.prev_req;
+    }
+    if (w.fallback_tick && descending && tick <= w.fallback_tick + 1000 &&
+        req > w.req_before_fallback) {
+      w.req_rose_after_fallback = true;
+    }
+    if (descending && rl_stage >= RL_STAGE_NEAR_GROUND) {
+      if (!w.near_tick) {
+        w.near_tick = tick;
+        w.h_at_near = s.h;
+      } else if (req > w.prev_req) {
+        w.req_rose_after_near = true;
+      }
+      w.min_h_near = std::min(w.min_h_near, s.h);
+      w.max_rise_near = std::max(w.max_rise_near, s.h - w.min_h_near);
+      w.max_vh_up_near = std::max(w.max_vh_up_near, s.vh);
+    }
+    if (w.entry_tick && !w.touch_tick && s.h <= 0.0) {
+      w.touch_tick = tick;
+      w.vh_at_touch = w.prev_vh;
+    }
+    if (w.entry_tick && !w.end_tick && fs_phase != FS_DESCENDING) {
+      w.end_tick = tick;
+      w.end_phase = fs_phase;
+      w.cut_reason = rl_cut_reason;
+      w.h_at_end = s.h;
+    }
+    w.prev_vh = s.vh;
+    w.prev_req = req;
+  }
+};
+
+// RC 를 되살린다(그 뒤 다시 끊을 수 있게). 하네스는 hook 앞에서 lastRcMs 를 갱신하므로
+// resume 은 다음 tick 부터 요청해야 RC 가 신선하다.
+void restoreRc(Run &run) { run.rc_disconnect_tick = std::numeric_limits<uint32_t>::max(); }
+void requestResume() { failsafe_resume_requested = true; }
 
 }  // namespace
 
@@ -876,8 +987,13 @@ int main() {
       run.runTicks(6000);                 // hover_est 가 유효해지고 보정이 쌓인다
       CHECK(std::fabs(readFlowHoldTelemetry().applied_pitch_deg) > 2.0f);
       run.rc_disconnect_tick = run.globalTick + phase;
+      // 거리 기반 자동착륙은 위치 유지를 켠다(sil_poshold_applied_during_range_descent).
+      // 이 시험은 진입 때 거리가 끊긴 시간 기반 모드에서 보정이 0 인지 본다.
+      run.sensor.range_off_from = run.globalTick;
+      run.sensor.range_off_to = std::numeric_limits<uint32_t>::max();
       run.runTicks(1500);
       CHECK(fs_phase != FS_NONE);
+      CHECK(rl_mode == RL_MODE_TIMED);
       CHECK(!run.applied_during_failsafe);
       CHECK_MSG(run.max_failsafe_rate_err < 3.0,
                 "phase " + fmt(phase) + " target-rate residual=" +
@@ -1022,6 +1138,461 @@ int main() {
     run.on_tick = [&](uint32_t) { minH = std::min(minH, run.s.h); };
     run.runTicks(2000);
     CHECK_MSG(before - minH < 0.1, "drop=" + fmt(before - minH));
+  });
+
+
+  // ---------------- 거리 기반 자동착륙 ----------------
+
+  for (double h0 : {0.6, 1.2}) {
+    runCase(h0 == 0.6 ? "sil_lands_from_0_6m_with_cut_landed"
+                      : "sil_lands_from_1_2m_with_cut_landed", [h0] {
+      LandCase c(h0);
+      c.warmup();
+      c.land();
+      CHECK(c.w.saw_range && !c.w.saw_fallback);
+      CHECK_MSG(c.w.end_phase == FS_CUT_LANDED, "phase=" + fmt(c.w.end_phase));
+      CHECK(c.w.cut_reason == RL_CUT_CONTACT);
+      CHECK_MSG(c.w.h_at_end < 0.02, "h at cut=" + fmt(c.w.h_at_end));
+    });
+  }
+
+  runCase("sil_lands_from_1_7m_within_backstop", [] {
+    LandCase c(1.7);
+    c.warmup();
+    c.land();
+    CHECK(c.w.saw_range);
+    CHECK_MSG(c.w.end_phase == FS_CUT_LANDED, "phase=" + fmt(c.w.end_phase));
+    CHECK_MSG(c.w.end_tick - c.w.entry_tick < RL_MAX_MS,
+              "elapsed=" + fmt(c.w.end_tick - c.w.entry_tick));
+  });
+
+  for (float bias : {30.0f, -30.0f}) {
+    runCase(bias > 0 ? "sil_hover_bias_plus_30us_still_lands"
+                     : "sil_hover_bias_minus_30us_lands_without_hard_hit", [bias] {
+      LandCase c(1.0);
+      c.warmup();
+      c.extra = [&c, bias](uint32_t tick) {
+        if (tick >= c.w.disconnect_tick && fs_phase == FS_NONE) {
+          forceHoverEstimate(1340.0f + bias);
+        }
+      };
+      c.land();
+      CHECK(c.w.saw_range);
+      CHECK_MSG(c.w.end_phase == FS_CUT_LANDED, "phase=" + fmt(c.w.end_phase));
+      CHECK_MSG(c.w.vh_at_touch > -0.5, "touchdown vh=" + fmt(c.w.vh_at_touch));
+    });
+  }
+
+  runCase("sil_battery_sag_10pct_still_lands", [] {
+    LandCase c(1.2);
+    c.warmup();
+    const uint32_t from = c.run.globalTick + 600;
+    c.run.P.thrust_scale_at = [from](uint32_t tick) {
+      if (tick <= from) return 1.0;
+      return std::max(0.9, 1.0 - 0.1 * (tick - from) / 5000.0);
+    };
+    c.land();
+    CHECK(c.w.saw_range);
+    CHECK_MSG(c.w.end_phase == FS_CUT_LANDED, "phase=" + fmt(c.w.end_phase));
+  });
+
+  runCase("sil_ground_effect_still_reaches_near_ground", [] {
+    LandCase c(0.8);
+    c.run.P.ground_effect_gain = 0.10;
+    c.warmup();
+    c.land();
+    CHECK(c.w.near_tick != 0);
+    CHECK_MSG(c.w.end_phase == FS_CUT_LANDED, "phase=" + fmt(c.w.end_phase));
+  });
+
+  runCase("sil_poshold_applied_during_range_descent", [] {
+    LandCase c(1.0, 3.0);
+    c.warmup(10000);                   // 위치 유지가 외란을 흡수할 때까지
+    c.land();
+    CHECK(c.w.saw_range);
+    CHECK(c.w.applied_seen);
+    CHECK_MSG(c.w.max_horiz_dev < 0.5, "drift=" + fmt(c.w.max_horiz_dev));
+    CHECK_MSG(c.w.applied_at_end < 0.05f, "applied at contact=" + fmt(c.w.applied_at_end));
+    CHECK(c.w.end_phase == FS_CUT_LANDED);
+  });
+
+  for (float bias : {0.0f, 30.0f}) {
+    // +30 us 편향이면 고도 보정이 음수로 크게 걸려 있다가, 바닥 근접에서 높이가 무효가
+    // 되며 0 쪽으로 감쇠한다. 래칫이 없으면 그만큼 collective 가 오른다.
+    runCase("sil_no_collective_rise_after_near_ground bias " + fmt(bias), [bias] {
+      LandCase c(0.6);
+      c.warmup();
+      c.extra = [&c, bias](uint32_t tick) {
+        if (bias != 0.0f && tick >= c.w.disconnect_tick && fs_phase == FS_NONE) {
+          forceHoverEstimate(1340.0f + bias);
+        }
+      };
+      c.land();
+      CHECK(c.w.near_tick != 0);
+      CHECK(!c.w.req_rose_after_near);
+    });
+  }
+
+  runCase("sil_near_object_does_not_pull_altitude", [] {
+    // 1.5 m 에서 0.5 m 근접값이 1 s 동안 들어온다. 거부된 값을 고도 제어에 넣으면
+    // 1 m 아래에 있다고 보고 끌어올린다 — 폴백(300 ms)까지 하강이 거의 멈춘다
+    // (가드 없이 돌리면 −0.34 → −0.01 m/s).
+    LandCase c(1.5);
+    c.warmup();
+    uint32_t from = 0;
+    double h_from = 0.0, max_climb = 0.0, vh_from = 0.0, max_vh = -9.0;
+    c.extra = [&](uint32_t tick) {
+      if (!from && c.w.entry_tick && tick >= c.w.entry_tick + 800) {
+        from = tick;
+        h_from = c.run.s.h;
+        vh_from = c.run.s.vh;
+      }
+      if (from && tick < from + 1000) max_climb = std::max(max_climb, c.run.s.h - h_from);
+      if (from && tick < from + 400) max_vh = std::max(max_vh, c.run.s.vh);
+    };
+    c.run.sensor.range_override = [&from](uint32_t tick, int32_t mm) {
+      return from && tick >= from && tick < from + 1000 ? (int32_t)500 : mm;
+    };
+    c.land();
+    CHECK(from != 0);
+    CHECK_MSG(max_climb < 0.03, "climb during the near object=" + fmt(max_climb));
+    CHECK_MSG(max_vh - vh_from < 0.1, "descent slowed by " + fmt(max_vh - vh_from));
+    CHECK(c.w.end_phase != FS_CUT_LANDED || c.w.h_at_end < 0.02);
+  });
+
+  runCase("sil_dropout_mid_descent_falls_back_to_timed", [] {
+    LandCase c(1.2);
+    c.warmup();
+    c.extra = [&c](uint32_t tick) {
+      if (rl_mode == RL_MODE_RANGE && c.run.s.h < 0.8 &&
+          c.run.sensor.range_off_to == 0) {
+        c.run.sensor.range_off_from = tick;
+        c.run.sensor.range_off_to = tick + 6000;
+      }
+    };
+    c.land();
+    CHECK(c.w.saw_range && c.w.saw_fallback);
+    CHECK_MSG(c.w.end_phase == FS_CUT_TIMEOUT, "phase=" + fmt(c.w.end_phase));
+    const int32_t budget = (int32_t)(c.w.end_tick - c.w.fallback_tick);
+    CHECK_MSG(std::abs(budget - (int32_t)FS_MAX_MS) <= 2, "timed budget=" + fmt(budget));
+  });
+
+  runCase("sil_fallback_does_not_raise_collective", [] {
+    // 호버 추정이 +80 us 틀렸으면 시간 기반 하강값(추정 − 60)이 실제로 내던 collective
+    // 보다 높다. 상한이 없으면 폴백 순간 위로 튄다.
+    LandCase c(1.2);
+    c.warmup();
+    c.extra = [&c](uint32_t tick) {
+      if (tick >= c.w.disconnect_tick && fs_phase == FS_NONE) forceHoverEstimate(1420.0f);
+      if (rl_mode == RL_MODE_RANGE && c.run.s.h < 0.8 &&
+          c.run.sensor.range_off_to == 0) {
+        c.run.sensor.range_off_from = tick;
+        c.run.sensor.range_off_to = tick + 6000;
+      }
+    };
+    c.land();
+    CHECK(c.w.saw_range);
+    CHECK(c.w.fallback_tick != 0);
+    CHECK_MSG(c.w.req_before_fallback < 1420 - FS_DESCENT_DELTA_US,
+              "cap not exercised, req=" + fmt(c.w.req_before_fallback));
+    CHECK(!c.w.req_rose_after_fallback);
+  });
+
+  runCase("sil_two_step_near_object_does_not_cut", [] {
+    LandCase c(1.5);
+    c.warmup();
+    uint32_t from = 0;
+    c.run.sensor.range_override = [&c, &from](uint32_t tick, int32_t mm) {
+      if (!from && c.w.entry_tick && tick >= c.w.entry_tick + 800) from = tick;
+      if (from && tick < from + 35) return (int32_t)200;
+      if (from && tick < from + 1035) return (int32_t)30;
+      return mm;
+    };
+    c.land();
+    CHECK(from != 0);
+    CHECK(c.w.end_phase != FS_CUT_LANDED);
+    CHECK(c.w.saw_fallback);
+  });
+
+  runCase("sil_backlogged_near_frame_is_not_contact_evidence", [] {
+    LandCase c(1.0);
+    c.warmup();
+    uint32_t stall = 0;
+    c.extra = [&c, &stall](uint32_t tick) {
+      if (!stall && rl_mode == RL_MODE_RANGE && c.run.s.h < 0.5) {
+        stall = tick;
+        c.run.stall_from = tick;
+        c.run.stall_to = tick + 100;
+      }
+    };
+    c.run.sensor.range_override = [&stall](uint32_t tick, int32_t mm) {
+      return stall && tick >= stall && tick < stall + 100 ? (int32_t)30 : mm;
+    };
+    c.land();
+    CHECK(stall != 0);
+    CHECK(c.w.near_tick != 0);
+    CHECK_MSG(c.w.h_at_near < 0.12, "near ground entered at h=" + fmt(c.w.h_at_near));
+    CHECK(!c.w.saw_fallback);
+    CHECK(c.w.end_phase == FS_CUT_LANDED);
+  });
+
+  runCase("sil_resume_near_ground_has_no_step", [] {
+    LandCase c(0.6);
+    c.run.P.tether_floor = [](uint32_t) { return 0.05; };
+    c.warmup();
+    uint32_t resumed = 0;
+    int max_step = 0, prev = 0;
+    c.extra = [&](uint32_t tick) {
+      if (!resumed && c.w.near_tick && tick == c.w.near_tick + 1000) {
+        restoreRc(c.run);
+        resumed = tick;
+      }
+      if (resumed && tick == resumed + 1) requestResume();
+      if (resumed && tick > resumed + 1 && tick < resumed + 1500) {
+        max_step = std::max(max_step, base_throttle - prev);
+      }
+      prev = base_throttle;
+    };
+    c.land(6000);
+    CHECK(resumed != 0);
+    CHECK(fs_phase == FS_NONE && !safety_lock);
+    CHECK_MSG(max_step <= 1, "largest base step after resume=" + fmt(max_step));
+    CHECK(std::abs(base_throttle - 1340) <= 1);
+    CHECK(!rl_resume_handover);
+  });
+
+  runCase("sil_rc_loss_during_resume_handover_reenters", [] {
+    LandCase c(0.6);
+    c.run.P.tether_floor = [](uint32_t) { return 0.05; };
+    c.warmup();
+    uint32_t restored = 0;
+    int base_at_resume = 0, req_at_resume = 0;
+    bool reentered = false, locked = false, rose = false;
+    c.extra = [&](uint32_t tick) {
+      if (!restored && c.w.near_tick && base_throttle <= FS_GROUND_CUT_MAX_US) {
+        restoreRc(c.run);
+        restored = tick;
+      }
+      if (restored && tick == restored + 1) c.run.rc_disconnect_tick = tick;   // 마지막 RC
+      if (restored && tick == restored + 499) {
+        requestResume();
+      }
+      if (restored && tick == restored + 501) {
+        base_at_resume = base_throttle;
+        req_at_resume = rl_requested_collective_us;
+      }
+      if (restored && tick > restored + 501 && tick < restored + 1500) {
+        if (safety_lock) locked = true;
+        if (fs_phase == FS_DESCENDING) reentered = true;
+        if (rl_requested_collective_us > req_at_resume + 2) rose = true;
+      }
+    };
+    c.land(8000);
+    CHECK(restored != 0);
+    CHECK_MSG(base_at_resume <= FS_GROUND_CUT_MAX_US + 2, "base=" + fmt(base_at_resume));
+    CHECK(reentered);
+    CHECK_MSG(!locked || fs_phase != FS_NONE, "ground cut during the handover");
+    CHECK(!rose);
+  });
+
+  runCase("sil_rc_loss_after_handover_uses_ground_rule", [] {
+    LandCase c(0.6);
+    c.run.P.tether_floor = [](uint32_t) { return 0.05; };
+    c.warmup();
+    uint32_t resumed = 0, low = 0;
+    c.extra = [&](uint32_t tick) {
+      if (!resumed && c.w.near_tick && tick == c.w.near_tick + 1000) {
+        restoreRc(c.run);
+        resumed = tick;
+      }
+      if (resumed && tick == resumed + 1) requestResume();
+      if (resumed && !low && tick > resumed + 10 && !rl_resume_handover) {
+        base_throttle = 1100;            // 조종자가 바닥 스로틀로 내렸다
+        low = tick;
+      }
+      if (low && tick == low + 10) c.run.rc_disconnect_tick = tick;
+    };
+    c.land(8000);
+    CHECK(low != 0);
+    CHECK(safety_lock);
+    CHECK(fs_phase == FS_NONE);          // GROUND CUT: 자동착륙에 들어가지 않는다
+  });
+
+  runCase("sil_near_ground_roll_disturbance_bounded", [] {
+    LandCase c(0.6);
+    c.warmup();
+    c.run.disturbance = [&c](uint32_t tick) {
+      Disturbance d;
+      if (c.w.near_tick && tick >= c.w.near_tick) {
+        d.torque_roll = 0.03 * std::sin(2.0 * kPi * 2.0 * (tick - c.w.near_tick) * kDt);
+      }
+      return d;
+    };
+    c.land();
+    CHECK(c.w.near_tick != 0);
+    CHECK(!c.w.req_rose_after_near);
+    CHECK_MSG(c.w.max_rise_near <= 0.02, "rise=" + fmt(c.w.max_rise_near));
+    CHECK_MSG(c.w.max_vh_up_near <= 0.05, "vh up=" + fmt(c.w.max_vh_up_near));
+    CHECK(c.w.end_phase == FS_CUT_LANDED ||
+          (c.w.end_phase == FS_CUT_TIMEOUT && c.w.cut_reason == RL_CUT_NEAR_GROUND_STUCK));
+    if (c.w.end_phase == FS_CUT_LANDED) CHECK(c.w.h_at_end <= 0.01);
+    CHECK(c.w.end_tick - c.w.near_tick <= RL_TOUCHDOWN_MAX_MS + 2);
+  });
+
+  runCase("sil_resume_reentry_starts_a_new_episode", [] {
+    LandCase c(1.2);
+    c.warmup();
+    uint32_t resumed = 0, second = 0, second_enter = 0, first_enter = 0;
+    c.extra = [&](uint32_t tick) {
+      if (!resumed && c.w.entry_tick && tick == c.w.entry_tick + 2000) {
+        restoreRc(c.run);
+        resumed = tick;
+      }
+      if (resumed && tick == resumed + 1) requestResume();
+      if (!first_enter && c.w.entry_tick) first_enter = rangeLand.enter_ms;
+      if (resumed && tick == resumed + 100) c.run.rc_disconnect_tick = tick;
+      if (resumed && !second && tick > resumed + 100 && fs_phase == FS_DESCENDING) {
+        second = tick;
+        second_enter = rangeLand.enter_ms;
+      }
+    };
+    c.land(25000);
+    CHECK(resumed != 0 && second != 0);
+    CHECK(first_enter != 0 && second_enter >= first_enter + 2100);
+    CHECK_MSG(fs_phase == FS_CUT_LANDED, "phase=" + fmt(fs_phase));
+  });
+
+  runCase("sil_loss_after_near_ground_cuts_not_timed", [] {
+    LandCase c(0.6);
+    c.run.P.tether_floor = [](uint32_t) { return 0.05; };
+    c.warmup();
+    uint32_t off = 0;
+    c.extra = [&](uint32_t tick) {
+      if (!off && c.w.near_tick && tick == c.w.near_tick + 500) {
+        off = tick;
+        c.run.sensor.range_off_from = tick;
+        c.run.sensor.range_off_to = tick + 10000;
+      }
+    };
+    c.land(8000);
+    CHECK(off != 0);
+    CHECK(!c.w.saw_fallback);
+    CHECK_MSG(c.w.end_phase == FS_CUT_TIMEOUT, "phase=" + fmt(c.w.end_phase));
+    CHECK(c.w.cut_reason == RL_CUT_NEAR_GROUND_LOSS);
+    CHECK_MSG(c.w.end_tick - off <= RL_INVALID_GRACE_MS + 40,
+              "cut after " + fmt(c.w.end_tick - off) + " ms");
+  });
+
+  runCase("sil_near_object_at_1_5m_does_not_cut_landed", [] {
+    LandCase c(1.5);
+    c.warmup();
+    c.run.sensor.range_override = [&c](uint32_t tick, int32_t mm) {
+      return c.w.entry_tick && tick >= c.w.entry_tick + 500 && tick < c.w.entry_tick + 1500
+                 ? (int32_t)30 : mm;
+    };
+    c.land();
+    CHECK(c.w.end_phase != FS_CUT_LANDED);
+  });
+
+  runCase("sil_tether_floor_5cm_cuts_near_ground", [] {
+    LandCase c(0.6);
+    c.run.P.tether_floor = [](uint32_t) { return 0.05; };
+    c.warmup();
+    c.land(10000);
+    CHECK(c.w.near_tick != 0);
+    CHECK_MSG(c.w.end_phase == FS_CUT_TIMEOUT, "phase=" + fmt(c.w.end_phase));
+    CHECK(c.w.cut_reason == RL_CUT_NEAR_GROUND_STUCK);
+    const int32_t after = (int32_t)(c.w.end_tick - c.w.near_tick);
+    CHECK_MSG(std::abs(after - (int32_t)RL_TOUCHDOWN_MAX_MS) <= 2, "after=" + fmt(after));
+  });
+
+  runCase("sil_tether_floor_2cm_cut_is_harmless", [] {
+    LandCase c(0.6);
+    c.run.P.tether_floor = [](uint32_t) { return 0.02; };
+    c.warmup();
+    c.land(10000);
+    CHECK(c.w.end_tick != 0);
+    CHECK(c.w.end_phase == FS_CUT_LANDED || c.w.end_phase == FS_CUT_TIMEOUT);
+    CHECK_MSG(c.w.h_at_end <= 0.021, "h at cut=" + fmt(c.w.h_at_end));
+  });
+
+  runCase("sil_core0_stall_does_not_force_fallback", [] {
+    for (uint32_t phase : {0u, 13u, 27u}) {
+      LandCase c(1.0);
+      c.warmup();
+      uint32_t stalls = 0;
+      c.extra = [&](uint32_t tick) {
+        if (rl_mode == RL_MODE_RANGE && c.w.entry_tick &&
+            tick == c.w.entry_tick + 700 + phase + 600 * stalls && stalls < 4) {
+          c.run.stall_from = tick;
+          c.run.stall_to = tick + 100;
+          stalls++;
+        }
+      };
+      c.land();
+      CHECK(stalls == 4);
+      CHECK_MSG(!c.w.saw_fallback, "phase " + fmt(phase));
+      CHECK(c.w.end_phase == FS_CUT_LANDED);
+    }
+  });
+
+  runCase("sil_height_invalid_at_entry_uses_timed", [] {
+    LandCase c(0.8);
+    c.warmup();
+    c.extra = [&c](uint32_t tick) {
+      if (tick == c.w.disconnect_tick) {
+        c.run.sensor.range_off_from = tick;
+        c.run.sensor.range_off_to = tick + 10000;
+      }
+    };
+    c.land(6000);
+    CHECK(c.w.saw_timed && !c.w.saw_range);
+    CHECK(c.w.end_phase == FS_CUT_TIMEOUT);
+  });
+
+  runCase("sil_hover_invalid_still_cuts_immediately", [] {
+    LandCase c(0.8);
+    c.warmup(200);                     // 호버 추정이 유효해지기 전
+    CHECK(!hover_valid);
+    c.land(2000);
+    CHECK(safety_lock);
+    CHECK(c.w.entry_tick == 0);
+  });
+
+  runCase("sil_resume_during_range_descent", [] {
+    LandCase c(1.7);                   // 4 s 뒤에도 0.5 m 쯤 남는다
+    c.warmup();
+    uint32_t resumed = 0;
+    double h_after = -1.0;
+    uint8_t phase_after = FS_DESCENDING, mode_after = RL_MODE_RANGE;
+    c.extra = [&](uint32_t tick) {
+      if (!resumed && c.w.entry_tick && tick == c.w.entry_tick + 4000) {
+        restoreRc(c.run);
+        resumed = tick;
+      }
+      if (resumed && tick == resumed + 1) requestResume();
+      if (resumed && tick == resumed + 5) {
+        h_after = c.run.s.h;
+        phase_after = fs_phase;
+        mode_after = rl_mode;
+      }
+    };
+    c.land(5000);
+    CHECK(resumed != 0);
+    // resume 뒤 스로틀은 조종자 것이다(고도 유지는 꺼져 있다). 직후 상태만 본다.
+    CHECK(phase_after == FS_NONE && !safety_lock);
+    CHECK(mode_after == RL_MODE_NONE);
+    CHECK_MSG(h_after > 0.3, "h right after resume=" + fmt(h_after));
+  });
+
+  runCase("sil_mode_switch_is_smooth", [] {
+    LandCase c(1.0);
+    c.warmup();
+    c.land();
+    CHECK(c.w.saw_range);
+    CHECK_MSG(std::abs(c.w.req_at_entry - c.w.req_at_entry_before) <= 20,
+              "entry step=" + fmt(c.w.req_at_entry - c.w.req_at_entry_before));
+    CHECK_MSG(c.w.max_tilt_deg < 8.0, "tilt=" + fmt(c.w.max_tilt_deg));
   });
 
   std::cout << test_count - failure_count << "/" << test_count << " passed\n";
