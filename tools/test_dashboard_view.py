@@ -222,6 +222,94 @@ class RenderTest(unittest.TestCase):
         render(sn, 100, 30, NOW)
         self.assertEqual(before, repr(sn))
 
+    # --- final review: firmware armed state vs local control state ---
+
+    MODES = ("pad", "keyboard", "listen")
+    SAMPLES = (("75", sample75), ("91", sample91))
+
+    @staticmethod
+    def _local(mode, armed):
+        # --keyboard·--listen never arm locally; pad may be either.
+        if armed:
+            return {"is_armed": True, "arm_state": "armed", "armed_since": NOW - 5.0}
+        return {"is_armed": False, "arm_state": "idle", "armed_since": None}
+
+    def _top(self, sample, mode, armed, **overrides):
+        values = dict(self._local(mode, armed), mode=mode)
+        values.update(overrides)
+        return render(snap(sample, **values), 120, 30, NOW)[0]
+
+    def test_firmware_armed_never_shows_a_green_disarmed_banner(self):
+        for name, make in self.SAMPLES:
+            for mode in self.MODES:
+                with self.subTest(sample=name, mode=mode):
+                    top = self._top(make(Armed=1), mode, armed=False)
+                    text = flatten([top])
+                    self.assertIn("드론 ARMED", text)
+                    self.assertTrue(any(st == "class:armed" and "드론 ARMED" in tx
+                                        for st, tx in top), top)
+                    self.assertFalse(any(st == "class:disarmed" for st, _ in top), top)
+                    self.assertTrue(any(st == "class:alert" and "시동 불일치" in tx
+                                        for st, tx in top), top)
+                    self.assertIn("지상국 DISARMED", text)
+
+    def test_local_armed_with_firmware_disarmed_is_an_alert(self):
+        for name, make in self.SAMPLES:
+            with self.subTest(sample=name):
+                top = self._top(make(Armed=0), "pad", armed=True)
+                text = flatten([top])
+                self.assertIn("드론 DISARMED", text)
+                self.assertIn("지상국 ARMED", text)
+                self.assertTrue(any(st == "class:alert" and "시동 불일치" in tx
+                                    for st, tx in top), top)
+
+    def test_agreeing_states_show_no_mismatch(self):
+        for name, make in self.SAMPLES:
+            for mode in self.MODES:
+                with self.subTest(sample=name, mode=mode, state="disarmed"):
+                    top = self._top(make(Armed=0), mode, armed=False)
+                    text = flatten([top])
+                    self.assertIn("드론 DISARMED", text)
+                    self.assertNotIn("시동 불일치", text)
+                    self.assertTrue(any(st == "class:disarmed" for st, _ in top), top)
+            with self.subTest(sample=name, mode="pad", state="armed"):
+                top = self._top(make(Armed=1), "pad", armed=True)
+                text = flatten([top])
+                self.assertIn("드론 ARMED", text)
+                self.assertIn("지상국 ARMED", text)
+                self.assertNotIn("시동 불일치", text)
+
+    def test_arming_window_is_not_a_mismatch(self):
+        for armed_field in (0, 1):
+            with self.subTest(firmware=armed_field):
+                top = self._top(sample75(Armed=armed_field), "pad", armed=False,
+                                arm_state="arming")
+                text = flatten([top])
+                self.assertIn("지상국 ARMING", text)
+                self.assertNotIn("시동 불일치", text)
+
+    def test_stale_or_missing_firmware_state_is_shown_as_unknown(self):
+        for mode in self.MODES:
+            with self.subTest(mode=mode, case="stale"):
+                top = self._top(sample75(Armed=1), mode, armed=False,
+                                last_telem_time=NOW - 3.0)
+                text = flatten([top])
+                self.assertIn("드론 시동 ?", text)
+                self.assertNotIn("드론 ARMED", text)
+                self.assertNotIn("드론 DISARMED", text)
+                self.assertNotIn("시동 불일치", text)
+            with self.subTest(mode=mode, case="no sample"):
+                top = render(snap(None, mode=mode, is_armed=False, arm_state="idle",
+                                  armed_since=None, last_telem_time=0.0),
+                             120, 30, NOW)[0]
+                self.assertIn("드론 시동 ?", flatten([top]))
+
+    def test_mismatch_stays_visible_on_a_compact_terminal(self):
+        top = render(snap(sample75(Armed=1), mode="listen", is_armed=False,
+                          arm_state="idle", armed_since=None), 60, 20, NOW)[0]
+        self.assertIn("시동 불일치", flatten([top]))
+        self.assertLessEqual(get_cwidth(flatten([top])), 60)
+
 
 class LinkRateTrackerTest(unittest.TestCase):
     def test_rate_from_counter_delta(self):

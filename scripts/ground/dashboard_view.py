@@ -126,14 +126,45 @@ def _on_off(value):
     return {"1": "ON", "0": "OFF"}.get(flag, "-")
 
 
-def _top_bar(snap, sample, now, stale, age):
-    segments = []
-    if snap.get("arm_state") == "arming":
-        segments.append(("class:warn", " ARMING "))
-    elif snap.get("is_armed"):
-        segments.append(("class:armed", " ARMED "))
+def _arm_banner(snap, sample, stale):
+    """Firmware armed state (fresh telemetry only), then the local control state.
+
+    The local state is the station's own view (``is_armed``); it is always
+    disarmed in --keyboard/--listen, so it must never stand in for the drone.
+    Returns the banner segments and the mismatch text (None when they agree).
+    """
+    firmware = None if stale else phase_number(sample.get("Armed"))
+    if firmware == 1:
+        drone = ("class:armed", " 드론 ARMED ")
+    elif firmware == 0:
+        drone = ("class:disarmed", " 드론 DISARMED ")
     else:
-        segments.append(("class:disarmed", " DISARMED "))
+        drone = ("class:warn", " 드론 시동 ? ")
+
+    arming = snap.get("arm_state") == "arming"
+    local_armed = bool(snap.get("is_armed")) and not arming
+    if arming:
+        local = ("class:warn", " 지상국 ARMING ")
+    elif local_armed:
+        local = ("class:armed", " 지상국 ARMED ")
+    else:
+        # 드론이 시동 중이면 초록 DISARMED를 보이지 않는다.
+        local = ("class:alert" if firmware == 1 else "class:disarmed", " 지상국 DISARMED ")
+
+    mismatch = None
+    if not arming:   # 무장 확인 대기 중의 Armed=0/1은 정상 과도 상태다
+        if firmware == 1 and not local_armed:
+            mismatch = "시동 불일치: 드론 ARMED"
+        elif firmware == 0 and local_armed:
+            mismatch = "시동 불일치: 드론 DISARMED"
+    return [drone, ("", " "), local], mismatch
+
+
+def _top_bar(snap, sample, now, stale, age):
+    segments, mismatch = _arm_banner(snap, sample, stale)
+    if mismatch is not None:
+        # 좁은 화면에서도 잘리지 않게 상태 바로 뒤에 둔다.
+        segments.append(("class:alert", f"  ! {mismatch}"))
 
     if snap.get("last_telem_time", 0.0) <= 0:
         segments.append(("class:warn", "  링크 ○ 수신 대기"))
@@ -150,8 +181,6 @@ def _top_bar(snap, sample, now, stale, age):
             alerts.append("RC 타임아웃")
         if sample.get("Fault_Critical") == 1:
             alerts.append("치명 고장")
-        if snap.get("is_armed") and sample.get("Armed") == 0 and not stale:
-            alerts.append("시동 불일치")
     if snap.get("worker_fault"):
         label = {"telemetry": "수신", "controller": "조종"}.get(
             snap["worker_fault"], str(snap["worker_fault"]))
