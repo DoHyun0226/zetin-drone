@@ -17,7 +17,13 @@ swallowed with at most one line on stderr.
 Locking rule for ``DashboardUI``: its output methods are called from the
 telemetry thread while ``telem_lock`` is held and from the safety paths.
 They only touch the UI's own leaf lock (never a station lock, never
-``snapshot()``), never wait for a redraw, and never raise.
+``snapshot()``), never wait for a redraw, and never raise. The station's
+snapshot provider is called only from the dashboard's own redraw on the
+event-loop thread, outside the UI lock.
+
+``input_end_hold`` (``--listen``): when the input ends without an
+interactive Ctrl+D, ``run`` keeps reception going by calling this blocking
+callable; a Ctrl+C/SIGTERM while it waits ends the run like Ctrl+C.
 """
 
 import collections
@@ -35,8 +41,17 @@ def _report_ui_failure(method, error):
         pass
 
 
+INPUT_END_HOLD_MESSAGE = "[STDIN] 입력 종료 - 수신 계속 (Ctrl+C로 종료)"
+
+
 class ConsoleUI:
     """Plain line output: the station's original ``print`` behaviour."""
+
+    def __init__(self, input_end_hold=None):
+        self._input_end_hold = input_end_hold
+
+    def set_snapshot_provider(self, provider):
+        """The console draws no panels; it never pulls a snapshot."""
 
     def event(self, text):
         """One-off event line (arm/disarm, faults, warnings, logs...)."""
@@ -69,7 +84,9 @@ class ConsoleUI:
         return. A broken input stream (closed stdin, I/O error) ends like
         EOF: ``on_eof()``'s conditional disarm runs first, then the error is
         reported. A command that raises is reported as an event and the loop
-        continues.
+        continues. With ``input_end_hold`` the run does not end at EOF: after
+        ``on_eof()`` it waits in the hold until Ctrl+C/SIGTERM
+        (``on_interrupt()``) or until the hold returns.
         """
         while True:
             try:
@@ -79,6 +96,7 @@ class ConsoleUI:
                 return
             except EOFError:
                 self._call_safely("on_eof", on_eof)
+                self._hold_after_input_end(on_interrupt)
                 return
             except Exception as error:
                 # 안전 경로(조건부 disarm)를 먼저 돌리고, 알림은 그 뒤에 낸다.
@@ -88,6 +106,7 @@ class ConsoleUI:
                     f"[STDIN] 입력 오류: {type(error).__name__}: {error} "
                     "- 입력 종료로 처리"
                 )
+                self._hold_after_input_end(on_interrupt)
                 return
             if not msg:
                 continue
@@ -107,6 +126,19 @@ class ConsoleUI:
             callback()
         except Exception as error:
             _report_ui_failure(name, error)
+
+    def _hold_after_input_end(self, on_interrupt):
+        """--listen: the input is gone but reception goes on until Ctrl+C/SIGTERM."""
+        hold = self._input_end_hold
+        if hold is None:
+            return
+        try:
+            self.event(INPUT_END_HOLD_MESSAGE)
+            hold()
+        except KeyboardInterrupt:
+            self._call_safely("on_interrupt", on_interrupt)
+        except Exception as error:
+            _report_ui_failure("input_end_hold", error)
 
     def after_run(self):
         """Hook after ``run`` returns; the console has nothing buffered."""
@@ -158,11 +190,15 @@ class DashboardUI:
     method forwards to a ``ConsoleUI``, so later lines reach the terminal.
     """
 
-    def __init__(self, help_lines=(), *, input=None, output=None, clock=time.monotonic):
+    def __init__(self, help_lines=(), *, input=None, output=None, clock=time.monotonic,
+                 snapshot_provider=None, input_end_hold=None):
         # prompt_toolkit (and the dashboard view, which needs it) load here.
         from ground import dashboard_view
 
         self._view = dashboard_view
+        self._snapshot_provider = snapshot_provider
+        self._input_end_hold = input_end_hold
+        self._loop_error = None   # first event-loop exception (see _on_loop_exception)
         self._help_lines = list(help_lines)
         self._input = input
         self._output = output
@@ -207,23 +243,47 @@ class DashboardUI:
             if console is not None:
                 console.update(snap)
                 return
-            now = self._clock()
-            # 링크 Hz는 유효 수신 수로 잰다: 잘못된 패킷도 불량 수 갱신을 위해
-            # update()를 부른다. 그 수가 없는 스냅숏은 호출마다 1로 센다.
-            valid = snap.get("valid_packet_count") if isinstance(snap, dict) else None
-            with self._lock:
-                self._snap = snap
-                if valid is None:
-                    self._packets += 1
-                else:
-                    self._packets = valid
-                if (self._rate_time is None
-                        or now - self._rate_time >= LINK_RATE_WINDOW_SEC):
-                    self._link_hz = self._rate.update(now, self._packets)
-                    self._rate_time = now
+            self._store_snapshot(snap)
             self._invalidate()
         except Exception as error:
             _report_ui_failure("update", error)
+
+    def set_snapshot_provider(self, provider):
+        """Station ``snapshot`` function, pulled on every redraw (event-loop thread)."""
+        self._snapshot_provider = provider
+
+    def _store_snapshot(self, snap):
+        now = self._clock()
+        # 링크 Hz는 유효 수신 수로 잰다: 잘못된 패킷도 불량 수 갱신을 위해
+        # update()를 부른다. 그 수가 없는 스냅숏은 호출마다 1로 센다.
+        valid = snap.get("valid_packet_count") if isinstance(snap, dict) else None
+        with self._lock:
+            self._snap = snap
+            if valid is None:
+                self._packets += 1
+            else:
+                self._packets = valid
+            if (self._rate_time is None
+                    or now - self._rate_time >= LINK_RATE_WINDOW_SEC):
+                self._link_hz = self._rate.update(now, self._packets)
+                self._rate_time = now
+
+    def _pull_snapshot(self):
+        """Refresh tick (event-loop thread): read the station state itself.
+
+        Local safety changes (disarm, RC stop on link loss, a worker fault)
+        happen without a datagram, so no update() follows them. The provider
+        takes telem_lock; it is called here with no UI lock held, and never
+        from an output method (their callers may hold telem_lock).
+        """
+        provider = self._snapshot_provider
+        if provider is None:
+            return
+        try:
+            snap = provider()
+        except Exception:
+            return  # keep the last snapshot; the panels show its age
+        self._store_snapshot(snap)
 
     def _add(self, method, kind, text):
         try:
@@ -280,6 +340,7 @@ class DashboardUI:
         cached = self._panel_cache
         if cached is not None and cached[0] == counter:
             return cached[1]
+        self._pull_snapshot()
         try:
             width, height = self._size()
             # compact layout is decided on the whole terminal (80x24 rule);
@@ -439,8 +500,24 @@ class DashboardUI:
         Same contract as ``ConsoleUI.run``: Ctrl+C -> ``on_interrupt()``,
         Ctrl+D -> ``on_eof()``; any other end of the input (closed input,
         an error inside the application) runs ``on_eof()`` first and then
-        reports. A command that raises is reported as an event.
+        reports. A command that raises is reported as an event. A Ctrl+C
+        that arrives while the dashboard is still being built (or after it
+        has let go of the keys) also runs ``on_interrupt()``. An exception
+        inside the event loop (a failing redraw, a background task) runs
+        ``on_interrupt()`` first and then leaves the dashboard.
         """
+        try:
+            self._run(input_handler, on_interrupt, on_eof)
+        except KeyboardInterrupt:
+            # 키 바인딩이 Ctrl+C를 받기 전(대시보드 구성 중·시작 직전) 또는 그 뒤
+            self._run_safety("on_interrupt", on_interrupt)
+        except BaseException as error:  # noqa: BLE001 - run() must not raise
+            self._run_safety("on_eof", on_eof)
+            self.event(
+                f"[STDIN] 입력 오류: {type(error).__name__}: {error} - 입력 종료로 처리"
+            )
+
+    def _run(self, input_handler, on_interrupt, on_eof):
         try:
             app = self._build_app(input_handler, on_interrupt, on_eof)
         except Exception as error:
@@ -454,22 +531,81 @@ class DashboardUI:
             return
         self._app = app
         error = None
+        input_closed = False
         try:
-            app.run()
+            # prompt_toolkit의 기본 처리기는 예외를 찍고 ENTER를 기다리며 앱을
+            # 그대로 둔다. 대신 안전 콜백부터 돌리고 앱을 끝내는 처리기를 건다.
+            app.run(
+                pre_run=lambda: self._install_loop_exception_handler(app, on_interrupt),
+                set_exception_handler=False,
+            )
         except KeyboardInterrupt:
             self._run_safety("on_interrupt", on_interrupt)
         except EOFError:
-            pass  # 입력이 닫혔다: on_eof는 닫힘을 본 순간 이미 돌았다(아래가 예비)
+            # 입력이 닫혔다: on_eof는 닫힘을 본 순간 이미 돌았다(아래가 예비)
+            input_closed = True
         except BaseException as caught:  # noqa: BLE001 - run() must not raise
             error = caught
         finally:
             self._app = None
         # 입력이 키 없이 끝났거나 앱이 오류로 끝났다: EOF와 같이 조건부 disarm부터.
         self._run_safety("on_eof", on_eof)
-        if error is not None:
+        loop_error = self._loop_error
+        if loop_error is not None:
+            self.event(
+                f"[ERR] 대시보드 오류: {type(loop_error).__name__}: {loop_error} "
+                "- 대시보드 종료"
+            )
+        if error is not None and error is not loop_error:
             self.event(
                 f"[STDIN] 입력 오류: {type(error).__name__}: {error} - 입력 종료로 처리"
             )
+        if input_closed and self._input_end_hold is not None:
+            # --listen: 입력이 닫혀도(대화형 Ctrl+D가 아니면) 수신은 계속한다.
+            self._switch_to_console()._hold_after_input_end(on_interrupt)
+
+    def _install_loop_exception_handler(self, app, on_interrupt):
+        """pre_run (inside the running loop): route loop exceptions to the safety path."""
+        import asyncio
+
+        asyncio.get_running_loop().set_exception_handler(
+            lambda _loop, context: self._on_loop_exception(app, on_interrupt, context)
+        )
+
+    def _on_loop_exception(self, app, on_interrupt, context):
+        """Event-loop exception: safety callback first, then leave the app; never raises."""
+        try:
+            self._run_safety("on_interrupt", on_interrupt)
+            if self._loop_error is None:
+                exception = context.get("exception")
+                if exception is None:
+                    exception = RuntimeError(str(context.get("message", "event loop error")))
+                self._loop_error = exception
+            try:
+                app.exit()
+            except Exception:
+                pass  # already exiting
+        except Exception as error:
+            _report_ui_failure("event loop", error)
+
+    def interrupt(self):
+        """Ctrl+C request from a signal handler (SIGTERM); never raises, never blocks.
+
+        Returns True when the running dashboard takes the request: it is
+        handed to the event loop as the SIGINT key, so the usual Ctrl+C
+        binding runs the safety callback and leaves the app. Returns False
+        when no dashboard loop is running; the caller then raises
+        KeyboardInterrupt, which ``run`` turns into ``on_interrupt()``.
+        """
+        try:
+            app = self._app
+            loop = getattr(app, "loop", None)
+            if app is None or loop is None or not app.is_running or loop.is_closed():
+                return False
+            loop.call_soon_threadsafe(app.key_processor.send_sigint)
+            return True
+        except Exception:
+            return False
 
     def after_run(self):
         """Dashboard closed: print the event list; later output goes to a ConsoleUI."""
@@ -481,7 +617,7 @@ class DashboardUI:
 
     def _switch_to_console(self):
         """Print the buffered event list, then forward every output method."""
-        console = ConsoleUI()
+        console = ConsoleUI(input_end_hold=self._input_end_hold)
         try:
             with self._print_lock:
                 with self._lock:
@@ -519,10 +655,15 @@ class _InputClosedWatch:
         return closed
 
 
-def make_ui(args, isatty=None, *, help_lines=()):
-    """Dashboard on a terminal; ``ConsoleUI`` for --plain, pipes and no prompt_toolkit."""
+def make_ui(args, isatty=None, *, help_lines=(), snapshot_provider=None,
+            input_end_hold=None):
+    """Dashboard on a terminal; ``ConsoleUI`` for --plain, pipes and no prompt_toolkit.
+
+    ``snapshot_provider`` is pulled by the dashboard on its redraw;
+    ``input_end_hold`` keeps a run going after the input ends (--listen).
+    """
     if getattr(args, "plain", False):
-        return ConsoleUI()
+        return ConsoleUI(input_end_hold=input_end_hold)
     try:
         if isatty is not None:
             on_terminal = bool(isatty())
@@ -531,12 +672,13 @@ def make_ui(args, isatty=None, *, help_lines=()):
     except Exception:
         on_terminal = False
     if not on_terminal:
-        return ConsoleUI()
+        return ConsoleUI(input_end_hold=input_end_hold)
     try:
         if importlib.util.find_spec("prompt_toolkit") is None:
             raise ImportError("prompt_toolkit")
-        return DashboardUI(help_lines=help_lines)
+        return DashboardUI(help_lines=help_lines, snapshot_provider=snapshot_provider,
+                           input_end_hold=input_end_hold)
     except (ImportError, ValueError):
-        console = ConsoleUI()
+        console = ConsoleUI(input_end_hold=input_end_hold)
         console.event("[WARN] prompt_toolkit 없음 - 줄 출력으로 실행")
         return console

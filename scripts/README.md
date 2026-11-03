@@ -20,8 +20,8 @@
 | 조종·stdin 명령·CSV·raw 기록 | `drone_control.py` | 현행 기본 지상국(대시보드). 게임패드 USB 연결, `Drone_Tuning` 접속. `--plain`은 대시보드 없이 줄 출력 |
 | 축·버튼 번호 확인 | `drone_control.py --pad-check` | 드론에 아무것도 보내지 않음(소켓 없음). 처음 0.7초 손을 떼고 각 입력을 하나씩 확인 |
 | 입력값 연속 표시 | `drone_control.py --pad-check --live` | 로컬 입력 진단. 한 줄에 모든 축·버튼·햇 값을 표시. 번호는 실측 |
-| 게임패드 없는 명령 콘솔 | `drone_control.py --keyboard` | 설정·읽기용. RC 송신 없음, `start`·`resume` 거부, 종료 시 자동 송신 없음(`stop`은 직접 입력), 로그 파일 없음 |
-| 수신·표시·CSV·raw 기록 | `drone_control.py --listen` | 수신 전용. `connect` 외에는 보내지 않음(입력줄 명령·트림 재동기화·종료 시 disarm 없음) |
+| 게임패드 없는 명령 콘솔 | `drone_control.py --keyboard` | 설정·읽기용. RC 송신 없음(입력줄 `rc`·`rcr`도 거부), `start`·`resume` 거부, 종료 시 자동 송신 없음(`stop`은 직접 입력), 로그 파일 없음 |
+| 수신·표시·CSV·raw 기록 | `drone_control.py --listen` | 수신 전용. `connect` 외에는 보내지 않음(입력줄 명령·트림 재동기화·종료 시 disarm 없음). stdin이 없거나 닫혀도 Ctrl+C·SIGTERM까지 계속 수신 |
 | 실시간 그래프·CSV 기록 | `drone_control.py --listen --plot` | GUI(matplotlib) 필요. `connect` 외에는 보내지 않음 |
 | 카메라 녹화 | `drone_video.py` (= `record`) | 비행 UDP 포트를 쓰지 않음. `Drone_Tuning` 접속, 조종 지상국과 다른 터미널 |
 | 카메라 녹화 → 정렬 CSV·mp4 | `drone_video.py mp4 <csv> [--no-mp4]` | 오프라인. 입력 `logs/camera_*.csv` |
@@ -30,7 +30,7 @@
 | raw 바이너리 → CSV | `drone_logs.py imuraw <bin> [csv]` | 오프라인. 원본 `.bin` 보존, 출력 CSV 생성/덮어쓰기 |
 | 자기계 보정 상수 계산 | `drone_logs.py magcal <csv>` | 보정용 raw CSV에서 상수를 출력. 펌웨어를 자동 수정하거나 업로드하지 않음 |
 
-공통 옵션은 `--no-raw`(raw 스트림·기록 끔)·`--no-mag`(자기계 융합 OFF 선택)·`--plain`이다.
+공통 옵션은 `--no-raw`(raw 스트림·기록 끔. `--listen`에서는 아무것도 보내지 않고 로컬 raw 기록만 끔)·`--no-mag`(자기계 융합 OFF 선택)·`--plain`이다.
 벤치·특수 펌웨어용 도구(`motor_serial.py`·`bench_*.py`·`receive_dual_imu_debug.py`)는 현행 절차가 아니며
 [archive/README.md](archive/README.md)에서 용도와 전제를 확인한다.
 
@@ -69,7 +69,7 @@ stdin `start`만으로 주기적인 RC가 생기지는 않으므로 비행 조�
 | D-pad | roll/pitch 트림 0.2°씩 변경, 각 축 ±10° 제한 |
 | PS | 트림을 0으로 초기화 |
 | stdin `stop` | 지상국의 무장 추정과 무관하게 `stop` 반복 전송 |
-| Ctrl+C | `ARMED`이거나 `ARMING`이면 `stop` 후 종료·로그 닫기 |
+| Ctrl+C·SIGTERM | `ARMED`이거나 `ARMING`이면 `stop` 후 종료·로그 닫기 (대시보드가 오류로 끝날 때도 같음) |
 
 RC `rcr` 송신 목표는 **20Hz**(`CTRL_LOOP_HZ=20`)다. 스로틀과 트림 입력은
 RC 송신 중에만 처리된다. 버튼 번호는 OS/연결 방식에 따라 확인해야 하며,

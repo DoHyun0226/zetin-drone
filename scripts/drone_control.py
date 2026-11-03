@@ -55,7 +55,8 @@ def _parser():
     parser.add_argument(
         "--no-raw",
         action="store_true",
-        help="disable the firmware raw stream and do not create IMU raw logs",
+        help="disable the firmware raw stream and do not create IMU raw logs; "
+             "with --listen it only disables local raw capture (nothing is sent)",
     )
     parser.add_argument(
         "--no-mag",

@@ -2,6 +2,7 @@ import argparse
 import csv
 import datetime
 import math
+import signal
 import socket
 import struct
 import threading
@@ -66,7 +67,8 @@ def _cli_parser():
     parser.add_argument(
         "--no-raw",
         action="store_true",
-        help="disable the firmware raw stream and do not create IMU raw logs",
+        help="disable the firmware raw stream and do not create IMU raw logs; "
+             "with --listen it only disables local raw capture (nothing is sent)",
     )
     parser.add_argument(
         "--no-mag",
@@ -97,7 +99,11 @@ def _mode_of(args):
 cli_args = _parse_cli_args()
 mode = _mode_of(cli_args)
 KEYBOARD_REFUSAL = "[STDIN] 키보드 모드: 시동·복구는 패드로만 합니다"
+KEYBOARD_RC_REFUSAL = "[STDIN] 키보드 모드: RC는 패드로만 보냅니다"
 LISTEN_REFUSAL = "[STDIN] 수신 전용 모드"
+# 키보드 모드의 송신 관문에서 막는 명령(첫 단어): RC 스트림과 시동·복구.
+KEYBOARD_BLOCKED_COMMANDS = ("rc", "rcr", "start", "resume")
+LISTEN_HOLD_POLL_SEC = 0.2   # --listen 입력 종료 뒤 수신 유지 확인 주기
 
 # === 설정 ===
 UDP_IP        = "192.168.4.1"
@@ -249,7 +255,9 @@ class _UIBuffer:
     A fault path builds its operator lines here, runs the safety action
     (disarm / stop_streaming_only, which write into the same buffer), then
     flushes: the safety state and sends finish before any real ui call, and
-    the console still shows the lines in their original order.
+    the console still shows the lines in their original order. The
+    telemetry thread collects every ui call of one packet in one buffer and
+    flushes it after that packet's safety decisions.
     """
 
     def __init__(self):
@@ -258,10 +266,36 @@ class _UIBuffer:
     def event(self, text):
         self._calls.append(("event", text))
 
-    def flush(self):
+    def periodic(self, text):
+        self._calls.append(("periodic", text))
+
+    def transition(self, text):
+        self._calls.append(("transition", text))
+
+    def alert(self, text):
+        self._calls.append(("alert", text))
+
+    def update(self, snap):
+        self._calls.append(("update", snap))
+
+    def flush(self, swallow=False):
+        """Replay the calls on ``ui`` in order. Every call is attempted; the
+        first failure is re-raised afterwards unless ``swallow``."""
         calls, self._calls = self._calls, []
-        for kind, text in calls:
-            getattr(ui, kind)(text)
+        first_error = None
+        for kind, value in calls:
+            try:
+                getattr(ui, kind)(value)
+            except Exception as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None and not swallow:
+            raise first_error
+
+
+# 수신 스레드가 패킷 처리 중 예외로 죽을 때, 그 패킷의 미출력 줄을 고장
+# 처리기(_handle_worker_fault)에 넘긴다. 고장 안전 처리 뒤에 원래 순서로 낸다.
+_pending_packet_output = threading.local()
 
 
 def _is_rc_command(cmd: str) -> bool:
@@ -276,9 +310,14 @@ def _worker_fault_lock_reason():
 
 def _sendto(cmd: str):
     # 모든 송신(send_cmd·reliable_send)이 지나는 관문. 수신 전용 모드는
-    # 텔레메트리 목적지 등록(connect)만 내보낸다.
+    # 텔레메트리 목적지 등록(connect)만 내보낸다. 키보드 모드는 RC 스트림
+    # (rc/rcr)과 시동·복구를 내보내지 않는다(조종은 패드로만 한다).
     if mode == "listen" and cmd != "connect":
         return
+    if mode == "keyboard":
+        words = cmd.split(None, 1)
+        if words and words[0].lower() in KEYBOARD_BLOCKED_COMMANDS:
+            return
     try:
         sock.sendto(cmd.encode(), (UDP_IP, UDP_PORT))
     except OSError:
@@ -436,8 +475,11 @@ def request_resume(source: str) -> bool:
     return True
 
 
-def advance_resume_attempt(sample, now=None):
-    """텔레메트리 확인을 진행하고, 수락된 RC가 생긴 뒤에만 resume을 보낸다."""
+def advance_resume_attempt(sample, now=None, out=None):
+    """텔레메트리 확인을 진행하고, 수락된 RC가 생긴 뒤에만 resume을 보낸다.
+
+    out: the telemetry thread's per-packet _UIBuffer (flushed by the caller).
+    """
     global resume_state, resume_deadline, resume_attempt_id
     global resume_result_total_baseline, resume_result_dropped_baseline
     global current_throttle, throttle_f
@@ -547,15 +589,16 @@ def advance_resume_attempt(sample, now=None):
                             and resume_attempt_id == send_token):
                         resume_state = "wait_phase"
                 resume_sent = True
+    out = ui if out is None else out
     if resume_sent:
-        ui.event("[RESUME] RC 수락 확인됨, resume 전송 - Failsafe_Phase 확인 대기")
+        out.event("[RESUME] RC 수락 확인됨, resume 전송 - Failsafe_Phase 확인 대기")
     if resumed_hover is not None:
-        ui.event(
+        out.event(
             f"[RESUME] 성공: Failsafe_Phase=0, Hover_Est={resumed_hover:.1f}µs 동기화. "
             "고도는 복구되지 않습니다. 즉시 스로틀을 올리십시오!"
         )
     if failure is not None:
-        ui.event(f"[RESUME] 실패: {failure}")
+        out.event(f"[RESUME] 실패: {failure}")
 
 
 def _reset_arm_attempt_locked():
@@ -584,8 +627,11 @@ def check_arm_timeout(now=None):
         ui.event("\n[ARM] 실패: 펌웨어 Armed=1 확인 시간 초과, stop 전송")
 
 
-def advance_arm_attempt(sample, now=None):
-    """펌웨어 상태로 무장을 확정하거나 제한된 start 재시도를 수행한다."""
+def advance_arm_attempt(sample, now=None, out=None):
+    """펌웨어 상태로 무장을 확정하거나 제한된 start 재시도를 수행한다.
+
+    out: the telemetry thread's per-packet _UIBuffer (flushed by the caller).
+    """
     global arm_state, arm_next_retry, is_armed, is_streaming
     global current_throttle, throttle_f
 
@@ -635,13 +681,14 @@ def advance_arm_attempt(sample, now=None):
             _reset_arm_attempt_locked()
             reliable_send("stop")
 
+    out = ui if out is None else out
     if success:
         mag_state = "ON" if mag_enabled_choice else "OFF"
-        ui.event(f"\n>>> [SYSTEM] ARMED 확인 (시동 ON, mag {mag_state})")
+        out.event(f"\n>>> [SYSTEM] ARMED 확인 (시동 ON, mag {mag_state})")
     elif failure is not None:
-        ui.event(f"\n[ARM] 실패: {failure}, stop 전송")
+        out.event(f"\n[ARM] 실패: {failure}, stop 전송")
     elif retry:
-        ui.event("[ARM] 펌웨어 확인 대기: start 재전송")
+        out.event("[ARM] 펌웨어 확인 대기: start 재전송")
 
 
 def arm():
@@ -718,6 +765,10 @@ def handle_stdin_command(msg: str):
     if mode == "keyboard" and parts[0].lower() in ("start", "resume"):
         # 조종은 패드로만 한다. RC가 없으니 시동이 걸리면 RC 타임아웃 failsafe가 난다.
         ui.event(KEYBOARD_REFUSAL)
+        return
+    if mode == "keyboard" and _is_rc_command(command):
+        # 입력줄 rc/rcr도 RC 스트림이다: 패드 없이 RC를 열지 않는다.
+        ui.event(KEYBOARD_RC_REFUSAL)
         return
     if command_lower == "resume":
         request_resume("stdin")
@@ -1002,178 +1053,185 @@ def telemetry_thread():
             ui.update(snapshot())
             continue
 
-        received_at = time.monotonic()
-        pending_trim_resend = None
-        with telem_lock:
-            telem_angle_x      = sample["Roll"]
-            telem_angle_y      = sample["Pitch"]
-            telem_throttle     = sample["Throttle"] or 0
-            fault_rc_drone     = sample["Fault_RC"] == 1
-            fault_critical_drone = sample["Fault_Critical"] == 1
-            telem_fault_critical = sample["Fault_Critical"]
-            telem_calibration_ok = sample["Calibration_OK"]
-            telem_armed = sample["Armed"]
-            telem_total_pkts   = sample["RC_Total_Pkts"] or 0
-            telem_dropped_pkts = sample["RC_Dropped_Pkts"] or 0
-            telem_failsafe_phase = sample["Failsafe_Phase"]
-            telem_hover_est = sample["Hover_Est"]
-            telem_hover_valid = sample["Hover_Valid"] == 1
-            last_telem_time    = received_at
-            last_sample        = sample
-            valid_packet_count += 1
-            received_trim_roll = sample["Trim_Roll"]
-            received_trim_pitch = sample["Trim_Pitch"]
-            if not trim_synced or mode != "pad":
-                # 조종자가 아직 트림을 건드리지 않았다: 드론이 권위다.
-                # 패드가 없는 모드(--keyboard·--listen)에서는 계속 드론을 따르고
-                # 재전송하지 않는다(입력줄 trim 명령을 되돌리지 않게).
-                if received_trim_roll is not None and received_trim_pitch is not None:
-                    trim_roll = received_trim_roll
-                    trim_pitch = received_trim_pitch
-                    trim_synced = True
-            elif received_trim_roll is not None and received_trim_pitch is not None:
-                # 조종자가 바꾼 뒤로는 지상국이 권위다. 드론이 아직 동의하지
-                # 않으면 다시 보낸다. 전송은 락 밖에서 한다.
-                if (abs(received_trim_roll - trim_roll) > TRIM_TOLERANCE
-                        or abs(received_trim_pitch - trim_pitch) > TRIM_TOLERANCE):
-                    pending_trim_resend = (trim_roll, trim_pitch)
+        # 이 패킷이 내는 모든 출력은 out에 모았다가, 이 패킷의 안전 판단(무장 확정·
+        # 미시동·RC 타임아웃·치명 고장·resume)이 끝난 뒤 원래 순서로 낸다. 터미널
+        # 출력이 막혀도(Ctrl+S, 막힌 파이프) 안전 판단이 그 뒤에 서지 않는다.
+        out = _UIBuffer()
+        try:
+            received_at = time.monotonic()
+            pending_trim_resend = None
+            with telem_lock:
+                telem_angle_x      = sample["Roll"]
+                telem_angle_y      = sample["Pitch"]
+                telem_throttle     = sample["Throttle"] or 0
+                fault_rc_drone     = sample["Fault_RC"] == 1
+                fault_critical_drone = sample["Fault_Critical"] == 1
+                telem_fault_critical = sample["Fault_Critical"]
+                telem_calibration_ok = sample["Calibration_OK"]
+                telem_armed = sample["Armed"]
+                telem_total_pkts   = sample["RC_Total_Pkts"] or 0
+                telem_dropped_pkts = sample["RC_Dropped_Pkts"] or 0
+                telem_failsafe_phase = sample["Failsafe_Phase"]
+                telem_hover_est = sample["Hover_Est"]
+                telem_hover_valid = sample["Hover_Valid"] == 1
+                last_telem_time    = received_at
+                last_sample        = sample
+                valid_packet_count += 1
+                received_trim_roll = sample["Trim_Roll"]
+                received_trim_pitch = sample["Trim_Pitch"]
+                if not trim_synced or mode != "pad":
+                    # 조종자가 아직 트림을 건드리지 않았다: 드론이 권위다.
+                    # 패드가 없는 모드(--keyboard·--listen)에서는 계속 드론을 따르고
+                    # 재전송하지 않는다(입력줄 trim 명령을 되돌리지 않게).
+                    if received_trim_roll is not None and received_trim_pitch is not None:
+                        trim_roll = received_trim_roll
+                        trim_pitch = received_trim_pitch
+                        trim_synced = True
+                elif received_trim_roll is not None and received_trim_pitch is not None:
+                    # 조종자가 바꾼 뒤로는 지상국이 권위다. 드론이 아직 동의하지
+                    # 않으면 다시 보낸다. 전송은 락 밖에서 한다.
+                    if (abs(received_trim_roll - trim_roll) > TRIM_TOLERANCE
+                            or abs(received_trim_pitch - trim_pitch) > TRIM_TOLERANCE):
+                        pending_trim_resend = (trim_roll, trim_pitch)
 
-        if (pending_trim_resend is not None
-                and received_at - last_trim_resend >= TRIM_RESEND_PERIOD):
-            last_trim_resend = received_at
-            send_cmd(f"trim {pending_trim_resend[0]:.2f} {pending_trim_resend[1]:.2f}")
+            if (pending_trim_resend is not None
+                    and received_at - last_trim_resend >= TRIM_RESEND_PERIOD):
+                last_trim_resend = received_at
+                send_cmd(f"trim {pending_trim_resend[0]:.2f} {pending_trim_resend[1]:.2f}")
 
-        if telemetry_lost:
-            ui.event("[OK] 텔레메트리 수신 복구")
-            telemetry_lost = False
+            if telemetry_lost:
+                out.event("[OK] 텔레메트리 수신 복구")
+                telemetry_lost = False
 
-        # start를 보낸 것만으로 로컬 무장으로 간주하지 않는다. 펌웨어가 같은
-        # 텔레메트리 샘플에서 건강 상태와 Armed=1을 확인한 뒤에만 RC를 연다.
-        advance_arm_attempt(sample)
+            # start를 보낸 것만으로 로컬 무장으로 간주하지 않는다. 펌웨어가 같은
+            # 텔레메트리 샘플에서 건강 상태와 Armed=1을 확인한 뒤에만 RC를 연다.
+            advance_arm_attempt(sample, out=out)
 
-        if csv_writer is not None:
-            now_str = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-            csv_writer.writerow(sample_to_csv_row(now_str, sample))
-            logged_packet_count += 1
-        packet_count += 1
-        if csv_file is not None and packet_count % 20 == 0:
-            csv_file.flush()
+            if csv_writer is not None:
+                now_str = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                csv_writer.writerow(sample_to_csv_row(now_str, sample))
+                logged_packet_count += 1
+            packet_count += 1
+            if csv_file is not None and packet_count % 20 == 0:
+                csv_file.flush()
 
-        if received_at - last_status >= STATUS_PERIOD:
-            ui.periodic(format_status_telemetry(sample))
-            last_status = received_at
+            if received_at - last_status >= STATUS_PERIOD:
+                out.periodic(format_status_telemetry(sample))
+                last_status = received_at
 
-        # Stage E: DESCENDING은 120ms 프로브 딥을 위해 매 패킷 출력하되,
-        # 갱신 정보가 없는 종료 phase는 전이 시점에만 한 번 출력한다.
-        autoland_phase = phase_number(sample.get("Failsafe_Phase"))
-        autoland_line = format_autoland_telemetry(sample)
-        if (
-            autoland_line is not None
-            and (
-                autoland_phase not in (2, 3, 4)
-                or autoland_phase != previous_autoland_phase
-            )
-        ):
-            ui.periodic(autoland_line)
-        previous_autoland_phase = autoland_phase
+            # Stage E: DESCENDING은 120ms 프로브 딥을 위해 매 패킷 출력하되,
+            # 갱신 정보가 없는 종료 phase는 전이 시점에만 한 번 출력한다.
+            autoland_phase = phase_number(sample.get("Failsafe_Phase"))
+            autoland_line = format_autoland_telemetry(sample)
+            if (
+                autoland_line is not None
+                and (
+                    autoland_phase not in (2, 3, 4)
+                    or autoland_phase != previous_autoland_phase
+                )
+            ):
+                out.periodic(autoland_line)
+            previous_autoland_phase = autoland_phase
 
-        # [DIAG C-2] 틸트 복원 진단: 무장 중 모터µs/자세/목표레이트 라이브 출력(~5Hz).
-        # 누른 쪽 모터 µs가 오르고 aX/aY(추정 자세)가 틸트를 따라가는지 확인용.
-        if is_armed and packet_count % 4 == 0:
-            m = [sample[k] for k in ("Motor_M1", "Motor_M2", "Motor_M3", "Motor_M4")]
-            if all(v is not None for v in m):
-                tr = sample["TgtRate_Roll"] or 0.0
-                tp = sample["TgtRate_Pitch"] or 0.0
-                ty = sample["TgtRate_Yaw"] or 0.0
-                gz = sample["Gyro_Z"] or 0.0
-                az = sample["Yaw"] or 0.0
-                cw = m[0] + m[1]   # M1(FL)+M2(RR) = CW 대각쌍
-                ccw = m[2] + m[3]  # M3(FR)+M4(RL) = CCW 대각쌍 (차이 = yaw축)
-                firmware_armed = phase_number(sample.get("Armed"))
-                if firmware_armed == 1:
-                    rp_scale = _format_optional_float(
-                        sample.get("Mixer_RP_Scale"), 2
-                    )
-                    yaw_scale = _format_optional_float(
-                        sample.get("Mixer_Yaw_Scale"), 2
-                    )
-                    yaw_authority = _format_yaw_authority(
-                        sample.get("Yaw_Authority_State")
-                    )
-                else:
-                    rp_scale = yaw_scale = yaw_authority = "-"
-                ui.periodic(f" [DIAG] M1(FL)={m[0]} M2(RR)={m[1]} M3(FR)={m[2]} M4(RL)={m[3]} "
-                            f"[yaw축 CW-CCW={cw - ccw:+d}] | "
-                            f"aX={sample['Roll']:+5.1f} aY={sample['Pitch']:+5.1f} aZ={az:+6.1f} | "
-                            f"eR={_format_angle_error(sample.get('TgtAngle_Roll'), sample.get('Roll'))} "
-                            f"eP={_format_angle_error(sample.get('TgtAngle_Pitch'), sample.get('Pitch'))} "
-                            f"gZ={gz:+6.1f} dG={_format_gyro_disagreement(sample)} "
-                            f"Trim={_format_drone_trim(sample)} "
-                            f"AGL={_format_agl(sample)} "
-                            f"Yaw_Hold={_format_binary_flag(sample.get('Yaw_Hold'))} "
-                            f"FW_Armed={_format_binary_flag(sample.get('Armed'))} "
-                            f"RP_Scale={rp_scale} "
-                            f"Yaw_Scale={yaw_scale} "
-                            f"Yaw_Authority={yaw_authority} "
-                            f"tR={tr:+5.1f} tP={tp:+5.1f} tY={ty:+6.1f} "
-                            f"th={sample['Throttle']} "
-                            f"Hover_Est={_format_optional_float(sample.get('Hover_Est'), 1)} "
-                            f"Hover_Valid={_format_binary_flag(sample.get('Hover_Valid'))}")
+            # [DIAG C-2] 틸트 복원 진단: 무장 중 모터µs/자세/목표레이트 라이브 출력(~5Hz).
+            # 누른 쪽 모터 µs가 오르고 aX/aY(추정 자세)가 틸트를 따라가는지 확인용.
+            if is_armed and packet_count % 4 == 0:
+                m = [sample[k] for k in ("Motor_M1", "Motor_M2", "Motor_M3", "Motor_M4")]
+                if all(v is not None for v in m):
+                    tr = sample["TgtRate_Roll"] or 0.0
+                    tp = sample["TgtRate_Pitch"] or 0.0
+                    ty = sample["TgtRate_Yaw"] or 0.0
+                    gz = sample["Gyro_Z"] or 0.0
+                    az = sample["Yaw"] or 0.0
+                    cw = m[0] + m[1]   # M1(FL)+M2(RR) = CW 대각쌍
+                    ccw = m[2] + m[3]  # M3(FR)+M4(RL) = CCW 대각쌍 (차이 = yaw축)
+                    firmware_armed = phase_number(sample.get("Armed"))
+                    if firmware_armed == 1:
+                        rp_scale = _format_optional_float(
+                            sample.get("Mixer_RP_Scale"), 2
+                        )
+                        yaw_scale = _format_optional_float(
+                            sample.get("Mixer_Yaw_Scale"), 2
+                        )
+                        yaw_authority = _format_yaw_authority(
+                            sample.get("Yaw_Authority_State")
+                        )
+                    else:
+                        rp_scale = yaw_scale = yaw_authority = "-"
+                    out.periodic(f" [DIAG] M1(FL)={m[0]} M2(RR)={m[1]} M3(FR)={m[2]} M4(RL)={m[3]} "
+                                f"[yaw축 CW-CCW={cw - ccw:+d}] | "
+                                f"aX={sample['Roll']:+5.1f} aY={sample['Pitch']:+5.1f} aZ={az:+6.1f} | "
+                                f"eR={_format_angle_error(sample.get('TgtAngle_Roll'), sample.get('Roll'))} "
+                                f"eP={_format_angle_error(sample.get('TgtAngle_Pitch'), sample.get('Pitch'))} "
+                                f"gZ={gz:+6.1f} dG={_format_gyro_disagreement(sample)} "
+                                f"Trim={_format_drone_trim(sample)} "
+                                f"AGL={_format_agl(sample)} "
+                                f"Yaw_Hold={_format_binary_flag(sample.get('Yaw_Hold'))} "
+                                f"FW_Armed={_format_binary_flag(sample.get('Armed'))} "
+                                f"RP_Scale={rp_scale} "
+                                f"Yaw_Scale={yaw_scale} "
+                                f"Yaw_Authority={yaw_authority} "
+                                f"tR={tr:+5.1f} tP={tp:+5.1f} tY={ty:+6.1f} "
+                                f"th={sample['Throttle']} "
+                                f"Hover_Est={_format_optional_float(sample.get('Hover_Est'), 1)} "
+                                f"Hover_Valid={_format_binary_flag(sample.get('Hover_Valid'))}")
 
-        # 드론 Armed 필드와 대조: 시동 명령이 거부됐거나(START REFUSED는
-        # 시리얼에만 출력됨) 드론이 스스로 disarm한 것을 감지한다.
-        # start 재전송+텔레메트리 주기를 고려해 1.5초 grace를 둔다.
-        if (is_armed and sample["Armed"] == 0
-                and time.monotonic() - last_arm_time > 1.5):
-            deferred = _UIBuffer()
-            deferred.event("\n[FAULT] 드론이 시동 상태가 아님 (시동 거부 또는 드론 측 disarm)")
-            disarm("드론 측 미시동 감지", out=deferred)
-            deferred.flush()
+            # 드론 Armed 필드와 대조: 시동 명령이 거부됐거나(START REFUSED는
+            # 시리얼에만 출력됨) 드론이 스스로 disarm한 것을 감지한다.
+            # start 재전송+텔레메트리 주기를 고려해 1.5초 grace를 둔다.
+            if (is_armed and sample["Armed"] == 0
+                    and time.monotonic() - last_arm_time > 1.5):
+                out.event("\n[FAULT] 드론이 시동 상태가 아님 (시동 거부 또는 드론 측 disarm)")
+                disarm("드론 측 미시동 감지", out=out)
 
-        # 드론 측 고장 플래그 — fault는 latch되므로 상승 엣지에서만 알린다.
-        if fault_rc_drone and not prev_fault_rc:
-            deferred = _UIBuffer()
-            deferred.event(f"\n[FAULT] 드론: RC 타임아웃 - {format_rc_timeout_fault(sample)}")
-            if is_streaming:
-                stop_streaming_only("드론 RC 타임아웃", out=deferred)
-            deferred.flush()
-        prev_fault_rc = fault_rc_drone
+            # 드론 측 고장 플래그 — fault는 latch되므로 상승 엣지에서만 알린다.
+            if fault_rc_drone and not prev_fault_rc:
+                out.event(f"\n[FAULT] 드론: RC 타임아웃 - {format_rc_timeout_fault(sample)}")
+                if is_streaming:
+                    stop_streaming_only("드론 RC 타임아웃", out=out)
+            prev_fault_rc = fault_rc_drone
 
-        if fault_critical_drone and not prev_fault_critical:
-            detail = ", ".join(active_fault_names(sample)) or "원인 미상"
-            deferred = _UIBuffer()
-            deferred.event(f"\n[FAULT] 드론: 치명 고장 감지됨 ({detail})")
-            if is_armed:
-                disarm("드론 치명 고장", out=deferred)
-            deferred.flush()
-        prev_fault_critical = fault_critical_drone
+            if fault_critical_drone and not prev_fault_critical:
+                detail = ", ".join(active_fault_names(sample)) or "원인 미상"
+                out.event(f"\n[FAULT] 드론: 치명 고장 감지됨 ({detail})")
+                if is_armed:
+                    disarm("드론 치명 고장", out=out)
+            prev_fault_critical = fault_critical_drone
 
-        # Armed/critical/RC 안전 처리가 resume보다 항상 우선한다.
-        advance_resume_attempt(sample)
+            # Armed/critical/RC 안전 처리가 resume보다 항상 우선한다.
+            advance_resume_attempt(sample, out=out)
 
-        # 패킷 드롭률 출력 (10% 초과 시 경고)
-        if telem_total_pkts > 100 and telem_total_pkts % 50 == 0:
-            drop_rate = telem_dropped_pkts / telem_total_pkts * 100
-            if drop_rate > 10.0:
-                ui.event(f"\n[WARN] 패킷 드롭률 {drop_rate:.1f}% ({telem_dropped_pkts}/{telem_total_pkts}) - 간섭 의심")
+            # 패킷 드롭률 출력 (10% 초과 시 경고)
+            if telem_total_pkts > 100 and telem_total_pkts % 50 == 0:
+                drop_rate = telem_dropped_pkts / telem_total_pkts * 100
+                if drop_rate > 10.0:
+                    out.event(f"\n[WARN] 패킷 드롭률 {drop_rate:.1f}% ({telem_dropped_pkts}/{telem_total_pkts}) - 간섭 의심")
 
-        # 과도 기울기 경고 (1초에 한 번만)
-        ax, ay = abs(telem_angle_x), abs(telem_angle_y)
-        if (is_armed and (ax > TILT_WARN_DEG or ay > TILT_WARN_DEG)
-                and now - last_tilt_warn >= TILT_WARN_PERIOD):
-            ui.event(f"\n[WARN] 과도 기울기 - Roll:{telem_angle_x:.1f}° Pitch:{telem_angle_y:.1f}°")
-            last_tilt_warn = now
+            # 과도 기울기 경고 (1초에 한 번만)
+            ax, ay = abs(telem_angle_x), abs(telem_angle_y)
+            if (is_armed and (ax > TILT_WARN_DEG or ay > TILT_WARN_DEG)
+                    and now - last_tilt_warn >= TILT_WARN_PERIOD):
+                out.event(f"\n[WARN] 과도 기울기 - Roll:{telem_angle_x:.1f}° Pitch:{telem_angle_y:.1f}°")
+                last_tilt_warn = now
 
-        # 대시보드 전용: 안전 처리가 끝난 뒤 상태 전이 사건과 스냅숏을 넘긴다.
-        states = {name: sample.get(name) for name in STATE_TRANSITION_FIELDS}
-        if previous_states is not None:
-            for name in STATE_TRANSITION_FIELDS:
-                if states[name] != previous_states[name]:
-                    ui.transition(
-                        f"[STATE] {name} {previous_states[name]} → {states[name]}"
-                    )
-        previous_states = states
-        ui.update(snapshot())
+            # 대시보드 전용: 안전 처리가 끝난 뒤 상태 전이 사건과 스냅숏을 넘긴다.
+            states = {name: sample.get(name) for name in STATE_TRANSITION_FIELDS}
+            if previous_states is not None:
+                for name in STATE_TRANSITION_FIELDS:
+                    if states[name] != previous_states[name]:
+                        out.transition(
+                            f"[STATE] {name} {previous_states[name]} → {states[name]}"
+                        )
+            previous_states = states
+            out.update(snapshot())
+        except Exception:
+            # 수신 스레드가 죽는다: 고장 처리기가 RC를 멈춘 뒤 이 줄들을 낸다.
+            _pending_packet_output.buffer = out
+            raise
+        except BaseException:
+            out.flush(swallow=True)
+            raise
+        out.flush()
 
 
 # ==========================================================
@@ -1415,12 +1473,14 @@ def shutdown_workers_and_close_log(workers):
             )
 
 
-def _handle_worker_fault(worker, error):
+def _handle_worker_fault(worker, error, pending=None):
     """A worker died: make the station safe first, tell the operator second.
 
     Same outcome as a telemetry loss: RC stops (stop_streaming_only, no stop
     packet, so a descending drone keeps its autoland) and the fault latches
-    until restart, so no later arm/resume/RC can reopen the link.
+    until restart, so no later arm/resume/RC can reopen the link. ``pending``
+    holds the dying packet's unprinted lines; they come out first, after the
+    safety steps, followed by the fault lines.
     """
     global worker_fault
     label = WORKER_LABELS.get(worker, worker)
@@ -1437,32 +1497,31 @@ def _handle_worker_fault(worker, error):
             _reset_arm_attempt_locked()
             reliable_send("stop")
         streaming = is_streaming
+    out = pending if pending is not None else _UIBuffer()
     try:
         if streaming:
-            stop_streaming_only(reason)
+            stop_streaming_only(reason, out=out)
     except Exception:
         pass  # 상태 변경은 이미 끝났다; 실패한 것은 그 뒤의 UI 출력뿐이다
-    try:
-        if cancelled_resume:
-            ui.event(f"\n[RESUME] 실패: {reason}로 복구 시도 취소")
-        if cancelled_arm:
-            ui.event(f"\n[ARM] 실패: {reason}로 무장 시도 취소, stop 전송")
-    except Exception:
-        pass
-    try:
-        ui.alert(
-            f"[ERR] {reason}: {type(error).__name__}: {error} - "
-            "rc 중단, 드론 자동착륙에 맡김. 지상국을 다시 시작하세요"
-        )
-    except Exception:
-        pass
+    if cancelled_resume:
+        out.event(f"\n[RESUME] 실패: {reason}로 복구 시도 취소")
+    if cancelled_arm:
+        out.event(f"\n[ARM] 실패: {reason}로 무장 시도 취소, stop 전송")
+    out.alert(
+        f"[ERR] {reason}: {type(error).__name__}: {error} - "
+        "rc 중단, 드론 자동착륙에 맡김. 지상국을 다시 시작하세요"
+    )
+    out.flush(swallow=True)
 
 
 def _run_worker(worker, target):
+    _pending_packet_output.buffer = None
     try:
         target()
     except Exception as error:
-        _handle_worker_fault(worker, error)
+        pending = getattr(_pending_packet_output, "buffer", None)
+        _pending_packet_output.buffer = None
+        _handle_worker_fault(worker, error, pending=pending)
 
 
 def telemetry_worker():
@@ -1522,6 +1581,55 @@ def _on_stdin_eof():
         disarm("입력 종료(EOF)")
 
 
+def _on_ui_run_escape(error):
+    """``ui.run`` must not raise; if anything escapes it, make the drone safe first.
+
+    Same conditional disarm as Ctrl+C (pad mode only), before after_run and
+    the log cleanup. A KeyboardInterrupt is the Ctrl+C itself.
+    """
+    if isinstance(error, KeyboardInterrupt):
+        reason = "키보드 인터럽트"
+    else:
+        reason = "화면·입력 오류"
+    try:
+        if mode == "pad" and (is_armed or arm_state == "arming"):
+            disarm(reason)
+    except Exception:
+        pass
+    if not isinstance(error, KeyboardInterrupt):
+        try:
+            ui.event(f"[ERR] 화면·입력 루프 오류: {type(error).__name__}: {error}")
+        except Exception:
+            pass
+
+
+def _install_sigterm_handler(station_ui, state):
+    """SIGTERM takes the Ctrl+C path: conditional disarm, leave the UI, save logs.
+
+    A running dashboard gets it as its SIGINT key (``station_ui.interrupt()``);
+    otherwise the handler raises KeyboardInterrupt in the main thread, which
+    the UI turns into ``on_interrupt()``. Once the UI has returned
+    (``state["ui_done"]``) the handler does nothing, so the log saving
+    finishes. Returns the previous handler, or None off the main thread.
+    """
+    def handler(_signum, _frame):
+        if state["ui_done"]:
+            return  # 로그 저장 중: 끝까지 저장한 뒤 종료한다
+        request = getattr(station_ui, "interrupt", None)
+        if request is not None:
+            try:
+                if request():
+                    return
+            except Exception:
+                pass
+        raise KeyboardInterrupt
+
+    try:
+        return signal.signal(signal.SIGTERM, handler)
+    except (ValueError, OSError):
+        return None  # signal handlers can only be set in the main thread
+
+
 def main(argv=None, ui=None):
     """Start the workers, run the stdin loop, then save the logs.
 
@@ -1541,30 +1649,62 @@ def main(argv=None, ui=None):
         cli_args = parsed
         raw_capture_enabled = logging_enabled and not cli_args.no_raw
         mag_enabled_choice = not cli_args.no_mag
-    if ui is None:
-        ui = make_ui(cli_args, help_lines=startup_help_lines())
-    globals()["ui"] = ui
-    station_ui = ui
 
     # 패드 모드만 조종 스레드를 띄운다. --keyboard·--listen은 RC를 보내지 않는다.
     workers = [threading.Thread(target=telemetry_worker, daemon=True)]
     if mode == "pad":
         workers.append(threading.Thread(target=controller_worker, daemon=True))
-    elif mode == "keyboard":
+
+    def hold_reception():
+        # --listen: 입력(stdin)이 끝나도 수신은 계속한다. Ctrl+C·SIGTERM이
+        # KeyboardInterrupt로 여기서 끝내고, 수신 스레드가 멈춰도 끝난다.
+        while not shutdown_event.is_set() and workers[0].is_alive():
+            time.sleep(LISTEN_HOLD_POLL_SEC)
+
+    if ui is None:
+        ui = make_ui(
+            cli_args,
+            help_lines=startup_help_lines(),
+            snapshot_provider=snapshot,
+            input_end_hold=hold_reception if mode == "listen" else None,
+        )
+    globals()["ui"] = ui
+    station_ui = ui
+    # 대시보드는 갱신 때마다 snapshot()을 직접 읽는다: 패킷 없이 바뀐 안전
+    # 상태(disarm·링크 끊김 RC 중단·워커 고장)도 화면에 바로 보인다.
+    set_provider = getattr(station_ui, "set_snapshot_provider", None)
+    if set_provider is not None:
+        set_provider(snapshot)
+    station_ui.update(snapshot())
+
+    if mode == "keyboard":
         # 조종 스레드가 찍던 시작 도움말(입력줄 명령 목록)을 여기서 띄운다.
         for line in startup_help_lines():
             station_ui.event(line)
     if cli_args.no_raw and mode != "listen":
         station_ui.event("[RAW] --no-raw: 시작 시 드론 raw 스트림을 끕니다.")
         reliable_send("raw 0")
-    for worker in workers:
-        worker.start()
 
+    signal_state = {"ui_done": False}
+    previous_sigterm = _install_sigterm_handler(station_ui, signal_state)
+    escaped = None
     try:
+        for worker in workers:
+            worker.start()
         station_ui.run(handle_stdin_command, _on_stdin_interrupt, _on_stdin_eof)
+    except BaseException as error:  # noqa: BLE001 - disarm before any cleanup
+        escaped = error
+        _on_ui_run_escape(error)
     finally:
-        station_ui.after_run()
-        shutdown_workers_and_close_log(workers)
+        signal_state["ui_done"] = True
+        try:
+            station_ui.after_run()
+            shutdown_workers_and_close_log(workers)
+        finally:
+            if previous_sigterm is not None:
+                signal.signal(signal.SIGTERM, previous_sigterm)
+    if escaped is not None and not isinstance(escaped, KeyboardInterrupt):
+        raise escaped
     return 0
 
 

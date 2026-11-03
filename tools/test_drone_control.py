@@ -131,6 +131,17 @@ class DroneControlTest(unittest.TestCase):
         plot_main.assert_called_once()
         self.assertNotIn(STATION, sys.modules)
 
+    def test_no_raw_help_says_what_it_does_under_listen(self):
+        # --listen은 raw 0을 보내지 않는다: 로컬 raw 기록만 끈다.
+        helps = {
+            flag: action.help
+            for action in drone_control._parser()._actions
+            for flag in action.option_strings
+        }
+        self.assertIn("--listen", helps["--no-raw"])
+        self.assertIn("only", helps["--no-raw"])
+        self.assertIn("local raw", helps["--no-raw"])
+
     def test_plot_without_listen_is_an_error(self):
         code, _out, err = self._main_without_station(["--plot"])
         self.assertNotEqual(code, 0)

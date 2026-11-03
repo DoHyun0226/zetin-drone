@@ -560,6 +560,221 @@ class DashboardUITest(unittest.TestCase):
             self.ui.periodic("[STATUS] x")
         self.assertIn("synthetic redraw failure", err.getvalue())
 
+    # --- final review: interrupts, loop errors, snapshot pull, listen hold ---
+
+    def _run_catching_interrupt(self, ui, *, on_eof=None):
+        """ui.run on this thread; a KeyboardInterrupt escaping it is a failure."""
+        try:
+            ui.run(self.handled.append,
+                   lambda: self.calls.append("interrupt"),
+                   on_eof or (lambda: self.calls.append("eof")))
+        except KeyboardInterrupt:
+            self.fail("KeyboardInterrupt escaped DashboardUI.run()")
+
+    def test_ctrl_c_while_the_dashboard_is_being_built_runs_on_interrupt(self):
+        with (
+            mock.patch.object(DashboardUI, "_build_app", side_effect=KeyboardInterrupt),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self._run_catching_interrupt(self.ui)
+        self.assertEqual(self.calls, ["interrupt"])
+
+    def test_ctrl_c_as_the_app_starts_runs_on_interrupt(self):
+        from prompt_toolkit.application import Application
+
+        with (
+            mock.patch.object(Application, "run", side_effect=KeyboardInterrupt),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self._run_catching_interrupt(self.ui)
+        self.assertEqual(self.calls, ["interrupt"])
+
+    def test_event_loop_exception_runs_the_safety_callback_then_exits(self):
+        # A renderer flush that starts failing mid-run (a broken terminal) is an
+        # event-loop exception. prompt_toolkit's default handler would print it
+        # and wait for ENTER with the app still up; the safety callback must run
+        # first and the dashboard must leave cleanly.
+        from prompt_toolkit.output import DummyOutput
+
+        broken = threading.Event()
+        seen_at_safety = []
+
+        class _FailingFlushOutput(DummyOutput):
+            def flush(self):
+                if broken.is_set():
+                    raise OSError(5, "synthetic terminal write failure")
+
+        self.ui = DashboardUI(input=self.pipe, output=_FailingFlushOutput())
+
+        def run():
+            self.ui.run(
+                self.handled.append,
+                lambda: (seen_at_safety.append(list(self.ui._event_texts())),
+                         self.calls.append("interrupt")),
+                lambda: self.calls.append("eof"),
+            )
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.thread = threading.Thread(target=run, daemon=True)
+            self.thread.start()
+            self.assertTrue(_wait_until(lambda: self.ui.running))
+            self.assertTrue(_wait_until(lambda: self.ui._app.render_counter > 0))
+            broken.set()
+            self.ui.event("[WARN] trigger a redraw")
+            self._join()
+        self.assertEqual(self.calls, ["interrupt"])
+        self.assertFalse(any("대시보드 오류" in t for t in seen_at_safety[0]), seen_at_safety)
+        texts = self.ui._event_texts()
+        self.assertTrue(
+            any(t.startswith("[ERR] 대시보드 오류: OSError") for t in texts), texts,
+        )
+        self.assertNotIn("Press ENTER", err.getvalue())
+
+    def test_background_task_exception_also_runs_the_safety_callback(self):
+        self._start()
+        app = self.ui._app
+
+        async def broken_task():
+            raise RuntimeError("synthetic background failure")
+
+        app.loop.call_soon_threadsafe(lambda: app.create_background_task(broken_task()))
+        self._join()
+        self.assertEqual(self.calls, ["interrupt"])
+        self.assertTrue(any(
+            t.startswith("[ERR] 대시보드 오류: RuntimeError: synthetic background failure")
+            for t in self.ui._event_texts()
+        ), self.ui._event_texts())
+
+    def test_interrupt_request_ends_the_running_dashboard_like_ctrl_c(self):
+        # SIGTERM path: the signal handler asks the running dashboard to stop.
+        self.assertFalse(self.ui.interrupt())  # not running yet: caller raises instead
+        self._start()
+        self.assertTrue(self.ui.interrupt())
+        self._join()
+        self.assertEqual(self.calls, ["interrupt"])
+
+    def test_snapshot_provider_is_pulled_on_the_refresh_tick(self):
+        state = {"is_streaming": True, "worker_fault": None}
+        pulls = []
+
+        def provider():
+            pulls.append(threading.current_thread())
+            return _fake_snapshot(is_streaming=state["is_streaming"],
+                                  worker_fault=state["worker_fault"])
+
+        self.ui.set_snapshot_provider(provider)
+        self._start()
+        self.assertTrue(_wait_until(lambda: pulls))
+        # a station-side change with no update() call reaches the panels
+        state.update(is_streaming=False, worker_fault="telemetry")
+        self.assertTrue(_wait_until(
+            lambda: self.ui._draw_snapshot().get("worker_fault") == "telemetry"
+        ))
+        self.assertTrue(_wait_until(lambda: "수신 스레드 오류" in self.ui._drawn_text()))
+        # pulled only from the app's own thread, never from the caller of update()
+        self.assertEqual({t.name for t in pulls}, {self.thread.name})
+
+    def test_output_methods_never_call_the_snapshot_provider(self):
+        def provider():
+            raise AssertionError("snapshot pulled from an output method")
+
+        self.ui.set_snapshot_provider(provider)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.ui.event("[LOG] x")
+            self.ui.transition("[STATE] x")
+            self.ui.alert("[ERR] x")
+            self.ui.update(_fake_snapshot())
+            self.ui.periodic("[STATUS] x")
+        self.assertEqual(err.getvalue(), "")
+
+    def test_closed_input_with_a_reception_hold_keeps_running_until_interrupt(self):
+        # --listen: a closed terminal input must not end reception.
+        held = threading.Event()
+        released = threading.Event()
+
+        def hold():
+            held.set()
+            if not released.wait(timeout=WAIT_SEC):
+                raise AssertionError("hold was never released")
+            raise KeyboardInterrupt
+
+        self.ui = DashboardUI(input=self.pipe, output=self._dummy_output(),
+                              input_end_hold=hold)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self._start()
+            self.pipe.close()
+            self.assertTrue(held.wait(timeout=WAIT_SEC))
+            time.sleep(0.1)
+            self.assertTrue(self.thread.is_alive())
+            released.set()
+            self._join()
+        self.assertEqual(self.calls, ["eof", "interrupt"])
+        self.assertIn("[STDIN] 입력 종료 - 수신 계속 (Ctrl+C로 종료)", out.getvalue())
+
+    def test_ctrl_d_still_exits_with_a_reception_hold(self):
+        def hold():
+            raise AssertionError("an interactive Ctrl+D must not hold")
+
+        self.ui = DashboardUI(input=self.pipe, output=self._dummy_output(),
+                              input_end_hold=hold)
+        self._start()
+        self.pipe.send_text("\x04")
+        self._join()
+        self.assertEqual(self.calls, ["eof"])
+
+    @staticmethod
+    def _dummy_output():
+        from prompt_toolkit.output import DummyOutput
+
+        return DummyOutput()
+
+
+class ConsoleHoldTest(unittest.TestCase):
+    """--listen with a closed or non-interactive stdin keeps receiving."""
+
+    def test_eof_with_a_hold_waits_and_ends_through_on_interrupt(self):
+        calls = []
+
+        def hold():
+            calls.append("hold")
+            raise KeyboardInterrupt  # SIGINT/SIGTERM while waiting
+
+        out = io.StringIO()
+        with (
+            mock.patch.object(builtins, "input", side_effect=EOFError),
+            contextlib.redirect_stdout(out),
+        ):
+            ConsoleUI(input_end_hold=hold).run(
+                lambda _m: None,
+                lambda: calls.append("interrupt"),
+                lambda: calls.append("eof"),
+            )
+        self.assertEqual(calls, ["eof", "hold", "interrupt"])
+        self.assertIn("[STDIN] 입력 종료 - 수신 계속 (Ctrl+C로 종료)", out.getvalue())
+
+    def test_input_error_with_a_hold_also_waits(self):
+        calls = []
+        with (
+            mock.patch.object(builtins, "input", side_effect=OSError(5, "EIO")),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            ConsoleUI(input_end_hold=lambda: calls.append("hold")).run(
+                lambda _m: None,
+                lambda: calls.append("interrupt"),
+                lambda: calls.append("eof"),
+            )
+        self.assertEqual(calls, ["eof", "hold"])
+
+    def test_make_ui_passes_the_hold_to_the_console(self):
+        hold = lambda: None  # noqa: E731
+        ui = make_ui(ns(plain=True), input_end_hold=hold)
+        self.assertIs(ui._input_end_hold, hold)
+        ui = make_ui(ns(plain=False), isatty=lambda: False, input_end_hold=hold)
+        self.assertIs(ui._input_end_hold, hold)
+
 
 class MakeUITest(unittest.TestCase):
     def test_non_tty_uses_console_ui(self):

@@ -11,6 +11,7 @@ import struct
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from unittest import mock
@@ -3740,6 +3741,438 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.module.main(["--keyboard"], ui=_RecordingUI())
 
+    # --- final whole-branch review ---
+
+    @staticmethod
+    def _threading_with(module, thread_class):
+        """The module's ``threading`` with only Thread replaced (prompt_toolkit untouched)."""
+        return types.SimpleNamespace(
+            Thread=thread_class, Event=threading.Event, Lock=threading.Lock,
+            local=threading.local, current_thread=threading.current_thread,
+            main_thread=threading.main_thread,
+        )
+
+    def _dashboard(self):
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+        from ground.station_ui import DashboardUI
+
+        pipe_context = create_pipe_input()
+        pipe = pipe_context.__enter__()
+        self.addCleanup(pipe_context.__exit__, None, None, None)
+        return DashboardUI(input=pipe, output=DummyOutput()), pipe
+
+    @staticmethod
+    def _wait(predicate, timeout=3.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.01)
+        return bool(predicate())
+
+    def test_ctrl_c_during_dashboard_build_still_disarms_through_main(self):
+        m, sock = self._load_mode_module((), "final_build_interrupt")
+        self._arm_locally(m)
+        m.csv_file = io.StringIO()
+        dash, _pipe = self._dashboard()
+        escaped = []
+        with (
+            mock.patch.object(type(dash), "_build_app", side_effect=KeyboardInterrupt),
+            mock.patch.object(m, "threading", self._threading_with(m, _FakeThread)),
+            mock.patch.object(m.time, "sleep", return_value=None),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            try:
+                m.main(ui=dash)
+            except KeyboardInterrupt:
+                escaped.append(True)
+        self.assertEqual(escaped, [])
+        self.assertFalse(m.is_armed)
+        self.assertIn(b"stop", [d for d, _ in sock.sent])
+        self.assertTrue(m.csv_file.closed)
+
+    def test_any_exception_escaping_ui_run_disarms_before_cleanup(self):
+        for index, error in enumerate((KeyboardInterrupt(), RuntimeError("synthetic ui bug"))):
+            with self.subTest(error=type(error).__name__):
+                m, sock = self._load_mode_module((), f"final_escape_{index}")
+                self._arm_locally(m)
+                m.csv_file = io.StringIO()
+                order = []
+
+                class _EscapingUI(_RecordingUI):
+                    def run(self, input_handler, on_interrupt, on_eof):
+                        raise error
+
+                    def after_run(self):
+                        order.append(("after_run", b"stop" in [d for d, _ in sock.sent]))
+
+                with (
+                    mock.patch.object(m, "threading", self._threading_with(m, _FakeThread)),
+                    mock.patch.object(m.time, "sleep", return_value=None),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    try:
+                        if isinstance(error, KeyboardInterrupt):
+                            self.assertEqual(m.main(ui=_EscapingUI()), 0)
+                        else:
+                            with self.assertRaises(RuntimeError):
+                                m.main(ui=_EscapingUI())
+                    except KeyboardInterrupt:
+                        self.fail("KeyboardInterrupt escaped main()")
+                self.assertFalse(m.is_armed)
+                self.assertEqual(order, [("after_run", True)])
+                self.assertTrue(m.csv_file.closed)
+
+    def test_ui_run_escape_in_padless_modes_sends_nothing(self):
+        for index, argv in enumerate((("--keyboard",), ("--listen",))):
+            with self.subTest(argv=argv):
+                m, sock = self._load_mode_module(argv, f"final_escape_mode_{index}")
+                self._arm_locally(m)
+                sock.sent.clear()
+
+                class _EscapingUI(_RecordingUI):
+                    def run(self, input_handler, on_interrupt, on_eof):
+                        raise KeyboardInterrupt
+
+                with (
+                    mock.patch.object(m, "threading", self._threading_with(m, _FakeThread)),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    try:
+                        m.main(ui=_EscapingUI())
+                    except KeyboardInterrupt:
+                        self.fail("KeyboardInterrupt escaped main()")
+                self.assertFalse(any(d == b"stop" for d, _ in sock.sent), sock.sent)
+
+    def test_main_publishes_a_snapshot_before_running_the_ui(self):
+        recording = _RecordingUI()
+        m, _sock = self._load_mode_module((), "final_initial_publish")
+        with (
+            mock.patch.object(m, "threading", self._threading_with(m, _FakeThread)),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            m.main(ui=recording)
+        kinds = [kind for kind, _ in recording.calls]
+        self.assertIn("update", kinds)
+        self.assertLess(kinds.index("update"), kinds.index("run"))
+        self.assertEqual(recording.texts("update")[0]["mode"], "pad")
+
+    def test_dashboard_shows_local_safety_changes_without_a_datagram(self):
+        # Real station state and snapshot(), real DashboardUI, wired by main().
+        m, _sock = self._load_mode_module((), "final_dashboard_pull")
+        self._arm_locally(m)
+        m.current_throttle = 1400
+        m.last_sample = _telemetry_sample(Failsafe_Phase=0)
+        m.last_telem_time = m.time.monotonic()
+        m.csv_file = io.StringIO()
+        m.sock = _FakeSocket()
+        dash, pipe = self._dashboard()
+        result = []
+
+        def run_main():
+            with mock.patch.object(m, "threading", self._threading_with(m, _FakeThread)):
+                result.append(m.main(ui=dash))
+
+        runner = threading.Thread(target=run_main, daemon=True)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            runner.start()
+            try:
+                self.assertTrue(self._wait(lambda: dash.running))
+
+                def shown():
+                    return dash._draw_snapshot()
+
+                self.assertTrue(self._wait(lambda: shown().get("is_streaming") is True))
+                self.assertEqual(shown().get("current_throttle"), 1400)
+
+                # 1) link loss while streaming: stop_streaming_only, no datagram after
+                m.last_telem_time = m.time.monotonic() - 5.0
+                m.sock = _FakeSocket([])
+                with self.assertRaises(_LoopComplete):
+                    m.telemetry_thread()
+                self.assertFalse(m.is_streaming)
+                self.assertTrue(self._wait(lambda: shown().get("is_streaming") is False),
+                                shown())
+                self.assertEqual(shown().get("current_throttle"), 1000)
+
+                # 2) a telemetry-worker fault: latch shown without any packet
+                m._handle_worker_fault("telemetry", RuntimeError("synthetic"))
+                self.assertTrue(self._wait(
+                    lambda: shown().get("worker_fault") == "telemetry"), shown())
+                self.assertTrue(self._wait(lambda: "수신 스레드 오류" in dash._drawn_text()))
+            finally:
+                pipe.send_text("\x03")
+                runner.join(timeout=5.0)
+        self.assertFalse(runner.is_alive())
+        self.assertEqual(result, [0])
+
+    def _observe_every_ui_call(self, sent_socket):
+        module = self.module
+        observed = []
+
+        class _AllCallsObservingUI(_RecordingUI):
+            def _note(self, kind, text):
+                observed.append((
+                    kind,
+                    text if isinstance(text, str) else "<snapshot>",
+                    module.is_streaming,
+                    module.is_armed,
+                    b"stop" in [d for d, _ in sent_socket.sent],
+                ))
+
+            def event(self, text):
+                self._note("event", text)
+                super().event(text)
+
+            def periodic(self, text):
+                self._note("periodic", text)
+                super().periodic(text)
+
+            def transition(self, text):
+                self._note("transition", text)
+                super().transition(text)
+
+            def alert(self, text):
+                self._note("alert", text)
+                super().alert(text)
+
+            def update(self, snap):
+                self._note("update", snap)
+                super().update(snap)
+
+        return _AllCallsObservingUI(), observed
+
+    def _replay_observing(self, samples, *, before=None):
+        self.module.sock = _FakeSocket([b"packet"] * len(samples))
+        recording, observed = self._observe_every_ui_call(self.module.sock)
+        self.module.ui = recording
+        self.module.csv_writer = types.SimpleNamespace(writerow=lambda _row: None)
+        self.module.csv_file = types.SimpleNamespace(flush=lambda: None)
+        if before is not None:
+            before()
+        with (
+            mock.patch.object(self.module, "parse_telemetry_packet", side_effect=samples),
+            mock.patch.object(self.module, "sample_to_csv_row", return_value=[]),
+            mock.patch.object(self.module.time, "sleep", return_value=None),
+            self.assertRaises(_LoopComplete),
+        ):
+            self.module.telemetry_thread()
+        return observed
+
+    def test_rc_timeout_packet_stops_streaming_before_any_of_its_output(self):
+        self._arm_locally(self.module)
+        self.module.last_arm_time = self.module.time.monotonic()
+        observed = self._replay_observing(
+            [_telemetry_sample(Fault_RC=1, Failsafe_Phase=1, Armed=1)],
+        )
+        packet_calls = [o for o in observed if o[1] != "[TELEM] 수신 스레드 시작"]
+        kinds = [o[1].split(" ")[0] for o in packet_calls]
+        self.assertTrue(any(k == "[STATUS]" for k in kinds), packet_calls)
+        self.assertTrue(any(k.startswith("[AUTO-LAND]") for k in kinds), packet_calls)
+        self.assertTrue(all(not streaming for _k, _t, streaming, _a, _s in packet_calls),
+                        packet_calls)
+        # console order is unchanged: [STATUS], [AUTO-LAND], then the fault lines
+        texts = [o[1] for o in packet_calls]
+        status = next(i for i, t in enumerate(texts) if t.startswith("[STATUS]"))
+        fault = next(i for i, t in enumerate(texts) if "[FAULT] 드론: RC 타임아웃" in t)
+        self.assertLess(status, fault)
+
+    def test_recovery_and_diag_lines_wait_for_the_critical_disarm(self):
+        self._arm_locally(self.module)
+        self.module.last_arm_time = self.module.time.monotonic()
+        critical = _telemetry_sample(Failsafe_Phase=0, Armed=1, Fault_Critical=1)
+
+        def lose_the_link_first():
+            # not streaming: the loss is only reported, then [OK] on recovery
+            self.module.is_streaming = False
+            self.module.last_telem_time = self.module.time.monotonic() - 5.0
+
+        observed = self._replay_observing([critical], before=lose_the_link_first)
+        first_packet = []
+        for entry in observed:
+            if entry[1].startswith("[TELEM]") or "[FAULT] 텔레메트리" in entry[1]:
+                continue
+            first_packet.append(entry)
+            if entry[0] == "update":
+                break
+        ok = [o for o in first_packet if o[1] == "[OK] 텔레메트리 수신 복구"]
+        self.assertEqual(len(ok), 1, first_packet)
+        self.assertFalse(ok[0][3])   # disarmed already
+        self.assertTrue(ok[0][4])    # stop already sent
+        self.assertTrue(all(not armed for _k, _t, _s, armed, _st in first_packet),
+                        first_packet)
+
+    def test_diag_line_waits_for_the_packets_disarm(self):
+        self._arm_locally(self.module)
+        self.module.last_arm_time = self.module.time.monotonic()
+        healthy = _telemetry_sample(Failsafe_Phase=0, Armed=1)
+        critical = _telemetry_sample(Failsafe_Phase=0, Armed=1, Fault_Critical=1)
+        observed = self._replay_observing([healthy, healthy, healthy, critical])
+        diag = [o for o in observed if o[1].startswith(" [DIAG]")]
+        self.assertEqual(len(diag), 1, observed)
+        self.assertFalse(diag[0][3])
+        self.assertTrue(diag[0][4])
+
+    def test_packet_output_is_flushed_after_the_worker_fault_safety(self):
+        # An arm attempt is pending and the link was lost (reported only). The
+        # next packet prints [OK] and a start-retry line, then the CSV write
+        # crashes the receiver. Those lines must wait until the worker-fault
+        # handler has cancelled the arm attempt with stop.
+        self._prime_prearm_telemetry()
+        self.module.arm_state = "arming"
+        self.module.arm_deadline = self.module.time.monotonic() + 30.0
+        self.module.arm_next_retry = 0.0
+        self.module.is_streaming = False
+        self.module.last_telem_time = self.module.time.monotonic() - 5.0
+        sock = _FakeSocket([b"packet"])
+        recording, observed = self._observe_every_ui_call(sock)
+        self.module.sock = sock
+        self.module.ui = recording
+        self.module.csv_file = types.SimpleNamespace(flush=lambda: None)
+        self._break_csv_writer()
+        with (
+            mock.patch.object(self.module, "parse_telemetry_packet",
+                              side_effect=[_telemetry_sample(Failsafe_Phase=0, Armed=0)]),
+            mock.patch.object(self.module, "sample_to_csv_row", return_value=[]),
+            mock.patch.object(self.module.time, "sleep", return_value=None),
+        ):
+            self.module.telemetry_worker()
+        self.assertEqual(self.module.worker_fault, "telemetry")
+        self.assertEqual(self.module.arm_state, "idle")
+        texts = [o[1] for o in observed]
+        packet_lines = [o for o in observed
+                        if o[1] in ("[OK] 텔레메트리 수신 복구",
+                                    "[ARM] 펌웨어 확인 대기: start 재전송")]
+        self.assertEqual(len(packet_lines), 2, observed)
+        self.assertTrue(all(stop for _k, _t, _s, _a, stop in packet_lines), observed)
+        # original console order: the packet's lines, then the fault lines
+        ok = texts.index("[OK] 텔레메트리 수신 복구")
+        err = next(i for i, t in enumerate(texts) if t.startswith("[ERR] 수신 스레드 오류"))
+        cancel = next(i for i, t in enumerate(texts) if "무장 시도 취소" in t)
+        self.assertLess(ok, cancel)
+        self.assertLess(cancel, err)
+
+    def test_sigterm_takes_the_ctrl_c_path_in_the_console(self):
+        import signal
+
+        before = signal.getsignal(signal.SIGTERM)
+        seen = []
+
+        def input_receiving_sigterm(*_args):
+            handler = signal.getsignal(signal.SIGTERM)
+            seen.append(handler)
+            if not callable(handler) or handler is before:
+                raise EOFError  # no SIGTERM handler: end so the test can fail cleanly
+            handler(signal.SIGTERM, None)   # the main thread's handler, as the kernel would
+            raise AssertionError("the SIGTERM handler returned inside input()")
+
+        def arm_locally(module):
+            self._arm_locally(module)
+
+        module_name = "_control_dualsense_final_sigterm_under_test"
+        self.addCleanup(sys.modules.pop, module_name, None)
+        m, sock = self._load_module(
+            module_name=module_name,
+            input_side_effect=input_receiving_sigterm,
+            before_main=arm_locally,
+        )
+        self.assertEqual(len(seen), 1)
+        self.assertIsNot(seen[0], before)
+        self.assertFalse(m.is_armed)
+        self.assertIn(b"stop", [d for d, _ in sock.sent])
+        # main() restores the previous handler when it returns
+        self.assertIs(signal.getsignal(signal.SIGTERM), before)
+
+    def test_sigterm_after_the_ui_returned_does_not_abort_log_saving(self):
+        import signal
+
+        handlers = []
+
+        class _SignalDuringCleanupUI(_RecordingUI):
+            def after_run(self):
+                handler = signal.getsignal(signal.SIGTERM)
+                handlers.append(handler)
+                handler(signal.SIGTERM, None)   # must not raise during cleanup
+
+        m, _sock = self._load_mode_module((), "final_sigterm_cleanup")
+        m.csv_file = io.StringIO()
+        with (
+            mock.patch.object(m, "threading", self._threading_with(m, _FakeThread)),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(m.main(ui=_SignalDuringCleanupUI()), 0)
+        self.assertEqual(len(handlers), 1)
+        self.assertTrue(callable(handlers[0]))
+        self.assertTrue(m.csv_file.closed)
+
+    KEYBOARD_RC_REFUSAL = "[STDIN] 키보드 모드: RC는 패드로만 보냅니다"
+
+    def test_keyboard_mode_refuses_rc_and_rcr(self):
+        m, sock = self._load_mode_module(("--keyboard",), "kb_rc_refuse")
+        recording = _RecordingUI()
+        m.ui = recording
+        commands = ("rc 1500 1500 1500 1500", "rcr 1 0.00 0.00 0.0", "RCR 2 0 0 0", "Rc 1")
+        for command in commands:
+            m.handle_stdin_command(command)
+        self.assertEqual(recording.texts("event"), [self.KEYBOARD_RC_REFUSAL] * len(commands))
+        # the keyboard-mode sending boundary itself drops RC and start/resume
+        for command in ("rcr 3 0.00 0.00 0.0", "rc 1500 1500 1500 1500", "start", "resume"):
+            m.send_cmd(command)
+        sent = [d for d, _ in sock.sent]
+        self.assertFalse(any(d.split()[0].lower() in (b"rc", b"rcr", b"start", b"resume")
+                             for d in sent if d), sent)
+        # other commands still pass
+        m.send_cmd("gains")
+        self.assertIn(b"gains", [d for d, _ in sock.sent])
+
+    def test_listen_without_stdin_keeps_receiving_until_interrupted(self):
+        m, sock = self._load_mode_module(("--listen",), "listen_no_stdin")
+        sock.sent.clear()
+        m.csv_file = io.StringIO()
+        sleeps = []
+
+        class _AliveThread(_FakeThread):
+            def is_alive(self):
+                return True
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) >= 5:
+                raise KeyboardInterrupt   # SIGINT/SIGTERM while receiving
+
+        output = io.StringIO()
+        with (
+            mock.patch.object(m, "threading", self._threading_with(m, _AliveThread)),
+            mock.patch.object(builtins, "input", side_effect=EOFError),
+            mock.patch.object(m.time, "sleep", side_effect=sleep),
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(m.main(), 0)
+        self.assertEqual(len(sleeps), 5)
+        self.assertIn("[STDIN] 입력 종료 - 수신 계속 (Ctrl+C로 종료)", output.getvalue())
+        self.assertEqual({d for d, _ in sock.sent} - {b"connect"}, set())
+        self.assertTrue(m.csv_file.closed)
+
+    def test_pad_mode_eof_still_ends_the_station_at_once(self):
+        m, _sock = self._load_mode_module((), "pad_eof_no_hold")
+        m.csv_file = io.StringIO()
+
+        class _AliveThread(_FakeThread):
+            def is_alive(self):
+                return True
+
+        with (
+            mock.patch.object(m, "threading", self._threading_with(m, _AliveThread)),
+            mock.patch.object(builtins, "input", side_effect=EOFError),
+            mock.patch.object(m.time, "sleep",
+                              side_effect=AssertionError("pad mode must not hold")),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(m.main(), 0)
+        self.assertTrue(m.csv_file.closed)
+
 
 class BenchTrimResetTests(unittest.TestCase):
     @classmethod
@@ -3785,6 +4218,128 @@ class BenchTrimResetTests(unittest.TestCase):
                     commands.index("trim 0 0"),
                     commands.index("start"),
                 )
+
+
+# A station process for the SIGTERM test: real control_station + DashboardUI in
+# a pty, with the UDP socket, pygame and the log directory replaced so nothing
+# reaches the network or the repository's logs/.
+_SIGTERM_STATION_DRIVER = r'''
+import pathlib, socket, sys, time, types
+scripts, log_dir, sent_path = sys.argv[1:4]
+sys.path.insert(0, scripts)
+import ground.paths
+ground.paths.LOG_DIR = pathlib.Path(log_dir)
+
+class _Socket:
+    def bind(self, _address): pass
+    def settimeout(self, _timeout): pass
+    def setsockopt(self, *_args): pass
+    def close(self): pass
+    def recvfrom(self, _size):
+        time.sleep(0.05)
+        raise socket.timeout
+    def sendto(self, data, _address):
+        with open(sent_path, "ab") as sent:
+            sent.write(data + b"\n")
+
+pygame = types.ModuleType("pygame")
+pygame.init = lambda: None
+pygame.joystick = types.SimpleNamespace(init=lambda: None, get_count=lambda: 0)
+pygame.event = types.SimpleNamespace(pump=lambda: None)
+sys.modules["pygame"] = pygame
+sys.argv = ["drone_control.py"]
+# only the station's own socket is fake: asyncio still needs real socketpairs
+real_socket = socket.socket
+socket.socket = lambda *_a, **_k: _Socket()
+try:
+    import ground.control_station as station
+finally:
+    socket.socket = real_socket
+station.is_armed = True
+station.is_streaming = True
+station.arm_state = "armed"
+station.last_arm_time = time.monotonic()
+sys.stderr.write("DRIVER-READY\n")
+sys.exit(station.main([]))
+'''
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "pty test needs Linux")
+class StationSigtermTest(unittest.TestCase):
+    """SIGTERM to a station running the dashboard in a pty (final review #6)."""
+
+    def _drain(self, master, chunks, until=None, timeout=15.0):
+        import os
+        import select
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if until is not None and until():
+                return True
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if ready:
+                try:
+                    data = os.read(master, 65536)
+                except OSError:
+                    return bool(until and until())
+                if not data:
+                    return bool(until and until())
+                chunks.append(data)
+        return bool(until and until())
+
+    def test_sigterm_disarms_and_restores_the_terminal(self):
+        import fcntl
+        import os
+        import signal
+        import struct as struct_module
+        import subprocess
+        import termios
+
+        master, slave = os.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, slave)
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct_module.pack("HHHH", 30, 110, 0, 0))
+        cooked = termios.tcgetattr(slave)
+        self.assertTrue(cooked[3] & termios.ICANON and cooked[3] & termios.ECHO)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sent_path = pathlib.Path(tmp) / "sent.txt"
+            env = dict(os.environ, TERM="xterm-256color", PROMPT_TOOLKIT_NO_CPR="1",
+                       PYTHONIOENCODING="utf-8")
+            proc = subprocess.Popen(
+                [sys.executable, "-c", _SIGTERM_STATION_DRIVER,
+                 str(SCRIPTS_DIR), tmp, str(sent_path)],
+                stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True,
+            )
+            self.addCleanup(lambda: proc.poll() is None and proc.kill())
+            chunks = []
+
+            def screen():
+                return b"".join(chunks).decode("utf-8", errors="replace")
+
+            # the dashboard is up once its panels and hint line are drawn
+            self.assertTrue(
+                self._drain(master, chunks, until=lambda: "도움말" in screen()),
+                screen()[-2000:],
+            )
+            time.sleep(0.3)
+            proc.send_signal(signal.SIGTERM)
+            self._drain(master, chunks, until=lambda: proc.poll() is not None)
+            self._drain(master, chunks, timeout=0.3)
+            try:
+                code = proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                self.fail("station did not exit after SIGTERM:\n" + screen()[-2000:])
+            attrs = termios.tcgetattr(slave)
+            sent = sent_path.read_bytes().split(b"\n") if sent_path.exists() else []
+
+        self.assertEqual(code, 0, screen()[-2000:])
+        self.assertTrue(attrs[3] & termios.ICANON, "ICANON left off")
+        self.assertTrue(attrs[3] & termios.ECHO, "ECHO left off")
+        self.assertIn(b"stop", sent)
+        self.assertIn("DISARMED (키보드 인터럽트)", screen())
+        self.assertIn("[LOG] 저장 완료", screen())
 
 
 if __name__ == "__main__":
