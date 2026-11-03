@@ -3122,6 +3122,41 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
             any(t.startswith("[LOG] 저장 완료:") for t in recording.texts("event"))
         )
 
+    def test_plain_flag_is_parsed(self):
+        self.assertTrue(self.module._parse_cli_args(["--plain"]).plain)
+        self.assertFalse(self.module._parse_cli_args([]).plain)
+
+    def test_main_without_ui_builds_it_with_make_ui_and_the_startup_help(self):
+        module_name = "_control_dualsense_make_ui_under_test"
+        module, _sock = self._load_module(module_name=module_name)
+        self.addCleanup(sys.modules.pop, module_name, None)
+        recording = _RecordingUI()
+        module.csv_file = io.StringIO()
+        with (
+            mock.patch.object(module, "make_ui", return_value=recording) as factory,
+            mock.patch.object(threading, "Thread", _FakeThread),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            module.main(["--plain"])
+        factory.assert_called_once()
+        args, kwargs = factory.call_args
+        self.assertTrue(args[0].plain)
+        self.assertEqual(list(kwargs["help_lines"]), module.startup_help_lines())
+        self.assertIs(module.ui, recording)
+        kinds = [kind for kind, _ in recording.calls]
+        self.assertLess(kinds.index("run"), kinds.index("after_run"))
+
+    def test_controller_prints_the_startup_help_from_one_place(self):
+        recording = _RecordingUI()
+        self.module.ui = recording
+        self._run_controller(iterations=1)
+        help_lines = self.module.startup_help_lines()
+        self.assertEqual(help_lines[0], "========== DRONE CONTROLLER ==========")
+        self.assertTrue(any(line.startswith(" PID:") for line in help_lines))
+        self.assertTrue(any(line.startswith(" FlowHold:") for line in help_lines))
+        self.assertTrue(any(line.startswith(" IMU cal:") for line in help_lines))
+        self.assertEqual(recording.texts("event")[:len(help_lines)], help_lines)
+
     # --- review round 1 regressions ---
 
     def test_rc_send_cannot_interleave_with_the_latch_write(self):

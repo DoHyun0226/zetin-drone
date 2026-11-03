@@ -25,7 +25,7 @@ from ground.status_format import (
 )
 from ground.imu_raw import decode_file
 from ground.paths import LOG_DIR
-from ground.station_ui import ConsoleUI
+from ground.station_ui import ConsoleUI, make_ui
 from ground.failsafe_telemetry import (
     FAILSAFE_PHASE_NAMES,
     FAILSAFE_PROBE_STATE_NAMES,
@@ -60,6 +60,11 @@ def _parse_cli_args(argv=None):
         "--no-mag",
         action="store_true",
         help="start with magnetometer yaw fusion deselected (default: on)",
+    )
+    parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="plain line output instead of the full-screen dashboard",
     )
     return parser.parse_args(argv)
 
@@ -1116,6 +1121,27 @@ def telemetry_thread():
 # ==========================================================
 # 컨트롤러 처리 스레드
 # ==========================================================
+def startup_help_lines():
+    """Start-up help: printed by controller_thread, shown again by the dashboard's '?'."""
+    return [
+        "========== DRONE CONTROLLER ==========",
+        " [X]        Arm / Disarm",
+        " [△]        Resume (자동착륙 중 명시적 복구)",
+        f" [R2/L2]    Throttle ↑/↓ (누르는 동안 연속, {THROTTLE_RATE:.0f}µs/s)",
+        " [R1/L1]    Throttle +1 / -1 (정밀)",
+        " [DPAD]     Trim  |  [PS] Trim Reset",
+        f" [L-Stick]  Roll / Pitch (max ±{MAX_ANGLE}°),  [R-Stick↔] Yaw 각속도 (max ±{YAW_RATE_MAX_DPS:.0f}°/s)",
+        "--------------- stdin ----------------",
+        " PID: pa|ia|da, pr|ir|dr, pp|ip|dp, py|iy|dy <val>",
+        "      ap <val>, ar|at|ay <val>",
+        " Control: th <val>, yaw <0|1>, raw on|off, mag on|off, gains, start, stop, resume",
+        "          trim <roll> <pitch>, magc <x> <y> <z>",
+        " FlowHold: flowcal 1|0, poshold 1|0, althold 1|0, hg <name> <val>",
+        " IMU cal:  imucal (disarmed, drone still on the floor, 2 s; saved to NVS)",
+        "======================================",
+    ]
+
+
 def controller_thread():
     global current_throttle, throttle_f, trim_roll, trim_pitch, trim_synced, rc_seq
     global last_btn_start, last_btn_resume
@@ -1125,21 +1151,8 @@ def controller_thread():
     pygame.init()
     pygame.joystick.init()
 
-    ui.event("========== DRONE CONTROLLER ==========")
-    ui.event(f" [X]        Arm / Disarm")
-    ui.event(f" [△]        Resume (자동착륙 중 명시적 복구)")
-    ui.event(f" [R2/L2]    Throttle ↑/↓ (누르는 동안 연속, {THROTTLE_RATE:.0f}µs/s)")
-    ui.event(f" [R1/L1]    Throttle +1 / -1 (정밀)")
-    ui.event(f" [DPAD]     Trim  |  [PS] Trim Reset")
-    ui.event(f" [L-Stick]  Roll / Pitch (max ±{MAX_ANGLE}°),  [R-Stick↔] Yaw 각속도 (max ±{YAW_RATE_MAX_DPS:.0f}°/s)")
-    ui.event("--------------- stdin ----------------")
-    ui.event(" PID: pa|ia|da, pr|ir|dr, pp|ip|dp, py|iy|dy <val>")
-    ui.event("      ap <val>, ar|at|ay <val>")
-    ui.event(" Control: th <val>, yaw <0|1>, raw on|off, mag on|off, gains, start, stop, resume")
-    ui.event("          trim <roll> <pitch>, magc <x> <y> <z>")
-    ui.event(" FlowHold: flowcal 1|0, poshold 1|0, althold 1|0, hg <name> <val>")
-    ui.event(" IMU cal:  imucal (disarmed, drone still on the floor, 2 s; saved to NVS)")
-    ui.event("======================================")
+    for line in startup_help_lines():
+        ui.event(line)
 
     if pygame.joystick.get_count() == 0:
         ui.event("\n[ERR] 컨트롤러가 없습니다!")
@@ -1448,17 +1461,19 @@ def main(argv=None, ui=None):
     """Start the workers, run the stdin loop, then save the logs.
 
     Socket, log files and state are set up at import time. ``argv`` (when
-    given) re-reads --no-raw/--no-mag; ``ui`` replaces the module's output
-    object for this and every later call.
+    given) re-reads --no-raw/--no-mag/--plain; ``ui`` replaces the module's
+    output object for this and every later call. Without ``ui``, ``make_ui``
+    picks the dashboard on a terminal and the line console otherwise.
     """
     global cli_args, raw_capture_enabled, mag_enabled_choice
-    if ui is not None:
-        globals()["ui"] = ui
     if argv is not None:
         cli_args = _parse_cli_args(argv)
         raw_capture_enabled = not cli_args.no_raw
         mag_enabled_choice = not cli_args.no_mag
-    station_ui = globals()["ui"]
+    if ui is None:
+        ui = make_ui(cli_args, help_lines=startup_help_lines())
+    globals()["ui"] = ui
+    station_ui = ui
 
     t_telem = threading.Thread(target=telemetry_worker, daemon=True)
     t_ctrl  = threading.Thread(target=controller_worker, daemon=True)
