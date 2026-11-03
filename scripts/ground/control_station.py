@@ -181,6 +181,7 @@ WORKER_LABELS    = {"telemetry": "수신", "controller": "조종"}
 RC_COMMANDS      = ("rc", "rcr")
 bad_packet_count = 0        # 디코드·파싱에 실패한 텔레메트리 패킷 수 (telem_lock)
 logged_packet_count = 0     # CSV에 저장한 텔레메트리 행 수 (수신 스레드만 쓴다)
+valid_packet_count = 0      # 파싱에 성공한 텔레메트리 샘플 수 (telem_lock; 대시보드 링크 Hz)
 last_sample      = None     # 마지막으로 파싱한 텔레메트리 샘플
 STATE_TRANSITION_FIELDS = (
     "Failsafe_Phase",
@@ -911,7 +912,7 @@ def telemetry_thread():
     global telem_total_pkts, telem_dropped_pkts
     global telem_failsafe_phase, telem_hover_est, telem_hover_valid
     global trim_roll, trim_pitch, trim_synced, last_trim_resend
-    global last_sample, bad_packet_count, logged_packet_count
+    global last_sample, bad_packet_count, logged_packet_count, valid_packet_count
 
     ui.event("[TELEM] 수신 스레드 시작")
     prev_fault_rc = False
@@ -996,6 +997,9 @@ def telemetry_thread():
         except (UnicodeDecodeError, ValueError):
             with telem_lock:
                 bad_packet_count += 1
+            # 잘못된 패킷만 들어올 때도 불량 수가 대시보드에 보이게 한다.
+            # valid_packet_count는 그대로라 링크 Hz는 부풀지 않는다.
+            ui.update(snapshot())
             continue
 
         received_at = time.monotonic()
@@ -1016,6 +1020,7 @@ def telemetry_thread():
             telem_hover_valid = sample["Hover_Valid"] == 1
             last_telem_time    = received_at
             last_sample        = sample
+            valid_packet_count += 1
             received_trim_roll = sample["Trim_Roll"]
             received_trim_pitch = sample["Trim_Pitch"]
             if not trim_synced or mode != "pad":
@@ -1488,6 +1493,7 @@ def snapshot():
             "telem_total_pkts": telem_total_pkts,
             "telem_dropped_pkts": telem_dropped_pkts,
             "bad_packet_count": bad_packet_count,
+            "valid_packet_count": valid_packet_count,
             "last_telem_time": last_telem_time,
             "log_path": log_path,
             "raw_log_path": raw_log_path,

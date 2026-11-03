@@ -162,6 +162,27 @@ class RenderTest(unittest.TestCase):
         self.assertIn("패드", pad)
         self.assertNotIn("패드", listen)
 
+    def test_keyboard_mode_hides_pad_throttle(self):
+        keyboard = flatten(render(snap(sample75(), mode="keyboard"), 100, 30, NOW))
+        self.assertNotIn("패드", keyboard)
+        self.assertIn("Throttle", keyboard)
+
+    def test_padless_modes_show_only_the_drone_trim(self):
+        # 패드가 없는 모드에서는 지상국 트림이 드론 값을 따르기만 한다:
+        # 조작용 로컬 트림과 불일치 표시('!')를 숨기고 드론 값만 보인다.
+        s = sample75(Trim_Roll=0.5, Trim_Pitch=-1.0)
+        for mode in ("keyboard", "listen"):
+            with self.subTest(mode=mode):
+                t = flatten(render(snap(s, mode=mode, trim_roll=7.0, trim_pitch=3.0),
+                                   100, 30, NOW))
+                self.assertIn("+0.5/-1.0", t)
+                self.assertNotIn("+0.5/-1.0!", t)
+                self.assertNotIn("+7.0", t)
+                self.assertNotIn("+3.0", t)
+        pad = flatten(render(snap(s, trim_roll=7.0, trim_pitch=3.0), 100, 30, NOW))
+        self.assertIn("+7.0", pad)
+        self.assertIn("+0.5/-1.0!", pad)
+
     def test_trim_mismatch_marked(self):
         s = sample75(Trim_Roll=0.5, Trim_Pitch=-1.0)
         ok = flatten(render(snap(s), 100, 30, NOW))

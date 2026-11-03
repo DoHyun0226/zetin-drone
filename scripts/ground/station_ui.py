@@ -201,16 +201,22 @@ class DashboardUI:
                 console.periodic(text)
 
     def update(self, snap):
-        """Latest station snapshot; called once per telemetry packet."""
+        """Latest station snapshot; called once per telemetry packet, valid or malformed."""
         try:
             console = self._console
             if console is not None:
                 console.update(snap)
                 return
             now = self._clock()
+            # 링크 Hz는 유효 수신 수로 잰다: 잘못된 패킷도 불량 수 갱신을 위해
+            # update()를 부른다. 그 수가 없는 스냅숏은 호출마다 1로 센다.
+            valid = snap.get("valid_packet_count") if isinstance(snap, dict) else None
             with self._lock:
                 self._snap = snap
-                self._packets += 1
+                if valid is None:
+                    self._packets += 1
+                else:
+                    self._packets = valid
                 if (self._rate_time is None
                         or now - self._rate_time >= LINK_RATE_WINDOW_SEC):
                     self._link_hz = self._rate.update(now, self._packets)
@@ -316,8 +322,9 @@ class DashboardUI:
 
     def _hints(self):
         with self._lock:
-            listen = self._snap.get("mode") == "listen"
-        return [("class:dim", _LISTEN_HINTS if listen else _PAD_HINTS)]
+            pad = self._snap.get("mode", "pad") == "pad"
+        # --keyboard·--listen에는 패드가 없다: 시동·복구·스로틀 안내를 숨긴다.
+        return [("class:dim", _PAD_HINTS if pad else _LISTEN_HINTS)]
 
     @staticmethod
     def _join_rows(rows):

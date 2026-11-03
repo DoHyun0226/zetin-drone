@@ -504,6 +504,35 @@ class DashboardUITest(unittest.TestCase):
             ui.update(_fake_snapshot(telem_total_pkts=5 * count))
         self.assertAlmostEqual(ui._draw_snapshot()["link_hz"], 20.0)
 
+    def test_link_rate_counts_valid_packets_not_update_calls(self):
+        # 잘못된 패킷도 update()를 부르지만(불량 수 갱신) 링크 Hz는 유효 수신만 센다.
+        times = iter([0.05 * i for i in range(41)])
+        ui = DashboardUI(clock=lambda: next(times))
+        for call in range(41):
+            ui.update(_fake_snapshot(valid_packet_count=call // 2))
+        self.assertAlmostEqual(ui._draw_snapshot()["link_hz"], 10.0)
+
+    def test_malformed_only_updates_show_zero_rate_and_the_bad_count(self):
+        times = iter([0.05 * i for i in range(41)])
+        ui = DashboardUI(clock=lambda: next(times))
+        for call in range(41):
+            ui.update(_fake_snapshot(valid_packet_count=5, bad_packet_count=call))
+        drawn = ui._draw_snapshot()
+        self.assertAlmostEqual(drawn["link_hz"], 0.0)
+        self.assertEqual(drawn["bad_packet_count"], 40)
+
+    def test_hints_follow_the_mode(self):
+        ui = DashboardUI()
+        expected = {
+            "pad": "X 시동  △ 복구  R2/L2 스로틀  ? 도움말 ",
+            "keyboard": "? 도움말 ",
+            "listen": "? 도움말 ",
+        }
+        for mode, hint in expected.items():
+            with self.subTest(mode=mode):
+                ui.update(_fake_snapshot(mode=mode))
+                self.assertEqual("".join(t for _s, t in ui._hints()), hint)
+
     def test_periodic_lines_are_left_to_the_panels(self):
         self.ui.periodic("[STATUS] Roll=0.00")
         self.ui.event("[TRIM] x")

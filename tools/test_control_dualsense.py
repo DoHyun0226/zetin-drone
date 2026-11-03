@@ -3699,6 +3699,29 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.shutdown_workers_and_close_log(())
         self.assertIn("[LOG] 저장 2개, 잘못된 패킷 2개", recording.texts("event"))
 
+    # --- Task 7 review round 1 ---
+
+    def test_malformed_only_traffic_publishes_the_bad_packet_count(self):
+        recording = _RecordingUI()
+        self.module.ui = recording
+        self.module.bad_packet_count = 0
+        self._run_datagrams([b"\xff\xfe", b"not,a,packet"], [])
+        updates = recording.texts("update")
+        self.assertEqual([u["bad_packet_count"] for u in updates], [1, 2])
+        # 잘못된 패킷은 유효 수신으로 세지 않는다(링크 Hz가 부풀지 않게).
+        self.assertEqual([u["valid_packet_count"] for u in updates], [0, 0])
+
+    def test_valid_packet_count_counts_only_parsed_samples(self):
+        good = ",".join(str(value) for value in range(55)).encode("ascii")
+        recording = _RecordingUI()
+        self.module.ui = recording
+        self._run_datagrams([b"\xff", good, b"x", good], [])
+        self.assertEqual(self.module.snapshot()["valid_packet_count"], 2)
+        self.assertEqual(
+            [u["valid_packet_count"] for u in recording.texts("update")],
+            [0, 1, 1, 2],
+        )
+
     def test_entry_point_accepts_every_station_option(self):
         # drone_control.py는 station을 import하기 전에 인자를 검사한다.
         # 두 파서가 어긋나면 진입점이 통과시킨 인자를 station이 거부한다.

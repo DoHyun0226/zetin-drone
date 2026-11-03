@@ -190,7 +190,8 @@ def render(snap, width, height, now):
     stale = (not has_sample) or age is None or age > STALE_AFTER_SEC
     value_style = "class:dim" if stale else "class:value"
     compact = width < COMPACT_WIDTH or height < COMPACT_HEIGHT
-    listen = snap.get("mode") == "listen"
+    # --keyboard·--listen에는 패드가 없다: 패드 스로틀과 조작용 로컬 트림을 숨긴다.
+    pad = snap.get("mode", "pad") == "pad"
 
     lines = [_top_bar(snap, data, now, stale, age), [("class:dim", "─" * width)]]
 
@@ -222,7 +223,7 @@ def render(snap, width, height, now):
         r.kv("H", "-" if h_m is None else f"{h_m:.2f} m")
     r.kv("AGL", _format_agl(data))
     r.kv("Throttle", _format_optional_int(data.get("Throttle")))
-    if not listen:
+    if pad:
         r.kv("패드", _format_optional_int(snap.get("current_throttle")))
     r.kv("Hover_Est", _format_optional_float(data.get("Hover_Est"), 1))
     valid = phase_number(data.get("Hover_Valid"))
@@ -263,9 +264,11 @@ def render(snap, width, height, now):
 
     # 트림 + failsafe + faults
     r = row("트림")
-    r.kv("Roll", _signed(snap.get("trim_roll"), 1))
-    r.kv("Pitch", _signed(snap.get("trim_pitch"), 1))
-    r.kv("드론", _drone_trim(snap, data))
+    if pad:
+        r.kv("Roll", _signed(snap.get("trim_roll"), 1))
+        r.kv("Pitch", _signed(snap.get("trim_pitch"), 1))
+    # 패드가 없으면 지상국 트림이 드론 값을 따르기만 하므로 불일치 표시가 없다.
+    r.kv("드론", _drone_trim(snap, data, mark_mismatch=pad))
     faults = ",".join(active_fault_names(data)) or "-"
     phase = phase_number(data.get("Failsafe_Phase"))
     in_failsafe = phase not in (None, 0)
@@ -303,12 +306,12 @@ def render(snap, width, height, now):
     return [_clip(line, width) for line in lines[:max(0, height)]]
 
 
-def _drone_trim(snap, sample):
+def _drone_trim(snap, sample, mark_mismatch=True):
     drone_roll = sample.get("Trim_Roll")
     drone_pitch = sample.get("Trim_Pitch")
     if drone_roll is None or drone_pitch is None:
         return "-"
-    mismatch = (
+    mismatch = mark_mismatch and (
         abs(drone_roll - snap.get("trim_roll", 0.0)) > TRIM_MATCH_TOLERANCE
         or abs(drone_pitch - snap.get("trim_pitch", 0.0)) > TRIM_MATCH_TOLERANCE
     )
