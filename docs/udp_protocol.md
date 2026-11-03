@@ -363,12 +363,34 @@ yaw 권한 상태(66~75)를 순서대로 append한다.
 500ms 연속 회복 뒤 NORMAL로 돌아간다. yaw 스틱 입력, failsafe, 잠금 또는 새
 무장은 상태와 타이머를 초기화한다.
 
+### flow-hold 스케치 전용 필드 (76~96)
+
+`firmware/flight/dual_imu_cascade_flow_hold`는 75필드 뒤에 필드를 더 붙인다.
+주력 펌웨어 패킷은 75필드에서 끝나므로 지상국은 이 필드들을 `None`(CSV 빈 셀)으로
+둔다. 76~91(광류·위치 유지·고도 유지·보정 상태)의 이름과 해석은
+`scripts/ground/telemetry_schema.py` 모듈 설명이 정본이다.
+
+92~96은 거리 기반 자동착륙(`range_land.h`) 상태다. 거리 기반·시간 기반 하강 모두
+`Failsafe_Phase=1`(DESCENDING)이므로 하강 방식은 이 필드로만 구분한다.
+
+| # | 이름 | 타입 | 의미 |
+|---|------|------|------|
+| 92 | `Land_Mode` | int | 0=NONE, 1=RANGE(거리 기반), 2=TIMED(진입 때 거리 무효, 시간 기반), 3=TIMED_FALLBACK(거리 기반 중 거리 상실 → 시간 기반) |
+| 93 | `Land_Stage` | int | 0=IDLE, 1=DESCENT, 2=APPROACH(채택 원값 ≤ 0.30 m), 3=NEAR_GROUND(채택 원값 < 100 mm), 4=CONTACT(기준 스로틀 감소가 접촉 확인 문턱에 닿음) |
+| 94 | `Land_Ref_M` | float | 목표 고도(m) |
+| 95 | `Land_Cut_Reason` | int | 0=NONE, 1=CONTACT(`CUT_LANDED`), 2=NEAR_GROUND_LOSS, 3=NEAR_GROUND_STUCK, 4=BACKSTOP(2~4는 `CUT_TIMEOUT`) |
+| 96 | `Land_Req_US` | int | allocator에 넣은 요청 collective(µs). `Mixer_Collective_US`와의 차이가 자세 권한을 지키려 allocator가 더한 몫이다 |
+
+모드·단계는 다음 무장 때 0으로 돌아간다. 컷 뒤에도 마지막 모드·단계·사유를 유지해
+로그에서 어떤 경로로 끝났는지 볼 수 있다.
+
 ### 3901-L0X 필드 해석 (필드 60~64)
 
 `Range_MM`은 모듈이 보낸 값 그대로다. **작동 범위가 80~2000mm 이고 그 밖이면
 음수**인데, iNav 구조체 주석이 `Negative value for out of range` 하나뿐이라
 **너무 가까울 때와 너무 멀 때가 같은 음수**다. 부호만으로 위/아래를 구분할 수
-없다. 현재 이 센서는 기록 전용이며 접지 판정을 수행하지 않는다. 향후 판별식을
+없다. 주력 펌웨어에서 이 센서는 기록 전용이며 접지 판정을 수행하지 않는다(flow-hold
+스케치는 거리 기반 자동착륙에 쓴다 — 위 절). 향후 판별식을
 설계하려면 직전 유효 거리·품질·신선도와 독립 접지 근거를 함께 검증해야 한다.
 
 `*_Quality`가 **−1이면 신선한 프레임이 없다**는 뜻이다(펌웨어
@@ -439,7 +461,7 @@ Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw
 
 `telemetry_schema.py`는 과거 패킷도 받아들인다. 아래 길이는 역사적 확장
 경계이며 허용 길이의 화이트리스트가 아니다. 실제 파서는 **10필드 이상**이면
-알고 있는 앞쪽 75필드를 읽고 더 뒤의 미래 필드는 무시한다. 첫 10필드는
+알고 있는 앞쪽 96필드(주력 75 + flow-hold 21)를 읽고 더 뒤의 미래 필드는 무시한다. 첫 10필드는
 빈 값 없이 유한수여야 하고 정수 필드는 정수값이어야 한다. 이후 빈 값·없는
 필드는 `None`으로 유지한다. 따라서 파싱 성공만으로 정확한 펌웨어 버전을
 식별할 수 없다.
@@ -460,9 +482,10 @@ Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw
 - 59필드 패킷은 `Mag_Enabled`에서 끝난다 (3901-L0X 텔레메트리 도입 이전 펌웨어).
 - 64필드 패킷은 `Flow_Quality`에서 끝난다 (`Mag_Cal_Active` 도입 이전 펌웨어).
 - 65필드 패킷은 `Mag_Cal_Active`에서 끝난다 (allocator 진단 도입 이전 펌웨어).
+- 91필드 패킷은 `FlowCal_Samples`에서 끝난다 (flow-hold, 거리 기반 자동착륙 도입 이전).
 - 과거 패킷에 없는 값은 정규화된 CSV에서 빈 셀이 된다.
 - `Timestamp`는 드론이 보내지 않는다. 지상 도구가 CSV의 첫 열로 추가하므로
-  현행 CSV는 76개 열이 된다.
+  현행 CSV는 97개 열이 된다(주력 펌웨어 로그는 77~97열이 빈 셀).
 
 공유 구현은
 [`telemetry_schema.py`](../scripts/ground/telemetry_schema.py)에 있다.

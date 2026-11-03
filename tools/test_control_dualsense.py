@@ -3032,6 +3032,20 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
             ],
         )
 
+    def test_land_stage_transition_is_an_event(self):
+        recording = _RecordingUI()
+        self.module.ui = recording
+        base = {"Failsafe_Phase": 1, "Land_Mode": 1, "Land_Stage": 2, "Armed": 1}
+        self._run_telemetry([
+            _telemetry_sample(**base),
+            _telemetry_sample(**dict(base, Land_Stage=3)),
+            _telemetry_sample(**dict(base, Land_Stage=3, Land_Mode=3)),
+        ])
+        self.assertEqual(
+            recording.texts("transition"),
+            ["[STATE] Land_Stage 2 → 3", "[STATE] Land_Mode 1 → 3"],
+        )
+
     def test_each_watched_state_field_reports_its_transition(self):
         for field in (
             "Failsafe_Phase",

@@ -36,6 +36,12 @@ def sample91(**overrides):
     return sample
 
 
+def sample96(**overrides):
+    sample = parse_telemetry_packet(packet(96))
+    sample.update(overrides)
+    return sample
+
+
 def snap(sample, **overrides):
     base = {
         "mode": "pad",
@@ -215,6 +221,22 @@ class RenderTest(unittest.TestCase):
         result = subprocess.run([sys.executable, "-I", "-c", code],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_dashboard_shows_range_landing_mode_and_ref(self):
+        t = flatten(render(snap(sample96(Failsafe_Phase=1, Land_Mode=1, Land_Stage=3,
+                                         Land_Ref_M=0.42, Land_Cut_Reason=0)),
+                           120, 30, NOW))
+        self.assertIn("RANGE", t)
+        self.assertIn("NEAR_GROUND", t)
+        self.assertIn("0.42", t)
+        cut = flatten(render(snap(sample96(Failsafe_Phase=3, Land_Mode=1, Land_Stage=3,
+                                           Land_Ref_M=0.0, Land_Cut_Reason=3)),
+                             120, 30, NOW))
+        self.assertIn("NEAR_GROUND_STUCK", cut)
+
+    def test_dashboard_without_land_fields_shows_no_land_row(self):
+        for sample in (sample75(Failsafe_Phase=1), sample91(Failsafe_Phase=1)):
+            self.assertNotIn("Land", flatten(render(snap(sample), 120, 30, NOW)))
 
     def test_render_does_not_mutate_snapshot(self):
         sn = snap(sample91())

@@ -1585,6 +1585,39 @@ int main() {
     CHECK_MSG(h_after > 0.3, "h right after resume=" + fmt(h_after));
   });
 
+  runCase("sil_telemetry_reports_range_landing_fields", [] {
+    LandCase c(0.6);
+    c.warmup();
+    std::vector<std::string> during;
+    c.extra = [&](uint32_t) {
+      if (during.empty() && rl_stage == RL_STAGE_APPROACH) {
+        wifi_udp_fake::reset();
+        connectionEstablished = true;
+        sendTelemetry();
+        std::stringstream ss(wifi_udp_fake::telemetry_output);
+        std::string f;
+        while (std::getline(ss, f, ',')) during.push_back(f);
+      }
+    };
+    c.land();
+    CHECK(c.w.end_phase == FS_CUT_LANDED);
+    CHECK_MSG(during.size() == 96, "fields=" + fmt(during.size()));
+    CHECK(during[91] == "1");          // Land_Mode RANGE
+    CHECK(during[92] == "2");          // Land_Stage APPROACH
+    CHECK(std::stod(during[93]) > 0.0 && std::stod(during[93]) < 0.4);
+    CHECK(during[94] == "0");
+    CHECK(std::stoi(during[95]) > 1000);
+    wifi_udp_fake::reset();
+    connectionEstablished = true;
+    sendTelemetry();
+    std::vector<std::string> after;
+    std::stringstream ss(wifi_udp_fake::telemetry_output);
+    std::string f;
+    while (std::getline(ss, f, ',')) after.push_back(f);
+    CHECK(after.size() == 96);
+    CHECK(after[94] == "1");           // Land_Cut_Reason CONTACT, kept after the cut
+  });
+
   runCase("sil_mode_switch_is_smooth", [] {
     LandCase c(1.0);
     c.warmup();

@@ -196,6 +196,8 @@ STATE_TRANSITION_FIELDS = (
     "Yaw_Authority_State",
     "PosHold_State",
     "AltHold_State",
+    "Land_Mode",
+    "Land_Stage",
 )
 
 # [FIX] RC 시퀀스 번호 — 지연 도착한 낡은 패킷을 드론 측에서 폐기할 수 있도록

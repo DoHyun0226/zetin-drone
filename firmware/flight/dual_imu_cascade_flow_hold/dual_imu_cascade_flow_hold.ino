@@ -2696,6 +2696,12 @@ static void sendTelemetry() {
       readAllocationTelemetrySnapshot();
   const ImuTelemetrySample imuSample = readImuSampleSnapshot();
   const FlowHoldTelemetry flowT = readFlowHoldTelemetry();
+  // 거리 기반 자동착륙(92~96). 1바이트·정렬된 4바이트 값이라 한 번씩 읽어 둔다.
+  const uint8_t landModeSnapshot = rl_mode;
+  const uint8_t landStageSnapshot = rl_stage;
+  const float landRefSnapshot = rl_h_ref;
+  const uint8_t landCutSnapshot = rl_cut_reason;
+  const int landReqSnapshot = rl_requested_collective_us;
   float magTelemXSnapshot = 0.0f;
   float magTelemYSnapshot = 0.0f;
   float magTelemZSnapshot = 0.0f;
@@ -2705,7 +2711,8 @@ static void sendTelemetry() {
       magTelemCalActiveSnapshot);
   udp.beginPacket(laptopIP, laptopPort);
   udp.printf("%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f,%d,%d,%d,%lu,%lu,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%.2f,%d,%d,%d,%.3f,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%d,%ld,%d,%ld,%ld,%d,%d,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,"
-             "%lu,%.1f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.2f,%.2f,%d,%.1f,%d,%lu",
+             "%lu,%.1f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.2f,%.2f,%d,%.1f,%d,%lu,"
+             "%d,%d,%.2f,%d,%d",
              angleX, angleY, angleZ,
              gyroX, gyroY, gyroZ,
              accX, accY, accZ,
@@ -2743,7 +2750,9 @@ static void sendTelemetry() {
              flowT.height_m, flowT.vz_ms, flowT.poshold_state,
              flowT.candidate_roll_deg, flowT.candidate_pitch_deg,
              flowT.althold_state, flowT.candidate_alt_us,
-             flowT.flowcal_state, (unsigned long)flowT.flowcal_samples);
+             flowT.flowcal_state, (unsigned long)flowT.flowcal_samples,
+             (int)landModeSnapshot, (int)landStageSnapshot, landRefSnapshot,
+             (int)landCutSnapshot, landReqSnapshot);
   udp.endPacket();
 }
 
@@ -3357,7 +3366,7 @@ void setup() {
   }
 
   BaseType_t pidTaskOk = xTaskCreatePinnedToCore(pid_task, "PID", 4096, NULL, 2, NULL, 1);
-  // 텔레메트리 printf 인자가 91개라 기존 4096 B 에서 늘린다.
+  // 텔레메트리 printf 인자가 96개라 기존 4096 B 에서 늘린다.
   BaseType_t udpTaskOk = xTaskCreatePinnedToCore(udp_task, "UDP", 6144, NULL, 1, NULL, 0);
   if (pidTaskOk != pdPASS || udpTaskOk != pdPASS) {
     safety_lock = true;

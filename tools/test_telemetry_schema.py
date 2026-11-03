@@ -94,6 +94,15 @@ FLOW_HOLD_INT_NAMES = {
     "FlowCal_State", "FlowCal_Samples",
 }
 
+# 거리 기반 자동착륙(flow-hold 만), 인덱스 91~95.
+LAND_TELEMETRY_NAMES = (
+    "Land_Mode",
+    "Land_Stage",
+    "Land_Ref_M",
+    "Land_Cut_Reason",
+    "Land_Req_US",
+)
+
 EXPECTED_TELEMETRY_FIELDS = (
     "Roll",
     "Pitch",
@@ -149,6 +158,7 @@ EXPECTED_TELEMETRY_FIELDS = (
     "Mag_Cal_Active",
     *ALLOCATION_TELEMETRY_NAMES,
     *FLOW_HOLD_TELEMETRY_NAMES,
+    *LAND_TELEMETRY_NAMES,
 )
 
 
@@ -402,8 +412,8 @@ class TelemetryCompatibilityTest(unittest.TestCase):
 
         row = sample_to_csv_row("12:34:56.789", sample)
 
-        self.assertEqual(92, len(CSV_FIELDS))
-        self.assertEqual(92, len(row))
+        self.assertEqual(97, len(CSV_FIELDS))
+        self.assertEqual(97, len(row))
         self.assertEqual("12:34:56.789", row[0])
         self.assertEqual(0.9, row[CSV_FIELDS.index("Mixer_RP_Scale")])
         self.assertEqual(2, row[CSV_FIELDS.index("Yaw_Authority_State")])
@@ -427,6 +437,29 @@ class TelemetryCompatibilityTest(unittest.TestCase):
             else:
                 self.assertEqual(float(raw), sample[name])
                 self.assertIs(type(sample[name]), float)
+
+    def test_flow_hold_96_field_packet_parses_land_fields(self):
+        self.assertEqual(LAND_TELEMETRY_NAMES, TELEMETRY_FIELDS[91:96])
+        flow = ",".join(["1"] * 16)
+        sample = parse_telemetry_packet(
+            packet(65) + ",0.9,0.8,1300,1,2,3,4,5,6,2," + flow + ",1,3,0.42,2,1211"
+        )
+        self.assertEqual(1, sample["Land_Mode"])
+        self.assertEqual(3, sample["Land_Stage"])
+        self.assertEqual(0.42, sample["Land_Ref_M"])
+        self.assertIs(type(sample["Land_Ref_M"]), float)
+        self.assertEqual(2, sample["Land_Cut_Reason"])
+        self.assertEqual(1211, sample["Land_Req_US"])
+        self.assertIs(type(sample["Land_Req_US"]), int)
+
+    def test_91_and_75_field_packets_leave_land_fields_none(self):
+        for count in (75, 91):
+            with self.subTest(fields=count):
+                sample = parse_telemetry_packet(packet(count))
+                for name in LAND_TELEMETRY_NAMES:
+                    self.assertIsNone(sample[name])
+                self.assertEqual(len(CSV_FIELDS),
+                                 len(sample_to_csv_row("00:00:00.000", sample)))
 
     def test_malformed_required_value_is_rejected_for_current_packet(self):
         fields = (packet(65) + ",0.9,0.8,1300,1,2,3,4,5,6,2").split(",")
