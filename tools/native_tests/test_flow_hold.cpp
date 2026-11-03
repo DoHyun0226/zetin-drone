@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
@@ -37,6 +38,43 @@ static void checkNear(double actual, double expected, double tol,
 }
 
 static const float kTick = 0.001f;
+
+// 기본 경로(external_ref=false) 출력 지문. 유효·무효·스로틀 변경·inhibit·hard_zero·
+// 해제를 모두 지나는 결정적 입력에서 매 tick 출력 비트를 FNV-1a 로 섞는다.
+// 변경 전(2026-11-03, 외부 목표 추가 전) 코드로 기록한 값이다.
+static const uint32_t kAltHoldDefaultFingerprint = 0x53b770f2u;
+
+static uint32_t altHoldDefaultFingerprint() {
+  AltHold ah;
+  altHoldReset(ah);
+  const AltHoldGains g = altHoldDefaultGains();
+  AltHoldInput in;
+  uint32_t hash = 2166136261u;
+  auto mix = [&hash](uint32_t v) {
+    for (int k = 0; k < 4; k++) {
+      hash ^= (v >> (8 * k)) & 0xFFu;
+      hash *= 16777619u;
+    }
+  };
+  for (int t = 0; t < 20000; t++) {
+    in.requested = t >= 50 && !(t >= 17000 && t < 17100);
+    in.enabled = t >= 120;
+    in.height_valid = !((t >= 3000 && t < 3250) || (t >= 9000 && t < 9800));
+    in.h_m = 0.5f + 0.2f * sinf(t * 0.0013f) + 0.01f * (float)((t * 7) % 5);
+    in.vz_ms = 0.26f * cosf(t * 0.0013f);
+    in.base_throttle = 1340 + (t >= 5000 && t < 7000 ? 30 : 0) +
+                       (t >= 11000 && t < 11500 ? (t % 200 < 100 ? 1 : 0) : 0) -
+                       (t >= 13000 && t < 15000 ? 150 : 0);
+    in.inhibit = t >= 13000 && t < 14000;
+    in.hard_zero = t >= 14000 && t < 14500;
+    const AltHoldOutput out = altHoldStep(ah, g, in, 0.001f);
+    uint32_t bits;
+    memcpy(&bits, &out.candidate_us, 4); mix(bits);
+    memcpy(&bits, &out.applied_us, 4); mix(bits);
+    mix(out.state);
+  }
+  return hash;
+}
 
 struct PosRig {
   PosHold ph;
@@ -538,6 +576,70 @@ int main() {
     rig.run(1);
     CHECK(rig.out.state == ALTHOLD_OFF);
     CHECK(rig.out.applied_us == 0.0f);
+  });
+
+
+  // ---------------- 외부 목표(거리 기반 자동착륙) ----------------
+
+  runCase("althold_external_ref_tracks_target_velocity", [] {
+    AltRig rig;
+    rig.gains = altHoldDescentGains();
+    rig.in.external_ref = true;
+    rig.in.h_ref_ext = 0.5f;
+    rig.in.vz_ref_ext = -0.3f;
+    rig.in.vz_ms = -0.3f;
+    rig.run(200);
+    CHECK(rig.out.state == ALTHOLD_ACTIVE);
+    checkNear(rig.out.candidate_us, 0.0, 1e-3, "on target and on speed");
+    rig.in.vz_ms = 0.0f;             // 목표 속도로 내려가지 않고 서 있다
+    rig.run(200);
+    checkNear(rig.out.candidate_us, rig.gains.k_vz * -0.3f, 0.5, "pushes down");
+    checkNear(rig.ah.h_ref, 0.5, 1e-6, "target taken from outside");
+  });
+
+  runCase("althold_external_ref_ignores_base_changes", [] {
+    AltRig rig;
+    rig.in.external_ref = true;
+    rig.in.h_ref_ext = 0.6f;         // 0.1 m 아래 → 올리려 한다
+    for (int i = 0; i < 300; i++) {
+      rig.in.base_throttle = 1300 + (i % 7);
+      rig.out = altHoldStep(rig.ah, rig.gains, rig.in, kTick);
+      CHECK(rig.out.state == ALTHOLD_ACTIVE);
+    }
+    CHECK(rig.out.candidate_us > 5.0f);
+  });
+
+  runCase("althold_no_positive_clamps_output", [] {
+    AltRig rig;
+    rig.gains = altHoldDescentGains();
+    rig.in.external_ref = true;
+    rig.in.h_ref_ext = 0.7f;         // 0.2 m 아래 → 양의 보정이 나와야 할 자리
+    rig.run(500);
+    CHECK(rig.out.candidate_us > 10.0f);
+    rig.in.no_positive = true;
+    for (int i = 0; i < 2000; i++) {
+      rig.out = altHoldStep(rig.ah, rig.gains, rig.in, kTick);
+      CHECK(rig.out.candidate_us <= 0.0f);
+      CHECK(rig.out.applied_us <= 0.0f);
+    }
+    CHECK(rig.ah.i <= 0.0f);
+    rig.in.h_ref_ext = 0.3f;         // 위에 있으면 내리는 보정은 그대로
+    rig.run(500);
+    CHECK(rig.out.candidate_us < -10.0f);
+  });
+
+  runCase("althold_default_path_unchanged", [] {
+    CHECK(altHoldDefaultFingerprint() == kAltHoldDefaultFingerprint);
+  });
+
+  runCase("althold descent gains stay inside the control margin", [] {
+    const AltHoldGains g = altHoldDescentGains();
+    const AltHoldGains d = altHoldDefaultGains();
+    checkNear(g.out_max_us, 100.0, 1e-6, "out_max");
+    checkNear(g.i_max_us, 60.0, 1e-6, "i_max");
+    checkNear(g.k_i, 40.0, 1e-6, "k_i");
+    CHECK(g.k_h == d.k_h && g.k_vz == d.k_vz);
+    CHECK(g.out_max_us < 150.0f);    // CTRL_MARGIN
   });
 
   if (g_failures) {

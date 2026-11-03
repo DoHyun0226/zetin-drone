@@ -289,6 +289,17 @@ static inline AltHoldGains altHoldDefaultGains() {
   return g;
 }
 
+// 거리 기반 자동착륙 하강 전용. 호버 추정이 ±30 us 틀리거나 배터리가 처져도 목표
+// 속도로 내려가도록 출력·적분 한도를 넓힌다(SIL 1 us ≈ 0.029 m/s²). 실기 추력 계수는
+// 미측정이라 SIL 로 정하고 벤치에서 다시 본다. 100 us < CTRL_MARGIN 150 us.
+static inline AltHoldGains altHoldDescentGains() {
+  AltHoldGains g = altHoldDefaultGains();
+  g.k_i = 40.0f;
+  g.i_max_us = 60.0f;
+  g.out_max_us = 100.0f;
+  return g;
+}
+
 struct AltHold {
   uint8_t state;
   bool started;
@@ -316,6 +327,15 @@ struct AltHoldInput {
   // RC 지상 컷 경계 이하일 때 켠다. 내부 출력을 남기면 1 us 만 올려도 그 값이
   // 한 번에 되살아난다(코드 재검토 P2).
   bool hard_zero = false;
+  // 참이면 목표 고도·수직속도를 밖에서 받는다(거리 기반 자동착륙). 감쇠항은
+  // k_vz·(vz_ref − vz) 로 목표 속도를 따라가고, 기준 스로틀 변경으로 ADJUST 에
+  // 들어가지 않는다(자동착륙이 기준 스로틀을 매 tick 바꾼다).
+  bool external_ref = false;
+  float h_ref_ext = 0.0f;
+  float vz_ref_ext = 0.0f;
+  // 참이면 보정을 0 이하로만 낸다(바닥 근접 뒤 올리는 보정 금지). 적분도 0 이하로 묶어
+  // 풀린 뒤 양의 값이 되살아나지 않게 한다.
+  bool no_positive = false;
 };
 
 struct AltHoldOutput {
@@ -352,6 +372,10 @@ static inline AltHoldOutput altHoldStep(AltHold &ah, const AltHoldGains &g,
     ah.ref_throttle = in.base_throttle;
     ah.h_ref = in.h_m;
     ah.state = in.height_valid ? ALTHOLD_ACTIVE : ALTHOLD_SUSPENDED;
+  }
+  if (in.external_ref) {
+    ah.h_ref = in.h_ref_ext;
+    ah.ref_throttle = in.base_throttle;
   }
 
   ah.since_valid_s = in.height_valid ? 0.0f : ah.since_valid_s + dt_s;
@@ -396,13 +420,14 @@ static inline AltHoldOutput altHoldStep(AltHold &ah, const AltHoldGains &g,
       ah.state = ALTHOLD_ACTIVE;
     }
   } else if (ah.state == ALTHOLD_SUSPENDED && in.height_valid) {
-    ah.h_ref = in.h_m;
+    if (!in.external_ref) ah.h_ref = in.h_m;
     ah.state = ALTHOLD_ACTIVE;
   }
 
   if (ah.state == ALTHOLD_ACTIVE && in.height_valid) {
     const float e = ah.h_ref - in.h_m;
-    ah.pd = g.k_h * e - g.k_vz * in.vz_ms;
+    ah.pd = in.external_ref ? g.k_h * e + g.k_vz * (in.vz_ref_ext - in.vz_ms)
+                            : g.k_h * e - g.k_vz * in.vz_ms;
     const float di = g.k_i * e * dt_s;
     const bool saturated = fabsf(ah.pd + ah.i) >= g.out_max_us;
     if (!saturated || di * ah.i < 0.0f) {
@@ -412,10 +437,13 @@ static inline AltHoldOutput altHoldStep(AltHold &ah, const AltHoldGains &g,
   // ACTIVE 인데 높이가 잠깐(≤ 300 ms) 무효면 마지막 출력을 유지한다.
 
   out.state = ah.state;
-  const float target = holdClamp(ah.pd + ah.i, g.out_max_us);
+  if (in.no_positive && ah.i > 0.0f) ah.i = 0.0f;
+  float target = holdClamp(ah.pd + ah.i, g.out_max_us);
+  if (in.no_positive && target > 0.0f) target = 0.0f;
   const float step = ALTHOLD_SLEW_US_S * dt_s;
   ah.out = (ah.state == ALTHOLD_SUSPENDED) ? holdFade(ah.out, target, step)
                                            : holdSlew(ah.out, target, step);
+  if (in.no_positive && ah.out > 0.0f) ah.out = 0.0f;
   out.candidate_us = ah.out;
   if (in.enabled) out.applied_us = out.candidate_us;
   return out;
