@@ -9,6 +9,20 @@ import time
 
 import pygame
 
+from ground.dashboard_view import (
+    ALTHOLD_STATE_NAMES,
+    IMU_TELEMETRY_FIELDS,
+    POSHOLD_STATE_NAMES,
+    _format_agl,
+    _format_angle_error,
+    _format_binary_flag,
+    _format_flow_hold_status,
+    _format_gyro_disagreement,
+    _format_optional_float,
+    _format_optional_int,
+    _format_yaw_authority,
+    _state_name,
+)
 from ground.imu_raw import decode_file
 from ground.paths import LOG_DIR
 from ground.station_ui import ConsoleUI
@@ -77,13 +91,6 @@ STATUS_PERIOD     = 1.0      # 무장 여부와 무관한 링크/상태 요약 �
 RAW_RECEIVE_TIMEOUT_SEC = 1.0
 TILT_WARN_DEG     = 30.0
 TILT_WARN_PERIOD  = 1.0      # 과도 기울기 경고 최소 간격 (초)
-
-IMU_TELEMETRY_FIELDS = (
-    "IMU1_Gyro_X", "IMU1_Gyro_Y", "IMU1_Gyro_Z",
-    "IMU1_Accel_X", "IMU1_Accel_Y", "IMU1_Accel_Z",
-    "IMU2_Gyro_X", "IMU2_Gyro_Y", "IMU2_Gyro_Z",
-    "IMU2_Accel_X", "IMU2_Accel_Y", "IMU2_Accel_Z",
-)
 
 # 송신/수신 단일 소켓 사용 (드론이 송신자 포트로 텔레메트리를 응답하므로 동일 소켓을 사용해야 함)
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -704,33 +711,6 @@ def handle_stdin_command(msg: str):
         send_cmd(command)
 
 
-def _format_optional_float(value, decimal_places):
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return "-"
-    if not math.isfinite(numeric):
-        return "-"
-    return f"{numeric:.{decimal_places}f}"
-
-
-def _format_agl(sample):
-    """3901-L0X 거리계. 신선하지 않으면 '-', 범위 밖이면 'OOR'.
-
-    Range_MM 은 모듈 원값이라 범위 밖에서 음수다(8cm 미만도 음수). 그래서
-    거리 숫자로 그대로 보여주면 안 되고, Range_Quality 로 신선도를 먼저 본다.
-    """
-    quality = sample.get("Range_Quality")
-    distance = sample.get("Range_MM")
-    if quality is None or distance is None:
-        return "-"
-    if quality < 0:
-        return "-"
-    if distance < 0:
-        return f"OOR/q{quality}"
-    return f"{distance / 1000.0:.2f}m/q{quality}"
-
-
 def _format_drone_trim(sample):
     """드론이 실제로 들고 있는 트림. 지상국 값과 다르면 끝에 '!'를 붙인다.
 
@@ -746,16 +726,6 @@ def _format_drone_trim(sample):
         or abs(drone_pitch - trim_pitch) > TRIM_TOLERANCE
     )
     return f"{drone_roll:+.1f}/{drone_pitch:+.1f}{'!' if mismatch else ''}"
-
-
-def _format_angle_error(target, measured):
-    try:
-        error = float(target) - float(measured)
-    except (TypeError, ValueError):
-        return "-"
-    if not math.isfinite(error):
-        return "-"
-    return f"{error:+.1f}"
 
 
 def format_rc_timeout_fault(sample):
@@ -789,35 +759,6 @@ def format_rc_timeout_fault(sample):
         "상태 확정 불가 "
         f"(Failsafe_Phase={phase_raw!r}, Armed={armed_raw!r})"
     )
-
-
-def _format_optional_int(value):
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return "-"
-    if not math.isfinite(numeric):
-        return "-"
-    if numeric.is_integer():
-        return str(int(numeric))
-    return f"{numeric:.1f}"
-
-
-def _format_binary_flag(value):
-    flag = phase_number(value)
-    return str(flag) if flag in (0, 1) else "-"
-
-
-def _format_yaw_authority(value):
-    state = phase_number(value)
-    if state is None:
-        return "-"
-    name = {
-        0: "NORMAL",
-        1: "LIMITED",
-        2: "RECOVERING",
-    }.get(state, "UNKNOWN")
-    return f"{name}({state})"
 
 
 def format_autoland_telemetry(sample):
@@ -881,26 +822,6 @@ def format_status_telemetry(sample):
     )
 
 
-POSHOLD_STATE_NAMES = ("OFF", "ACTIVE", "COAST", "SUSPENDED", "OVERRIDE")
-ALTHOLD_STATE_NAMES = ("OFF", "ACTIVE", "ADJUST", "SUSPENDED")
-
-
-def _state_name(names, value):
-    if value is None:
-        return "-"
-    return names[value] if 0 <= value < len(names) else str(value)
-
-
-def _format_flow_hold_status(sample):
-    """Flow-hold firmware only; the main firmware leaves these fields None."""
-    if sample.get("PosHold_State") is None:
-        return ""
-    return (
-        f"PosHold={_state_name(POSHOLD_STATE_NAMES, sample.get('PosHold_State'))} "
-        f"AltHold={_state_name(ALTHOLD_STATE_NAMES, sample.get('AltHold_State'))} "
-        f"H={_format_optional_float(sample.get('Height_M'), 2)} "
-    )
-
 
 def _format_raw_status():
     if (
@@ -925,16 +846,6 @@ def _append_raw_datagram(data):
         raw_batch_count += 1
         raw_last_dropped = struct.unpack_from("<I", data, 16)[0]
     raw_last_receive_time = time.monotonic()
-
-
-def _format_gyro_disagreement(sample):
-    if any(sample.get(name) is None for name in IMU_TELEMETRY_FIELDS):
-        return "-"
-    difference = max(
-        abs(sample[f"IMU1_Gyro_{axis}"] - sample[f"IMU2_Gyro_{axis}"])
-        for axis in ("X", "Y", "Z")
-    )
-    return f"{difference:.1f}"
 
 
 # ==========================================================
@@ -1518,6 +1429,7 @@ def snapshot():
             "resume_state": resume_state,
             "last_sample": None if last_sample is None else dict(last_sample),
             "worker_fault": worker_fault,
+            "armed_since": last_arm_time if is_armed else None,
         }
 
 

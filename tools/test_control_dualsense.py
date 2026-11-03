@@ -3088,6 +3088,13 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertEqual(snap["mode"], "pad")
         self.assertEqual(snap["last_sample"]["Failsafe_Phase"], 0)
 
+    def test_snapshot_armed_since_follows_the_arm_time(self):
+        self.module.is_armed = False
+        self.module.last_arm_time = 123.0
+        self.assertIsNone(self.module.snapshot()["armed_since"])
+        self.module.is_armed = True
+        self.assertEqual(self.module.snapshot()["armed_since"], 123.0)
+
     def test_main_routes_input_through_the_ui_and_closes_the_log(self):
         module_name = "_control_dualsense_main_under_test"
         module, _sock = self._load_module(module_name=module_name)

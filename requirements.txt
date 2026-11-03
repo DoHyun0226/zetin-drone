@@ -7,3 +7,5 @@ pandas>=2.0
 pygame>=2.5
 # drone_video.py record 미리보기 창 (녹화·후처리 로직은 표준 라이브러리만 쓴다)
 opencv-python>=4.8
+# 조종 대시보드 (ground/dashboard_view.py, 대시보드 UI)
+prompt_toolkit>=3.0
