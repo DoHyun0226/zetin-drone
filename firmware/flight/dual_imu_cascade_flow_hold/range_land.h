@@ -48,6 +48,9 @@ static const uint32_t RL_RATE_WINDOW_MS = 300;
 // 가만히 있는 것은 면이다).
 static const uint32_t RL_ENTRY_STABLE_MS = 500;
 static const uint32_t RL_TRACK_RESET_MS = 1000;
+// 진입 전 추적에서 프레임이 이만큼 끊기면 이전 안정 이력을 버리고 다시 쌓는다. 공백만큼
+// 넓어진 허용폭으로 받은 첫 프레임이 곧바로 안정이 되면 안 된다(Codex 코드 검토 P1).
+static const uint32_t RL_TRACK_MAX_GAP_MS = 300;
 
 // 텔레메트리 번호다. 뒤에만 덧붙인다.
 enum RangeLandMode : uint8_t {
@@ -151,8 +154,23 @@ static inline bool rangeLandWindowOk(int32_t anchor_mm, uint32_t anchor_ms,
   return (d < 0 ? -d : d) <= (int64_t)rangeLandTolMm((float)(now_ms - anchor_ms));
 }
 
+// 채택 프레임으로 창 기준을 옮긴다. 기준을 그 값으로 바로 옮기면 갱신마다 고정 여유
+// 50 mm 가 새로 생겨 0.6 m/s 보다 빠른 걸음(약 0.76 m/s)을 계속 따라간다(Codex P1). 기준은
+// RL_MAX_VZ_MPS 보다 빨리 움직이지 않는다.
+static inline void rangeLandMoveAnchor(int32_t &anchor_mm, uint32_t &anchor_ms,
+                                       int32_t raw_mm, uint32_t now_ms) {
+  if (now_ms - anchor_ms < RL_RATE_WINDOW_MS) return;
+  const float max_step = RL_MAX_VZ_MPS * (float)(now_ms - anchor_ms);   // mm
+  float step = (float)raw_mm - (float)anchor_mm;
+  if (step > max_step) step = max_step;
+  if (step < -max_step) step = -max_step;
+  anchor_mm += (int32_t)lroundf(step);
+  anchor_ms = now_ms;
+}
+
 struct RangeTrack {
   bool have;
+  uint32_t last_frame_ms;    // 채택·거부와 상관없이 마지막 프레임 시각(공백 판정)
   int32_t ref_mm;
   uint32_t ref_ms;
   int32_t anchor_mm;
@@ -175,9 +193,12 @@ static inline void rangeTrackRestart(RangeTrack &t, int32_t raw_mm, uint32_t now
 static inline void rangeTrackUpdate(RangeTrack &t, int32_t raw_mm, uint32_t now_ms) {
   if (raw_mm <= 0) {
     t.have = false;
+    t.last_frame_ms = now_ms;
     return;
   }
-  if (!t.have) {
+  const bool gap = t.have && now_ms - t.last_frame_ms > RL_TRACK_MAX_GAP_MS;
+  t.last_frame_ms = now_ms;
+  if (!t.have || gap) {
     rangeTrackRestart(t, raw_mm, now_ms);
     return;
   }
@@ -187,10 +208,7 @@ static inline void rangeTrackUpdate(RangeTrack &t, int32_t raw_mm, uint32_t now_
   if (ok) {
     t.ref_mm = raw_mm;
     t.ref_ms = now_ms;
-    if (now_ms - t.anchor_ms >= RL_RATE_WINDOW_MS) {
-      t.anchor_mm = raw_mm;
-      t.anchor_ms = now_ms;
-    }
+    rangeLandMoveAnchor(t.anchor_mm, t.anchor_ms, raw_mm, now_ms);
     if (t.rejecting) {
       t.rejecting = false;
       t.stable_since_ms = now_ms;
@@ -265,10 +283,7 @@ static inline RangeLandOutput rangeLandStep(RangeLandState &st,
     if (accepted) {
       st.ref_mm = raw;
       st.ref_ms = now;
-      if (now - st.anchor_ms >= RL_RATE_WINDOW_MS) {
-        st.anchor_mm = raw;
-        st.anchor_ms = now;
-      }
+      rangeLandMoveAnchor(st.anchor_mm, st.anchor_ms, raw, now);
       st.tol_fixed = false;
       st.rejecting = false;
       if (raw <= rangeLandApproachMm()) {

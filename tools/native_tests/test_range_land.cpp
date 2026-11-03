@@ -435,6 +435,20 @@ int main() {
     CHECK(r.stable());
   });
 
+  runCase("pre_entry_track_expires_after_a_gap", [] {
+    // 2.3 s 무수신 뒤 첫 프레임은 이전 안정 이력을 물려받지 않는다(Codex P1).
+    PreRig r;
+    r.feed(1000, 1500);
+    CHECK(r.stable());
+    r.now += 2300;
+    r.feed(35, 130);
+    CHECK(!r.stable());
+    r.feed(400, 130);
+    CHECK(!r.stable());
+    r.feed(200, 130);
+    CHECK(r.stable());
+  });
+
   runCase("pre_entry_track_rejects_a_fast_walk", [] {
     // 한 프레임 허용폭 안의 걸음(70 mm)을 이어 붙여도 300 ms 창의 속도 검사에 걸린다.
     PreRig r;
@@ -457,6 +471,35 @@ int main() {
     CHECK(rig.max_stage < RL_STAGE_NEAR_GROUND);
     CHECK(rig.st.ref_mm >= 1200);
     CHECK(rig.action == RL_FALLBACK);
+  });
+
+  runCase("window_blocks_a_sustained_0_75_walk", [] {
+    // 창 기준을 갱신할 때마다 고정 여유 50 mm 가 새로 생기면 0.6 + 0.05/0.315 ≈ 0.76 m/s
+    // 까지 지속해서 따라간다(Codex P1). 기준 자체가 0.6 m/s 보다 빨리 움직이지 않아야 한다.
+    Rig rig;
+    rig.start(1500);
+    rig.hold(500, 1500);
+    rig.run(3000, [](int i) { return std::max(30, 1500 - (int)lround(0.75 * i)); });
+    CHECK(rig.max_stage < RL_STAGE_NEAR_GROUND);
+    CHECK(rig.action == RL_FALLBACK);
+    PreRig r;
+    r.feed(1000, 1500);
+    for (int i = 1; i <= 1500; i++) {
+      r.now++;
+      if (r.now % kFrameMs == 0) {
+        rangeTrackUpdate(r.tr, 1500 - (int32_t)lround(0.75 * i), r.now);
+      }
+    }
+    CHECK(!r.stable());
+  });
+
+  runCase("window_allows_0_55_mps", [] {
+    Rig rig;
+    rig.start(1500);
+    rig.hold(300, 1500);
+    rig.run(1500, [](int i) { return 1500 - (int32_t)lround(0.55 * i); });
+    CHECK(rig.st.reject_count == 0);
+    CHECK(rig.action == RL_CONTINUE);
   });
 
   runCase("window_allows_a_climb_the_drone_can_make", [] {

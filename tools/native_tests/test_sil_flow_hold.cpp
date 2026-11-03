@@ -1785,6 +1785,20 @@ int main() {
               "collective " + during[67] + " vs requested " + during[95]);
   });
 
+  runCase("sil_range_landing_across_the_micros_wrap", [] {
+    // micros 는 약 71.6 분마다 감긴다. 추적 시각을 micros/1000 으로 만들면 그 순간 공백이
+    // 40 억 ms 로 계산된다(Codex P2). 진입 전 추적 도중(warmup 끝 3.0 s 와 진입 3.6 s 사이)
+    // 에 감기게 한다.
+    LandCase c(0.8);
+    arduino_fake::micros_value = 0xFFFFFFFFu - 3300000u;   // 약 3.3 s 뒤 감김
+    c.warmup(3000);
+    c.land();
+    CHECK(c.w.saw_range);
+    CHECK(!c.w.saw_fallback);
+    CHECK_MSG(c.w.end_phase == FS_CUT_LANDED, "phase=" + fmt(c.w.end_phase));
+    CHECK(rangeLand.reject_count == 0);
+  });
+
   runCase("sil_mode_switch_is_smooth", [] {
     LandCase c(1.0);
     c.warmup();

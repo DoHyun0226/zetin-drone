@@ -836,6 +836,7 @@ int32_t rlRangeMm = -1;
 uint32_t rlRangeTUs = 0;
 bool rlRangeSeen = false;
 RangeTrack rlPreTrack = {};   // 진입 전 추적(무장 중 매 신선한 신뢰 프레임)
+uint32_t rlRangeMs = 0;       // 마지막 신뢰 프레임 시각(millis 축)
 // 요청 = allocator 입력(base + 고도 보정), 전달 = allocator 출력 collective.
 volatile int rl_requested_collective_us = 1000;
 volatile float rl_delivered_collective_us = 1000.0f;
@@ -919,6 +920,7 @@ static inline void resetFlowHoldForHarness() {
   rlRangeTUs = 0;
   rlRangeSeen = false;
   rlPreTrack = RangeTrack{};
+  rlRangeMs = 0;
   rl_requested_collective_us = 1000;
   rl_delivered_collective_us = 1000.0f;
   publishFlowHoldTelemetry(FlowHoldTelemetry());
@@ -2005,7 +2007,11 @@ void pid_task(void *pv) {
         heightBeforeFrame = heightEst;
         heightUpdate(heightEst, sensorSnap.range_mm, sensorSnap.range_t_us,
                      angleX, angleY);
-        rangeTrackUpdate(rlPreTrack, sensorSnap.range_mm, sensorSnap.range_t_us / 1000U);
+        // 추적 시각은 millis 축으로 옮긴다. micros/1000 은 71.6 분마다 엉뚱하게 감긴다.
+        const uint32_t frameMs =
+            nowMs - (uint32_t)(nowUs - sensorSnap.range_t_us) / 1000U;
+        rangeTrackUpdate(rlPreTrack, sensorSnap.range_mm, frameMs);
+        rlRangeMs = frameMs;
         rlRangeMm = sensorSnap.range_mm;
         rlRangeTUs = sensorSnap.range_t_us;
         rlRangeSeen = true;
@@ -2186,7 +2192,7 @@ void pid_task(void *pv) {
         rl_base_ceiling = ceiling;
         startTimedDescent();
         if (heightFresh && rlRangeFresh && rlRangeMm > 0 &&
-            rangeTrackStable(rlPreTrack, rlRangeTUs / 1000U)) {
+            rangeTrackStable(rlPreTrack, rlRangeMs)) {
           rl_mode = RL_MODE_RANGE;
           rangeLandStart(rangeLand, heightEst.h_m, rlRangeMm, nowMs);
           rl_stage = rangeLand.stage;
