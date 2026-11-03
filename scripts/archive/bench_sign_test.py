@@ -10,7 +10,7 @@ WiFi까지 복원한다. 결과 파일은 WiFi를 되돌린 뒤 Claude가 읽고
 관례 무관 불변식을 motorOut 숫자로 검증한다. 프로펠러는 돌지 않으므로 안전하다.
 
 사용법(노트북이 ZETIN-ROBOT/온라인 상태에서 실행):
-    /home/light/anaconda3/bin/python scripts/bench_sign_test.py
+    /home/light/anaconda3/bin/python scripts/archive/bench_sign_test.py
 실행하면 8초 뒤 시작한다. 그동안 기체를 프로펠러 없이 두 손으로 잡는다.
 중단하려면 Ctrl-C — stop 전송 후 WiFi를 복원한다.
 """
@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ground.telemetry_schema import parse_telemetry_packet  # noqa: E402
 
 # ---- 설정 ----

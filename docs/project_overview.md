@@ -63,7 +63,7 @@ yaw 각속도까지 정착하면 회전이 멈춘 heading을 자동으로 잠그
 않으면 강제 잠금 없이 rate 모드에 남는다. BMM350 자기계 융합(`mag 1`)을 켜면
 자이로 적분 드리프트를 보정한다. 정확도는 자기계 보정·간섭·장착 조건에
 영향받는다. **펌웨어 기본값은 OFF, 지상국의 조종자 선택 기본값은 ON**이다.
-`control_dualsense.py`는 시동 직전 선택값을 전송하며 `--no-mag`나
+`drone_control.py`는 시동 직전 선택값을 전송하며 `--no-mag`나
 `mag off`로 끈 선택을 유지한다. 실제 적용 상태는 `Mag_Enabled`로 확인한다. hard/soft-iron 보정은 Li & Griffiths 제약 타원체 피팅으로 구하고
 (`scripts/drone_logs.py magcal`), 모터 전류 간섭은 hard/soft-iron·body 변환 후 XYZ의 throttle 보정으로
 상쇄한다([`bmm350_yaw_bench_test.md`](bmm350_yaw_bench_test.md)). PID 태스크가
@@ -143,8 +143,8 @@ M4 = T + P + R + Y
 | [`drone_logs.py probe`](../scripts/ground/probe_response.py) | 자동착륙 프로브 판정·응답 분포 분석 |
 | [`drone_logs.py imuraw`](../scripts/ground/imu_raw.py) | `ZIMU`/`ZCAL` 바이너리 → CSV 디코더 |
 | [`drone_logs.py magcal`](../scripts/ground/magcal.py) | 캡처 CSV → 제약 타원체 hard/soft-iron 상수 피팅 |
-| [`receive_dual_imu_debug.py`](../scripts/receive_dual_imu_debug.py) | 듀얼 IMU 루프 진단 수신기 |
-| [`bench_sign_test.py`](../scripts/bench_sign_test.py) · [`bench_yaw_test.py`](../scripts/bench_yaw_test.py) · [`bench_thrust_ramp.py`](../scripts/bench_thrust_ramp.py) | 전원 인가 벤치 절차용 스크립트. 시작 시 `trim 0 0`을 보내 드론 트림을 지운다 |
+| [`receive_dual_imu_debug.py`](../scripts/archive/receive_dual_imu_debug.py) | 듀얼 IMU 루프 진단 수신기 |
+| [`bench_sign_test.py`](../scripts/archive/bench_sign_test.py) · [`bench_yaw_test.py`](../scripts/archive/bench_yaw_test.py) · [`bench_thrust_ramp.py`](../scripts/archive/bench_thrust_ramp.py) | 전원 인가 벤치 절차용 스크립트. 시작 시 `trim 0 0`을 보내 드론 트림을 지운다 |
 
 ⚠️ 위 도구 중 둘 이상을 **동시에 실행하면 안 된다.** 펌웨어는 들어온 모든 UDP
 패킷의 발신자로 텔레메트리 목적지를 다시 지정하므로, 보조 도구가 명령을 보내는

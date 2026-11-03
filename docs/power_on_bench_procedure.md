@@ -25,16 +25,16 @@
 
 **기본은 아래 수동 절차다.** 모터 식별은 Stage A의 `motor_id_single`부터,
 비행 펌웨어 부호 검사는 Stage B의 프롭 OFF·텔레메트리 확인부터 시작한다.
-`motor_serial.py`는 모터 식별 펌웨어의 시리얼 조작 도구이며, 실제 모터 회전은
+`scripts/archive/motor_serial.py`는 모터 식별 펌웨어의 시리얼 조작 도구이며, 실제 모터 회전은
 USB 통신만으로 검증되지 않는다. 별도 모터 전원과 프롭 제거 조건을 확인한다.
 
-`bench_sign_test.py`·`bench_yaw_test.py`는 기존 고정 환경의 보조 자동화다.
+`scripts/archive/bench_sign_test.py`·`scripts/archive/bench_yaw_test.py`는 기존 고정 환경의 보조 자동화다.
 WiFi 전환뿐 아니라 **`trim 0 0`·`start`·주기적 RC**를 자동 실행한다. 부호
 시험의 프롭 제거·모터 전원 차단 전제를 코드가 확인하지 않으며, 경로·복귀
 SSID도 고정되어 있어 새 환경의 첫 실행 도구로 사용하지 않는다.
-`bench_thrust_ramp.py`에는 EOF에서 확인을 통과하고 종료 램프가 지정 `cap_us`를
+`scripts/archive/bench_thrust_ramp.py`에는 EOF에서 확인을 통과하고 종료 램프가 지정 `cap_us`를
 넘을 수 있는 한계도 있어 초보자 실행 경로에서 제외한다. 실행 조건과 복귀·
-판정 출력의 한계는 [자동 벤치 스크립트의 실행 범위](../scripts/README.md#자동-벤치-스크립트의-실행-범위)를 따른다.
+판정 출력의 한계는 [보관 스크립트의 실행 범위](../scripts/archive/README.md)를 따른다.
 
 2026-07-24의 부호·모터 매핑·회전 방향 결과는 아래 날짜 기록으로 보존한다.
 
@@ -59,7 +59,7 @@ SSID도 고정되어 있어 새 환경의 첫 실행 도구로 사용하지 않�
 6. **틀리면 밀어붙이지 않는다.** 어떤 모터가 "내려가야 하는데 올라간다" →
    **즉시 stop**, 원인 수정, 재검증. 스로틀을 올려 "되게" 만들려 하지 말 것.
 7. **펌웨어의 mag 융합 부팅값은 OFF, 지상국의 조종자 기본 선택은 ON이다.**
-   `control_dualsense.py`는 무장 전에 선택을 보낸다. `--no-mag` 또는 stdin
+   `drone_control.py`는 무장 전에 선택을 보낸다. `--no-mag` 또는 stdin
    `mag off`로 끌 수 있으며, `[STATUS]`의 `Mag=0|1`은 보드의 실제 상태다.
    선택과 적용을 혼동하지 않는다.
 
@@ -79,7 +79,7 @@ SSID도 고정되어 있어 새 환경의 첫 실행 도구로 사용하지 않�
 - 기체를 안정된 곳(또는 손)에 두고, 프로펠러 **제거** 상태로 시작.
 - 텔레메트리 모니터 실행:
   ```bash
-  python scripts/control_dualsense.py
+  python scripts/drone_control.py
   ```
   확인할 필드: `Calibration_OK`, `Armed`, `angleX/Y/Z`,
   `Motor_M1..M4`, `PID_Loop_Hz`, `TgtRate_Roll/Pitch/Yaw`, `Yaw_Hold`,
@@ -95,7 +95,7 @@ SSID도 고정되어 있어 새 환경의 첫 실행 도구로 사용하지 않�
   | `Motor_M3` | 6 | **FR** 전-우 | CCW |
   | `Motor_M4` | 7 | **RL** 후-좌 | CCW |
 
-- RC 링크(무장 시 500ms 워치독을 먹여야 함): `control_dualsense.py`(게임패드)
+- RC 링크(무장 시 500ms 워치독을 먹여야 함): `drone_control.py`(게임패드)
   로 arm/disarm + 스틱 중앙=수평 목표(target 0)를 스트리밍하는 것을 권장.
   패드가 없으면 임의 UDP 송신기로 `rcr <seq> 0 0 0`을 **≥5Hz**로
   흘려보낸다. 기존 `rc`도 워치독 급이와 벤치 도구 호환용으로 남아 있지만,
@@ -165,7 +165,7 @@ SSID도 고정되어 있어 새 환경의 첫 실행 도구로 사용하지 않�
    시리얼 `1`~`4`로 **한 번에 한 모터만** 선택한다. 자동 시작이 없고 기본
    1120µs·상한 1250µs이며 `0`/`s`로 정지한다. 알 수 없는 키도 전체 정지한다.
 2. 각 모터 벨(bell)에 방향 표식을 하고, 출력된 모터 번호·GPIO·예상 위치가
-   실제로 도는 모터와 맞는지 확인한다. `motor_serial.py`를 쓸 때는 지정
+   실제로 도는 모터와 맞는지 확인한다. `scripts/archive/motor_serial.py`를 쓸 때는 지정
    시리얼 포트를 먼저 확인한다.
 3. **위에서 내려다보며** FL(M1)·RR(M2)=**CW**, FR(M3)·RL(M4)=**CCW**인지
    각각 확인한다. 떨림/역회전/코깅 없이 매끄럽게 돌고 아밍음이 정상인지 기록한다.
@@ -178,7 +178,7 @@ SSID도 고정되어 있어 새 환경의 첫 실행 도구로 사용하지 않�
 자동으로 4모터를 1300µs(스로틀 범위의 30%)까지 올린다.** 실제 추력이 최대의
 30%라는 뜻은 아니다. 프롭 OFF·기체 고정·모터 전원 정지 수단을 갖춘 경우에만
 사용하며 개별 모터를 식별하는 도구로 쓰지 않는다. Python 자동화 도구
-`bench_thrust_ramp.py`와도 별개다.
+`scripts/archive/bench_thrust_ramp.py`와도 별개다.
 
 ---
 
@@ -244,7 +244,7 @@ outer/inner 부호. 텔레메트리 `angle` 부호가 먼저 맞는지 보고(�
 
 ### B-4. 1kHz IMU raw 전송 부하 확인 — 무장 해제 상태에서만
 
-1. `Armed=0`인 상태에서 `control_dualsense.py`를 시작한다. raw 스트림은
+1. `Armed=0`인 상태에서 `drone_control.py`를 시작한다. raw 스트림은
    기본 ON이므로 `raw on`을 입력하지 말고, 연결 후 `[STATUS]`의
    `Raw=<batches>b/<dropped>d`에서 배치 수가 증가하는지 확인한다.
 2. [현행 텔레메트리](udp_protocol.md)의 `RC_Dropped_Pkts`와 `PID_Loop_Hz`,
@@ -287,7 +287,7 @@ Stage B에서 부호가 **숫자로** 확인됐으므로, 이제 프롭을 달�
    **비틀림을 키우면(증폭) yaw 부호 반전.** 불변식: **"내가 준 비틀림을
    거스른다."**
 3. `yaw 0`을 보내 자동 모드로 전환한다(`yaw 0`은 시동 중에도 수락된다).
-   `control_dualsense.py`의 yaw 스틱을 밀어 명령 방향으로 회전하는지,
+   `drone_control.py`의 yaw 스틱을 밀어 명령 방향으로 회전하는지,
    `TgtRate_Yaw`와 실제 회전 방향이 일치하는지 확인한다. 최대 명령은 지상국
    상수 `YAW_RATE_MAX_DPS = 90.0`에 따른 ±90dps다.
 4. 스틱을 놓으면 회전 중에는 `Yaw_Hold=0`을 유지하고, yaw 각속도가 정착한
@@ -360,7 +360,7 @@ Stage B에서 부호가 **숫자로** 확인됐으므로, 이제 프롭을 달�
 
 ### 관측 도구와 raw 기록
 
-Stage E에는 `control_dualsense.py` 하나만 띄운다. UDP 발신자가 달라지면
+Stage E에는 `drone_control.py` 하나만 띄운다. UDP 발신자가 달라지면
 펌웨어의 텔레메트리 목적지도 바뀌므로 다른 모니터를 동시에 띄우지 않는다.
 `[DIAG]`·`[AUTO-LAND]`와 CSV, 같은 세션의 1kHz raw 파일을 보존한다.
 
@@ -555,7 +555,7 @@ E-0~E-3의 프롭 OFF 검사와 선행 물리 검증을 마친 뒤, 제한된 �
 
 ## 2026-07-29 벤치 실측 기록
 
-펌웨어 `3ea9ca6` 플래시 후 측정. 지상국은 `control_dualsense.py`,
+펌웨어 `3ea9ca6` 플래시 후 측정. 지상국은 `drone_control.py`,
 로그 `logs/flight_log_2026-07-29_212305.csv`.
 
 ### 부팅·보정 (2회)
@@ -658,19 +658,18 @@ Kp_Angle 6.0000 / 6.0000 / 3.0000    Kp_Rate 0.5000 / 0.5000 / 1.5000
 Ki_Rate  0.0500 / 0.0500 / 0.0500    Kd_Rate 0.0150 / 0.0150 / 0.0000
 ```
 
-✅ **해소됨 — `control_dualsense.py`가 `gains` 응답을 직접 출력한다.**
-2026-07-29 실측 당시에는 `tune_pid.py`만 `[GAINS]`를 출력했고,
-`control_dualsense.py`·`monitor_telemetry.py`·`receive_telemetry.py`는
-`is_gains_packet()`으로 걸러 `continue`했다. 그래서 링크가 정상이어도
-`control_dualsense.py`에서 `gains`를 치면 무반응이었다. 현재
-`control_dualsense.py`는 12개 값을 `[GAINS] name=value ...` 형식(소수 4자리)으로
+✅ **해소됨 — `drone_control.py`가 `gains` 응답을 직접 출력한다.**
+2026-07-29 실측 당시에는 별도 튜닝 콘솔만 `[GAINS]`를 출력했고,
+조종 지상국과 수신·모니터 도구는 `is_gains_packet()`으로 걸러 `continue`했다.
+그래서 링크가 정상이어도 조종 지상국에서 `gains`를 치면 무반응이었다. 현재
+`drone_control.py`는 12개 값을 `[GAINS] name=value ...` 형식(소수 4자리)으로
 출력하므로 지상국을 바꾸지 않고 B-1을 확인한다.
 
 ✅ **해소됨 — 무장 전에도 1초마다 상태와 링크 단절/복구를 출력한다.**
 2026-07-29 세션 당시 `[DIAG]`는 `is_armed`, `[AUTO-LAND]`는
 `Failsafe_Phase != 0`을 요구하고 고장 알림은 엣지 트리거라서
 **무장 전 + 고장 없음 = 완전 침묵**이었다. 실제로 링크가 죽은 것인지
-`gains`가 버려진 것인지 구분할 수 없었다(`tune_pid.py`로 바꾸자 `[TELEM]`이
+`gains`가 버려진 것인지 구분할 수 없었다(튜닝 콘솔로 바꾸자 `[TELEM]`이
 정상 수신됐다). 현재는 무장 여부와 무관한 `[STATUS]` 줄이 Roll/Pitch/Yaw,
 Throttle, Armed, Hover_Est/Valid와 활성 고장을 표시하며, 텔레메트리가
 `TELEM_TIMEOUT_SEC` 넘게 끊기거나 복구될 때도 각각 한 번 알린다.

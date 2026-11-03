@@ -43,7 +43,7 @@ Python 패키지는 [requirements.txt](../requirements.txt), 보드 코어·라�
 ## 지상국 운용 순서
 
 1. 게임패드는 USB로 연결하고 `drone_control.py --pad-check`로 입력을 확인한 뒤 종료한다.
-2. `Drone_Tuning`에 연결하고 `control_dualsense.py` 하나만 실행한다.
+2. `Drone_Tuning`에 연결하고 `drone_control.py` 하나만 실행한다.
 3. 시동 전에 센서·고장·트림·자기계 상태와 로그 기록을 확인한다. 명령 전송
    배너만 보고 무장 성공으로 판단하지 않는다.
 4. 수동 정지는 `stop`, 링크 상실 시 동작과 명시적 복구는

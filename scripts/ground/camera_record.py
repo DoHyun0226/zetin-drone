@@ -1,6 +1,6 @@
 """Record the drone camera's MJPEG stream on the laptop, with a live preview.
 
-Run it in its own terminal next to ``control_dualsense.py``; it never touches
+Run it in its own terminal next to ``drone_control.py``; it never touches
 the flight UDP link. Output goes to ``logs/``:
 
   camera_<YYYY-MM-DD_HHMMSS>.mjpeg  the received JPEGs back to back (no re-encode)

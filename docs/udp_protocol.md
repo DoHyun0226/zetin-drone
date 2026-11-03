@@ -16,7 +16,7 @@
 펌웨어는 SSID `Drone_Tuning`으로 SoftAP를 운영한다. 주소와 포트는
 [`dual_imu_cascade_pwm.ino`](../firmware/flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)에
 정의돼 있다.
-RC 송신 목표는 `control_dualsense.py`의 20Hz, ASCII 텔레메트리는 약 20Hz,
+RC 송신 목표는 `drone_control.py`의 20Hz, ASCII 텔레메트리는 약 20Hz,
 raw IMU 생산은 명목 1kHz다. 서로 다른 주기이므로 혼동하지 않는다.
 텔레메트리 수신과 `connect` 응답 목적지 등록은 시동·RC 수락 ACK가 아니다.
 펌웨어는 마지막 UDP 발신자의 IP/포트 하나로 회신하므로 제어·수신 도구를
@@ -33,7 +33,7 @@ RC 두절 시 자동착륙 없이 즉시 컷하며 **주력 지상국으로 조�
 ## 지상국 → 드론
 
 명령은 UTF-8/ASCII 텍스트 데이터그램이다. 인자는 공백으로 구분한다.
-다음은 와이어 명령이며 `control_dualsense.py` stdin에서는 `mag on/off`,
+다음은 와이어 명령이며 `drone_control.py` stdin에서는 `mag on/off`,
 `raw on/off`를 각각 `mag 1/0`, `raw 1/0`으로 바꿔 보낸다. 그 콘솔의
 `start`·`stop`·`resume`·`th`는 로컬 상태도 갱신하는 전용 경로다.
 일반 명령에는 UDP ACK가 없고, `gains`만 별도 응답을 보낸다. 시리얼의
@@ -160,7 +160,7 @@ ar|at|ay <value>      # roll / pitch / yaw
   걸리면 `Phase=4`(중단컷)로 끝난다.
 - `rcr`은 패킷 시퀀스와 목표 roll·pitch 각도, yaw 각속도(dps)를 담는 현행
   조종 명령이다. roll·pitch 목표는 ±30°, yaw 각속도는 펌웨어에서 ±180dps로
-  제한된다. `control_dualsense.py`는 이 펌웨어 한도와 별개인
+  제한된다. `drone_control.py`는 이 펌웨어 한도와 별개인
   `YAW_RATE_MAX_DPS = 90.0`으로 최대 스틱 명령을 ±90dps로 제한한다.
   시퀀스·드롭 계수·RC 워치독 상태는 `rc`와 공유한다.
 - `rc`는 기존 벤치 도구 호환을 위해 그대로 유지되는 roll·pitch·yaw **각도**
@@ -191,7 +191,7 @@ ar|at|ay <value>      # roll / pitch / yaw
   않는다(상대 heading 유지 전용, 자북·편각·항법 아님). 보정은 250Hz 바깥
   루프에서 시정수 약 4초로 천천히 끌어당긴다. `mag 1`은 `magcal` 진행 중과
   무장 상태의 최초 센서 초기화가 필요한 경우 거부된다. `mag 0`은 수락된다.
-  `control_dualsense.py` stdin에서는 `mag on`/`mag off`로 선택하며, 다음
+  `drone_control.py` stdin에서는 `mag on`/`mag off`로 선택하며, 다음
   `start` 직전에 선택값을 `mag 1`/`mag 0`으로 다시 전송한다. 지상국 선택
   기본은 ON이므로 펌웨어 부팅 기본 OFF와 구분한다.
 - `magcal 1`은 hard/soft-iron 캘리브레이션용 raw 캡처를 시작한다(시동
@@ -222,7 +222,7 @@ ar|at|ay <value>      # roll / pitch / yaw
   연결 전에는 링을 채우거나 `dropped`를 올리지 않는다. 따라서 `dropped`는
   실제 스트리밍 중 소비자가 생산자를 따라가지 못한 경우만 뜻한다. 부호,
   bias/scale, 소프트웨어 LPF, body-frame 변환은 이 스트림에 적용하지 않는다.
-  `control_dualsense.py` stdin에서는 각각 `raw on`, `raw off`로 보낸다.
+  `drone_control.py` stdin에서는 각각 `raw on`, `raw off`로 보낸다.
 - `gains`는 현재 cascade PID 게인 12개를 `GAINS,<...>` 데이터그램 한 개로
   요청을 보낸 지상국에 응답한다. 값은 소수점 아래 4자리로 전송한다.
 - 게인 값은 0~100 범위의 유한한 수만 수락하며, 범위를 벗어나거나 파싱에

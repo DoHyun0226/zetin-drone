@@ -51,7 +51,7 @@
 python scripts/drone_logs.py flight logs/flight_log_YYYY-MM-DD_HHMMSS.csv --no-plot
 ```
 
-파일을 생략하면 `logs/*.csv` 중 수정시각이 가장 최근인 것을 고른다. raw
+파일을 생략하면 `logs/flight_log_*.csv` 중 수정시각이 가장 최근인 것을 고른다. raw
 CSV를 비행 CSV로 오인하지 않도록 경로를 지정한다. 위 도구는 읽기 분석만 하며
 그래프 저장 기능은 없다. `--no-plot`을 빼면 화면에 그래프를 띄운다.
 

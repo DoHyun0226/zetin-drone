@@ -56,7 +56,7 @@ GPIO 12/13/11, IMU1/IMU2 CS = GPIO 10/9.
 - [`diagnostics/icm42670_dual_loop_debug/`](diagnostics/icm42670_dual_loop_debug/):
   구형 듀얼 IMU 추정기의 루프 주기·필터 진단. **PID·믹서 없이 모터는
   1000µs에 고정**된다. 별도 14필드 UDP 형식이므로
-  [`receive_dual_imu_debug.py`](../scripts/receive_dual_imu_debug.py)와 짝지어
+  [`receive_dual_imu_debug.py`](../scripts/archive/receive_dual_imu_debug.py)와 짝지어
   사용한다. 모터 = GPIO 4/5/6/7, SPI = GPIO 12/13/11, CS = GPIO 10/9.
 - [`diagnostics/board_v1_5_2_dual_imu/`](diagnostics/board_v1_5_2_dual_imu/):
   PCB v1.5.2 듀얼 ICM42670의 자이로 Z·가속도 Z 비교 출력.

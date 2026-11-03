@@ -3751,7 +3751,7 @@ class BenchTrimResetTests(unittest.TestCase):
         sys.path.remove(str(SCRIPTS_DIR))
 
     def _load_bench(self, filename):
-        path = SCRIPTS_DIR / filename
+        path = SCRIPTS_DIR / "archive" / filename
         module_name = f"_{path.stem}_under_test"
         sys.modules.pop(module_name, None)
         spec = importlib.util.spec_from_file_location(module_name, path)

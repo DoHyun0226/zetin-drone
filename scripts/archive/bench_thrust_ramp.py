@@ -9,7 +9,7 @@
 기록하고 판정한다. 사람은 물리적으로 지켜보다 이상하면 PSU를 끈다.
 
 사용법(노트북 ZETIN-ROBOT/온라인):
-    /home/light/anaconda3/bin/python scripts/bench_thrust_ramp.py [cap_us]
+    /home/light/anaconda3/bin/python scripts/archive/bench_thrust_ramp.py [cap_us]
 cap_us 생략 시 1300(≈30%). Ctrl-C 로 언제든 중단(th 1000 + stop + WiFi 복원).
 """
 import datetime
@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ground.telemetry_schema import parse_telemetry_packet  # noqa: E402
 
 DRONE_SSID = "Drone_Tuning"
