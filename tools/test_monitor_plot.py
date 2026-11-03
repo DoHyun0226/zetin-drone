@@ -113,6 +113,44 @@ class MonitorPlotTest(unittest.TestCase):
             self.assertEqual(len(list(Path(tmp).glob("flight_log_*.csv"))), 1)
             self.assertIn("잘못된 패킷", out.getvalue())
 
+    def test_bind_failure_leaves_existing_csv_untouched_and_creates_none(self):
+        class RejectingSocket(FakeSocket):
+            def bind(self, _addr):
+                raise OSError("address in use")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fixed = mock.Mock()
+            fixed.now.return_value = __import__("datetime").datetime(2026, 1, 2, 3, 4, 5)
+            existing = Path(tmp) / "flight_log_2026-01-02_030405.csv"
+            existing.write_text("active session data")
+            with mock.patch.object(monitor_plot, "LOG_DIR", Path(tmp)), \
+                    mock.patch.object(monitor_plot.datetime, "datetime", fixed), \
+                    mock.patch.object(monitor_plot.socket, "socket",
+                                      return_value=RejectingSocket([])), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(OSError):
+                    monitor_plot.main([])
+            self.assertEqual(existing.read_text(), "active session data")
+            self.assertEqual(len(list(Path(tmp).iterdir())), 1)
+
+    def test_name_collision_gets_a_new_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = monitor_plot.open_new_log(Path(tmp), "2026-01-02_030405")
+            first[1].close()
+            second = monitor_plot.open_new_log(Path(tmp), "2026-01-02_030405")
+            second[1].close()
+            self.assertNotEqual(first[0], second[0])
+            self.assertEqual(second[0].name, "flight_log_2026-01-02_030405_2.csv")
+
+    def test_animation_interval_respects_ten_hz_cap(self):
+        self.assertGreaterEqual(monitor_plot.ANIMATION_INTERVAL_MS, 100)
+        with tempfile.TemporaryDirectory() as tmp:
+            monitor, _s, _f = self._monitor([], tmp)
+            with mock.patch("matplotlib.animation.FuncAnimation") as anim, \
+                    mock.patch("matplotlib.pyplot.show"):
+                monitor_plot.show_figure(monitor.fig, monitor)
+            self.assertGreaterEqual(anim.call_args.kwargs["interval"], 100)
+
 
 if __name__ == "__main__":
     unittest.main()

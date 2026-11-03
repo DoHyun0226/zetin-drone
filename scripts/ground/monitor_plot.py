@@ -27,6 +27,7 @@ from ground.telemetry_schema import (
 
 UDP_PORT = 4210
 DRONE_IP = "192.168.4.1"
+ANIMATION_INTERVAL_MS = 100   # 화면 갱신 최대 10 Hz
 MAX_LEN = 200                 # 20 Hz telemetry 기준 약 10초
 
 MONITOR_STATUS_FIELDS = (
@@ -44,6 +45,18 @@ MONITOR_STATUS_FIELDS = (
 
 def optional_number(value):
     return math.nan if value is None else value
+
+
+def open_new_log(log_dir, stamp):
+    """Create flight_log_<stamp>.csv exclusively; flight_log_<stamp>_<n> on collision."""
+    n = 1
+    while True:
+        name = f"flight_log_{stamp}" if n == 1 else f"flight_log_{stamp}_{n}"
+        path = log_dir / f"{name}.csv"
+        try:
+            return path, path.open("x", newline="", encoding="utf-8")
+        except FileExistsError:
+            n += 1
 
 
 def build_figure():
@@ -65,7 +78,7 @@ def show_figure(fig, monitor):
     from matplotlib.animation import FuncAnimation
 
     monitor.animation = FuncAnimation(
-        fig, monitor.update, interval=50, cache_frame_data=False)
+        fig, monitor.update, interval=ANIMATION_INTERVAL_MS, cache_frame_data=False)
     plt.show()
 
 
@@ -261,20 +274,23 @@ def main(argv=None) -> int:
     parser.parse_args(argv)
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    file_path = LOG_DIR / f"flight_log_{datetime.datetime.now():%Y-%m-%d_%H%M%S}.csv"
-    csv_file = file_path.open("w", newline="", encoding="utf-8")
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    csv_file = None
     monitor = None
     try:
+        # 포트를 먼저 잡는다: 이미 떠 있는 수신기가 있으면 로그를 건드리지 않는다.
         sock.bind(("0.0.0.0", UDP_PORT))
         sock.settimeout(0.002)
+        stamp = f"{datetime.datetime.now():%Y-%m-%d_%H%M%S}"
+        file_path, csv_file = open_new_log(LOG_DIR, stamp)
         monitor = Monitor(sock, csv_file)
         print(f"📡 확장 모니터링 시작! (Port: {UDP_PORT})")
         print(f"💾 로그 파일: {file_path}")
         show_figure(monitor.fig, monitor)
     finally:
-        csv_file.flush()
-        csv_file.close()
+        if csv_file is not None:
+            csv_file.flush()
+            csv_file.close()
         sock.close()
         if monitor is not None:
             plt_close(monitor.fig)
