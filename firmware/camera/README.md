@@ -2,7 +2,7 @@
 
 [`esp32cam_stream/`](esp32cam_stream/)은 "ESP32-CAM 호환보드 + CH340 업로드 하판"용
 영상 스트림 스케치다. 비행 ESP32의 SoftAP `Drone_Tuning`에 스테이션으로 붙어 노트북으로
-MJPEG를 보낸다. 노트북에서는 [`scripts/record_camera.py`](../../scripts/record_camera.py)로
+MJPEG를 보낸다. 노트북에서는 [`scripts/drone_video.py`](../../scripts/drone_video.py)로
 받아 녹화한다. 설계는
 [카메라 스트리밍 설계](../../docs/superpowers/specs/2026-11-02-camera-streaming-design.md)에 있다.
 

@@ -2,7 +2,9 @@
 
 현행 `dual_imu_cascade_pwm`용 조종·텔레메트리 수집·오프라인 분석 도구다.
 처음 시작하면 [전원 인가 벤치 절차](../docs/power_on_bench_procedure.md)를
-먼저 읽고, USB로 연결한 DualSense와 `control_dualsense.py`를 사용한다.
+먼저 읽고, USB로 연결한 DualSense와 `drone_control.py`를 사용한다.
+실행 도구는 세 개(`drone_control.py`·`drone_video.py`·`drone_logs.py`)뿐이고,
+나머지 코드는 `ground/` 패키지, 벤치·특수 펌웨어용 스크립트는 [archive/](archive/README.md)에 있다.
 이 문서는 저스로틀 yaw 개선이 통합된 저장소 코드 기준이며 현재 기체에 올라간 빌드나 실기
 통과 여부를 뜻하지 않는다. 명령·필드 순서·단위의 정본은
 [UDP 프로토콜](../docs/udp_protocol.md)이다.
@@ -10,41 +12,42 @@
 ## 무엇을 실행할까
 
 아래 명령은 저장소 루트에서, 필요한 패키지가 설치된 Python 환경으로 실행한다.
-의존성은 [requirements.txt](../requirements.txt)에 있다. `motor_serial.py`는
-추가로 `pyserial`이 필요하다.
+의존성은 [requirements.txt](../requirements.txt)에 있다. 전체 화면 대시보드는
+`prompt_toolkit`이 설치되어 있어야 하며, 없으면 `--plain`과 같은 줄 출력으로 시작한다.
 
-| 목적 | 도구 | 실행 조건과 출력 |
+| 목적 | 명령 | 실행 조건과 출력 |
 |---|---|---|
-| 조종·stdin 명령·CSV·raw 기록 | `control_dualsense.py` | 현행 기본 지상국. 게임패드 USB 연결, `Drone_Tuning` 접속 |
-| 축·버튼 번호 확인 | `gamepad_probe.py` | 드론에 명령을 보내지 않음. 처음 0.7초 손을 떼고 각 입력을 하나씩 확인 |
-| 입력값 연속 표시 | `test_dualsense_input.py` | 로컬 입력 진단. 화면의 RX/RY/L2 라벨은 예시 매핑이므로 축 번호를 실측 |
-| 게임패드 없는 수동 UDP 콘솔 | `tune_pid.py` | 명령 1회 송신과 상태 표시. RC 자동 송신·CSV 기록·종료 시 자동 `stop` 없음 |
-| 텍스트 수신·CSV 기록 | `receive_telemetry.py` | 단독 수신 전용. 조종·정지 명령 없음 |
-| 실시간 그래프·CSV 기록 | `monitor_telemetry.py` | GUI 필요. 조종·정지 명령 없음 |
-| 비행 CSV 요약·그래프 | `analyze_flight_log.py` | 오프라인. 대상 `flight_log_*.csv` 경로를 명시 |
-| 프로브 분포 분석 | `analyze_probe_response.py` | 오프라인 연구용. 결과가 현행 착지컷에 연결되지는 않음 |
-| raw 바이너리 → CSV | `decode_imu_raw.py` | 오프라인. 원본 `.bin` 보존, 출력 CSV 생성/덮어쓰기 |
-| 자기계 보정 상수 계산 | `magcal_fit.py` | 보정용 raw CSV에서 상수를 출력. 펌웨어를 자동 수정하거나 업로드하지 않음 |
-| dual-IMU 루프 진단 | `receive_dual_imu_debug.py` | 전용 `icm42670_dual_loop_debug` 펌웨어·`DUAL_IMU_DEBUG` AP용 |
-| 모터 식별용 시리얼 조작 | `motor_serial.py` | 전용 `motor_id_single` 펌웨어, 프로펠러 제거·PSU 전류 제한. 지정 시리얼 포트 확인 |
+| 조종·stdin 명령·CSV·raw 기록 | `drone_control.py` | 현행 기본 지상국(대시보드). 게임패드 USB 연결, `Drone_Tuning` 접속. `--plain`은 대시보드 없이 줄 출력 |
+| 축·버튼 번호 확인 | `drone_control.py --pad-check` | 드론에 아무것도 보내지 않음(소켓 없음). 처음 0.7초 손을 떼고 각 입력을 하나씩 확인 |
+| 입력값 연속 표시 | `drone_control.py --pad-check --live` | 로컬 입력 진단. 한 줄에 모든 축·버튼·햇 값을 표시. 번호는 실측 |
+| 게임패드 없는 명령 콘솔 | `drone_control.py --keyboard` | 설정·읽기용. RC 송신 없음(입력줄 `rc`·`rcr`도 거부), `start`·`resume` 거부, 종료 시 자동 송신 없음(`stop`은 직접 입력), 로그 파일 없음 |
+| 수신·표시·CSV·raw 기록 | `drone_control.py --listen` | 수신 전용. `connect` 외에는 보내지 않음(입력줄 명령·트림 재동기화·종료 시 disarm 없음). stdin이 없거나 닫혀도 Ctrl+C·SIGTERM까지 계속 수신 |
+| 실시간 그래프·CSV 기록 | `drone_control.py --listen --plot` | GUI(matplotlib) 필요. `connect` 외에는 보내지 않음 |
+| 카메라 녹화 | `drone_video.py` (= `record`) | 비행 UDP 포트를 쓰지 않음. `Drone_Tuning` 접속, 조종 지상국과 다른 터미널 |
+| 카메라 녹화 → 정렬 CSV·mp4 | `drone_video.py mp4 <csv> [--no-mp4]` | 오프라인. 입력 `logs/camera_*.csv` |
+| 비행 CSV 요약·그래프 | `drone_logs.py flight [csv] [--no-plot]` | 오프라인. 생략하면 `logs/flight_log_*.csv` 중 가장 최근 파일 |
+| 프로브 분포 분석 | `drone_logs.py probe` | 오프라인 연구용. 결과가 현행 착지컷에 연결되지는 않음 |
+| raw 바이너리 → CSV | `drone_logs.py imuraw <bin> [csv]` | 오프라인. 원본 `.bin` 보존, 출력 CSV 생성/덮어쓰기 |
+| 자기계 보정 상수 계산 | `drone_logs.py magcal <csv>` | 보정용 raw CSV에서 상수를 출력. 펌웨어를 자동 수정하거나 업로드하지 않음 |
+
+공통 옵션은 `--no-raw`(raw 스트림·기록 끔. `--listen`에서는 아무것도 보내지 않고 로컬 raw 기록만 끔)·`--no-mag`(자기계 융합 OFF 선택)·`--plain`이다.
+벤치·특수 펌웨어용 도구(`motor_serial.py`·`bench_*.py`·`receive_dual_imu_debug.py`)는 현행 절차가 아니며
+[archive/README.md](archive/README.md)에서 용도와 전제를 확인한다.
 
 **드론에 UDP를 보내는 도구는 한 번에 하나만 실행한다.** 펌웨어는 마지막
 발신자의 IP/포트를 텔레메트리 목적지로 삼는다. 포트 충돌을 피했더라도
-`tune_pid.py`나 수신기의 `connect`가 조종 지상국의 데이터를 가져갈 수 있다.
-DualSense 조종 중 상태 확인과 로그 기록도 같은 `control_dualsense.py`에서 한다.
+`--keyboard`의 명령이나 `--listen`·수신기의 `connect`가 조종 지상국의 데이터를 가져갈 수 있다.
+DualSense 조종 중 상태 확인과 로그 기록도 같은 `drone_control.py`에서 한다.
 
-`receive_telemetry.py`와 `monitor_telemetry.py`는 현재 raw 바이너리 분기가
-없다. 펌웨어 raw가 켜져 있으면 `ZIMU`·`ZCAL`을 불량 텔레메트리로 집계하며
-저장하지 않는다. raw까지 받을 세션은 `control_dualsense.py`를 사용한다.
-독립 수신기만 사용할 벤치에서는 모터를 정지한 채 기존 콘솔에서 `raw off`
-(`tune_pid.py`에서는 `raw 0`)를 보내고 그 콘솔을 종료한 뒤 수신기를 실행한다.
-이 설정은 드론 재부팅 후 유지되지 않는다.
+`--listen --plot`(`ground/monitor_plot.py`)는 raw IMU 데이터그램(`ZIMU`·`ZCAL`)을
+알아보고 건너뛴다. 불량 패킷으로 세지 않고 저장하지도 않으며, 종료 때 받은 개수만
+알려 준다. raw까지 받을 세션은 `--plot` 없는 `drone_control.py`(`--listen` 포함)를 사용한다.
 
 ## DualSense 시작·조종·정지
 
 ```bash
-python scripts/gamepad_probe.py
-python scripts/control_dualsense.py
+python scripts/drone_control.py --pad-check
+python scripts/drone_control.py
 ```
 
 첫 명령을 종료한 다음 두 번째 명령을 실행한다. 실행만으로 시동하지 않는다.
@@ -63,7 +66,8 @@ stdin `start`만으로 주기적인 RC가 생기지는 않으므로 비행 조�
 | D-pad | roll/pitch 트림 0.2°씩 변경, 각 축 ±10° 제한 |
 | PS | 트림을 0으로 초기화 |
 | stdin `stop` | 지상국의 무장 추정과 무관하게 `stop` 반복 전송 |
-| Ctrl+C | `ARMED`이거나 `ARMING`이면 `stop` 후 종료·로그 닫기 |
+| Ctrl+C·SIGTERM | `ARMED`이거나 `ARMING`이면 `stop` 후 종료·로그 닫기 |
+| (대시보드 내부 오류) | 조작자 정지가 아니다. 고장 래치·RC 중단(`stop` 미전송, 드론 RC 타임아웃 자동착륙)한 뒤 줄 출력으로 계속. 종료는 Ctrl+C |
 
 RC `rcr` 송신 목표는 **20Hz**(`CTRL_LOOP_HZ=20`)다. 스로틀과 트림 입력은
 RC 송신 중에만 처리된다. 버튼 번호는 OS/연결 방식에 따라 확인해야 하며,
@@ -133,7 +137,7 @@ stdin에는 [프로토콜의 명령](../docs/udp_protocol.md#지상국--드론)�
 
 ## 로그 저장과 오프라인 분석
 
-공유 `telemetry_schema.py`의 현행 패킷은 **75필드**, PC 수신 시각
+공유 `ground/telemetry_schema.py`의 현행 패킷은 **75필드**, PC 수신 시각
 `Timestamp`를 앞에 붙인 CSV는 **76열**이다. 수신·모니터 도구도 같은 파서를
 쓴다. 10~74필드의 레거시 패킷은 없는 뒤쪽 값을 빈 셀로 기록하고, 75필드를
 넘는 미래 패킷은 알려진 앞쪽만 읽는다. 첫 10필드는 비어 있지 않은 유한수,
@@ -158,11 +162,11 @@ stdin에는 [프로토콜의 명령](../docs/udp_protocol.md#지상국--드론)�
 따라 달라진다. 코드의 “10분 세션 약 12초”는 안내값이다.
 
 ```bash
-python scripts/control_dualsense.py --no-raw --no-mag
-python scripts/analyze_flight_log.py logs/flight_log_YYYY-MM-DD_HHMMSS.csv --no-plot
-python scripts/decode_imu_raw.py logs/imuraw_YYYY-MM-DD_HHMMSS.bin /tmp/imu.csv
-python scripts/analyze_probe_response.py ground.csv air.csv --label ground --label air
-python scripts/magcal_fit.py capture.csv
+python scripts/drone_control.py --no-raw --no-mag
+python scripts/drone_logs.py flight logs/flight_log_YYYY-MM-DD_HHMMSS.csv --no-plot
+python scripts/drone_logs.py imuraw logs/imuraw_YYYY-MM-DD_HHMMSS.bin /tmp/imu.csv
+python scripts/drone_logs.py probe ground.csv air.csv --label ground --label air
+python scripts/drone_logs.py magcal capture.csv
 ```
 
 각 명령은 서로 별도 용도다. `--no-raw`는 시작 시 `raw 0`을 반복 전송하며
@@ -170,9 +174,9 @@ python scripts/magcal_fit.py capture.csv
 `--no-raw`로 시작한 세션의 기록을 다시 켜지는 않는다. 기본 실행도 `raw 1`을
 자동 재전송하지 않으므로 이전 세션이 껐다면 `raw on`을 직접 입력한다.
 
-`analyze_flight_log.py`의 `--no-plot`은 창을 생략하지만 matplotlib은 여전히
-필요하다. 파일을 생략하면 `logs/*.csv` 중 수정시각이 가장 최근인 파일을
-선택하므로, raw CSV를 고르지 않도록 경로를 명시한다. 요약에는 RP/Yaw scale의
+`drone_logs.py flight`의 `--no-plot`은 창을 생략하지만 matplotlib은 여전히
+필요하다. 파일을 생략하면 `logs/flight_log_*.csv` 중 수정시각이 가장 최근인
+파일을 선택한다. 요약에는 RP/Yaw scale의
 최솟값·p05(5백분위수), LIMITED 진입 횟수·누적 시간, roll/pitch/yaw별
 PID·I 기여의 절댓값 최댓값이 포함된다. 필요한 진단값이 없는 레거시 CSV는
 해당 항목을 `legacy/unknown`으로 표시한다. LIMITED 시간은 `Timestamp`로
@@ -185,7 +189,7 @@ PID·I 기여의 절댓값 최댓값이 포함된다. 필요한 진단값이 없
 표본 부족·`Hover_Est` 혼합은 판정을 보류한다. 종료코드 0은 분석 실행 성공이며
 분포 “통과”를 뜻하지 않는다. `--plot`일 때만 matplotlib을 불러온다.
 
-`magcal_fit.py`는 기본적으로 `Mag_Cal_Active=1`인 raw 행만 사용한다.
+`drone_logs.py magcal`은 기본적으로 `Mag_Cal_Active=1`인 raw 행만 사용한다.
 `--all`은 보정 전 raw만 따로 추린 파일임을 확인했을 때만 사용한다. 출력의
 `95p |B| radial residual`은 자기장 크기 피팅 잔차로, heading 정확도가 아니다.
 스로틀 간섭 계수 환산은 입력 좌표계가 맞아야 하며 새 보정 후 모터 벤치로
@@ -194,7 +198,7 @@ PID·I 기여의 절댓값 최댓값이 포함된다. 필요한 진단값이 없
 ## 카메라 녹화
 
 기체의 ESP32-CAM 보드([`firmware/camera`](../firmware/camera/README.md))가 보내는 영상을
-노트북에서 녹화한다. 조종 링크와는 별개이므로 `control_dualsense.py`와 **다른 터미널에서
+노트북에서 녹화한다. 조종 링크와는 별개이므로 `drone_control.py`와 **다른 터미널에서
 동시에** 실행한다. 녹화기는 비행 UDP 포트를 쓰지 않는다.
 
 사전 점검:
@@ -207,9 +211,9 @@ PID·I 기여의 절댓값 최댓값이 포함된다. 필요한 진단값이 없
   `off`인지 확인한다.
 
 ```bash
-python scripts/record_camera.py                 # 미리보기 창 + 녹화 (q로 종료)
-python scripts/record_camera.py --no-preview    # 창 없이 녹화 (Ctrl+C로 종료)
-python scripts/camera_to_mp4.py logs/camera_YYYY-MM-DD_HHMMSS.csv
+python scripts/drone_video.py                 # 미리보기 창 + 녹화 (q로 종료)
+python scripts/drone_video.py --no-preview    # 창 없이 녹화 (Ctrl+C로 종료)
+python scripts/drone_video.py mp4 logs/camera_YYYY-MM-DD_HHMMSS.csv
 ```
 
 출력:
@@ -219,7 +223,7 @@ python scripts/camera_to_mp4.py logs/camera_YYYY-MM-DD_HHMMSS.csv
   - 카메라 일련번호와 캡처 시각
   - 노트북 수신 시각. 비행 로그와 같은 `HH:MM:SS.mmm` 형식이고, 헤더가 도착한 시각이다.
   - 접속 구간 번호
-- 후처리 결과(`camera_to_mp4.py`)
+- 후처리 결과(`drone_video.py mp4`)
   - `_aligned.csv`: 프레임별 캡처 시각을 노트북 시계로 옮긴 표. 비행 로그 `Timestamp`와 맞춰 보는 데 쓴다.
   - `.mp4`: 일반 재생용 가변 프레임레이트 영상
 
@@ -228,24 +232,12 @@ python scripts/camera_to_mp4.py logs/camera_YYYY-MM-DD_HHMMSS.csv
 [설계 문서 5.3](../docs/superpowers/specs/2026-11-02-camera-streaming-design.md)).
 종료 요약의 `seq gaps`가 0이 아니면 카메라가 보낸 프레임이 녹화에서 빠진 것이다.
 
-## 자동 벤치 스크립트의 실행 범위
+## 보관된 벤치 스크립트
 
-`bench_sign_test.py`·`bench_yaw_test.py`·`bench_thrust_ramp.py`는 이전 벤치의
-자동화 도구다. 세 스크립트 모두 **WiFi 전환, `trim 0 0`, `start`, 주기적 RC,
-종료 시 `stop`**을 실행한다. 출력 경로와 복귀 SSID가 코드에 고정되어 있고
-WiFi 복귀 성공을 충분히 확인하지 않은 채 완료를 출력한다. 새 환경에서
-그대로 실행하는 첫 진입점으로 사용하지 말고
-[현행 벤치 절차](../docs/power_on_bench_procedure.md)와 설정을 먼저 대조한다.
+`bench_sign_test.py`·`bench_yaw_test.py`·`bench_thrust_ramp.py`·`motor_serial.py`·
+`receive_dual_imu_debug.py`는 [archive/](archive/README.md)로 옮겼다. 일부는 WiFi 전환·`start`·
+주기적 RC를 자동으로 보내므로, 실행 전에 그 문서의 경고와 전제를 읽는다.
 
-- `bench_sign_test.py`·`bench_yaw_test.py`: 모터 전원 차단·프로펠러 제거 상태의
-  텔레메트리 부호 확인용이다. 이 전제를 코드가 물리적으로 확인하지 않는다.
-- `bench_thrust_ramp.py`: 프로펠러가 회전하는 고정 시험용이다. EOF에서도
-  확인 입력을 통과하고, 종료 램프는 고정 `1200 → 1100 → 1000`이어서 지정한
-  `cap_us`가 1200보다 작아도 그 값을 넘을 수 있다. 20Hz 모터 명령 분산에
-  근거한 “진동 없음”·다음 시험 권고 출력은 기계 진동·실제 추력·비행 안전의
-  검증으로 취급하지 않는다. 이 제한을 해결하기 전에는 초보자 실행 경로에서
-  제외한다.
-
-공유 모듈은 `telemetry_schema.py`(파싱·CSV 정규화)와
+공유 모듈은 `ground/` 패키지의 `telemetry_schema.py`(파싱·CSV 정규화)와
 `failsafe_telemetry.py`(phase·probe 이름과 표시)다. 이들은 실행 도구가 아니다.
 [archive/](archive/README.md)의 GPS/TCP 도구는 현행 비행 펌웨어용이 아니다.

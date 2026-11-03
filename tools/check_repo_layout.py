@@ -23,6 +23,18 @@ LEGACY_TOKENS = (
     "Controller_test.py",
     "GPS_Reciever.py",
     "ZETIN_Drone",
+    "control_dualsense.py",
+    "tune_pid.py",
+    "receive_telemetry.py",
+    "monitor_telemetry.py",
+    "gamepad_probe.py",
+    "test_dualsense_input.py",
+    "record_camera.py",
+    "camera_to_mp4.py",
+    "analyze_flight_log.py",
+    "decode_imu_raw.py",
+    "analyze_probe_response.py",
+    "magcal_fit.py",
 )
 
 
@@ -70,7 +82,7 @@ def check_sketch_names(repo):
     return errors
 
 
-def check_migration_map(repo, map_path, expected_rows=44):
+def check_migration_map(repo, map_path, expected_rows=64):
     errors = []
     rows = []
     for line_number, line in enumerate(
@@ -86,14 +98,10 @@ def check_migration_map(repo, map_path, expected_rows=44):
         )
 
     old_seen = set()
-    new_seen = set()
     for line_number, old, new in rows:
         if old in old_seen:
             errors.append(f"migration map line {line_number}: duplicate old path {old}")
-        if new in new_seen:
-            errors.append(f"migration map line {line_number}: duplicate new path {new}")
         old_seen.add(old)
-        new_seen.add(new)
         if (repo / old).exists():
             errors.append(f"migration map line {line_number}: old path still exists {old}")
         if not (repo / new).exists():
@@ -138,7 +146,7 @@ def stale_scan_files(repo):
     ]
     files.extend(sorted((repo / "firmware/flight").rglob("*.ino")))
     files.extend(sorted((repo / "firmware/diagnostics").rglob("*.ino")))
-    files.extend(sorted((repo / "scripts").glob("*.py")))
+    files.extend(sorted((repo / "scripts").rglob("*.py")))
     return files
 
 

@@ -6,8 +6,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-import telemetry_schema  # noqa: E402
-from telemetry_schema import (  # noqa: E402
+from ground import telemetry_schema  # noqa: E402
+from ground.telemetry_schema import (  # noqa: E402
     CSV_FIELDS,
     TELEMETRY_FIELDS,
     parse_telemetry_packet,

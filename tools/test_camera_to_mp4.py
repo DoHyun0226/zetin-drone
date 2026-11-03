@@ -9,8 +9,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from camera_stream import INDEX_FIELDS, MjpegParser, aligned_rows  # noqa: E402
-from camera_to_mp4 import (  # noqa: E402
+from ground.camera_stream import INDEX_FIELDS, MjpegParser, aligned_rows  # noqa: E402
+from ground.camera_mp4 import (  # noqa: E402
     build_ffmpeg_command,
     build_video_inputs,
     extract_frames,
@@ -18,7 +18,7 @@ from camera_to_mp4 import (  # noqa: E402
     write_aligned_csv,
     write_concat_list,
 )
-from record_camera import RecordState, record_chunks  # noqa: E402
+from ground.camera_record import RecordState, record_chunks  # noqa: E402
 
 
 BOUNDARY = b"zetincamframe"
@@ -45,7 +45,7 @@ class Clock:
 
 
 def make_recording(folder: Path, captures=("0.000000", "0.100000", "0.200000")):
-    """A real .mjpeg/.csv pair written by record_camera.record_chunks."""
+    """A real .mjpeg/.csv pair written by ground.camera_record.record_chunks."""
     mjpeg_path = folder / "camera_test.mjpeg"
     csv_path = folder / "camera_test.csv"
     jpegs = [jpeg(i) for i in range(len(captures))]

@@ -14,7 +14,7 @@ Stage A에서 프롭 회전방향이 확정됐으므로(FL/RR=CW, FR/RL=CCW), ya
 복원한다. 결과 파일은 WiFi 복원 뒤 Claude가 읽는다.
 
 사용법(노트북 ZETIN-ROBOT/온라인에서 실행):
-    /home/light/anaconda3/bin/python scripts/bench_yaw_test.py
+    /home/light/anaconda3/bin/python scripts/archive/bench_yaw_test.py
 """
 import datetime
 import os
@@ -25,8 +25,8 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from telemetry_schema import parse_telemetry_packet  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ground.telemetry_schema import parse_telemetry_packet  # noqa: E402
 
 DRONE_SSID = "Drone_Tuning"
 HOME_SSID = "ZETIN-ROBOT"

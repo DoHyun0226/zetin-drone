@@ -25,7 +25,7 @@ ESP32-S3로, 카메라 스케치를 ESP32-CAM(`esp32:esp32:esp32cam`)으로 컴�
 | 현행 | ESP32-S3 | 없음 | PWM | ESC 설정용 LEDC 50Hz, 기본 GPIO7. **전류 제한 전원·ESC/모터 하나만 연결. `h`는 최대 2000µs를 계속 출력** | [`esc_config_throttle`](../firmware/diagnostics/esc_config_throttle/) |
 | 현행 | ESP32-S3 | ICM42670 1개 | 없음 | raw SPI 읽기. 별도 18/19/23/5 핀 배치 사용 | [`icm42670_single_raw`](../firmware/diagnostics/icm42670_single_raw/) |
 | 현행 | ESP32-S3 | 듀얼 ICM42670 | 없음 | 듀얼 IMU raw SPI 읽기 | [`icm42670_dual_raw`](../firmware/diagnostics/icm42670_dual_raw/) |
-| 현행 | ESP32-S3 | 듀얼 ICM42670 | PWM 최저값 고정 | 구형 추정기 루프 진단. PID·믹서 없음, 전 모터 1000µs. 별도 14필드이며 `receive_dual_imu_debug.py`와 사용 | [`icm42670_dual_loop_debug`](../firmware/diagnostics/icm42670_dual_loop_debug/) |
+| 현행 | ESP32-S3 | 듀얼 ICM42670 | PWM 최저값 고정 | 구형 추정기 루프 진단. PID·믹서 없음, 전 모터 1000µs. 별도 14필드이며 `scripts/archive/receive_dual_imu_debug.py`와 사용 | [`icm42670_dual_loop_debug`](../firmware/diagnostics/icm42670_dual_loop_debug/) |
 | 현행 | ESP32-S3 | 듀얼 ICM42670 | 없음 | PCB v1.5.2 센서 브링업 진단 | [`board_v1_5_2_dual_imu`](../firmware/diagnostics/board_v1_5_2_dual_imu/) |
 | 현행 | ESP32-S3 | 3901-L0X | 없음 | UART 수신 확인. raw 바이트·MSPv2 거리/광류·CRC 요약. RX=GPIO17, 로그는 ESP 자체 USB | [`matek_3901_l0x_raw`](../firmware/diagnostics/matek_3901_l0x_raw/) |
 | 실험 | ESP32 (ESP32-CAM, AI-Thinker 핀맵) | 카메라 OV3660 | 없음 | HTTP MJPEG :81, 상태 :80, 고정 IP 192.168.4.200. 비행 링크 UDP 포트 미사용. CI는 esp32cam FQBN으로 별도 컴파일. USB 전원 벤치 스트림 확인(2026-11-02), BEC·링크 비교 미시험 | [`esp32cam_stream`](../firmware/camera/esp32cam_stream/) |

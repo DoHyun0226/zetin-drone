@@ -21,7 +21,7 @@ __pycache__/
 # 1kHz IMU raw 로그 (바이너리, 세션당 수십 MB)
 logs/*.bin
 
-# 카메라 녹화와 후처리 결과 (scripts/record_camera.py, camera_to_mp4.py)
+# 카메라 녹화와 후처리 결과 (scripts/drone_video.py)
 logs/*.mjpeg
 logs/*.mp4
 

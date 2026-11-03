@@ -324,7 +324,7 @@ const float K_MAG = 0.001f;
 const uint32_t MAG_SAMPLE_PERIOD_MS = 20;    // BMM350 read = 50Hz, core 0 only
 const uint32_t MAG_STALE_MS = 100;
 
-// scripts/magcal_fit.py 출력값을 아래 두 상수에 붙여 넣는다.
+// scripts/drone_logs.py magcal 출력값을 아래 두 상수에 붙여 넣는다.
 // 2026-08-04 캘리브 (log flight_log_2026-08-04_023840.csv, 1255샘플 중 inlier
 // 1119, 커버리지비 2.08). 이전 min/max offset은 여기서 6.79µT 벗어나 있었고
 // 그것은 수평성분 32.2µT 대비 최대 ±12.2° heading 오차였다.
@@ -967,7 +967,7 @@ volatile bool     imu1_frozen_now = false;
 volatile bool     imu2_frozen_now = false;
 volatile bool     imu_disagree_now = false;
 
-// scripts/control_dualsense.py 프로토콜 호환용
+// scripts/drone_control.py 프로토콜 호환용
 volatile uint32_t lastRcSeq       = 0;
 volatile bool     rcSeqValid      = false;
 volatile uint32_t rcTotalPkts     = 0;
@@ -1221,7 +1221,7 @@ static void stopMagCalibration() {
                 magCalMax[1] - magCalMin[1],
                 magCalMax[2] - magCalMin[2]);
   Serial.println(
-      "[MAGCAL] save the telemetry CSV and run scripts/magcal_fit.py <flight_log.csv>");
+      "[MAGCAL] save the telemetry CSV and run scripts/drone_logs.py magcal <flight_log.csv>");
 }
 
 static inline void applyMagCalibration(
@@ -2464,7 +2464,7 @@ static void handleGainCommand(const char *buf) {
   else if (strncmp(buf, "yi", 2) == 0) Ki_Rate_Yaw = value;
   else if (strncmp(buf, "yd", 2) == 0) Kd_Rate_Yaw = value;
 
-  // scripts/tune_pid.py 명령 호환: P/I/D는 inner rate PID에 대응
+  // scripts/drone_control.py --keyboard 명령 호환: P/I/D는 inner rate PID에 대응
   else if (strncmp(buf, "pa", 2) == 0) { Kp_Rate_Roll = value; Kp_Rate_Pitch = value; }
   else if (strncmp(buf, "ia", 2) == 0) { Ki_Rate_Roll = value; Ki_Rate_Pitch = value; }
   else if (strncmp(buf, "da", 2) == 0) { Kd_Rate_Roll = value; Kd_Rate_Pitch = value; }
@@ -2488,7 +2488,7 @@ static void handleGainCommand(const char *buf) {
 // 필드, 필드 65 Mag_Cal_Active, 필드 66~75 allocator/PID/I/yaw authority를
 // append-only로 보낸다. IMU별 값은 융합값과 같은 body frame이다.
 // 이 스케치는 인덱스 75~90 에 광류 위치·고도 유지 16개 필드를 더 붙인다
-// (Flow_Seq … FlowCal_Samples, scripts/telemetry_schema.py).
+// (Flow_Seq … FlowCal_Samples, scripts/ground/telemetry_schema.py).
 static void sendTelemetry() {
   if (!connectionEstablished) return;
   bool criticalFault = (active_imus == 0) || fault_attitude || !calibration_ok;

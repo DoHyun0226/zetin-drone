@@ -1,6 +1,6 @@
 """Align a camera recording to laptop time and export an mp4.
 
-  python scripts/camera_to_mp4.py logs/camera_YYYY-MM-DD_HHMMSS.csv [--no-mp4]
+  python scripts/drone_video.py mp4 logs/camera_YYYY-MM-DD_HHMMSS.csv [--no-mp4]
 
 Writes next to the input:
   camera_..._aligned.csv  index rows + capture time on the laptop clock, to
@@ -20,7 +20,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from camera_stream import (
+from ground.camera_stream import (
     INDEX_FIELDS,
     aligned_rows,
     clock_jumps,
@@ -102,7 +102,7 @@ def build_ffmpeg_command(list_path: Path, out_path: Path) -> list[str]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Align a camera recording to laptop time and export mp4")
-    parser.add_argument("csv", type=Path, help="logs/camera_<time>.csv written by record_camera.py")
+    parser.add_argument("csv", type=Path, help="logs/camera_<time>.csv written by drone_video.py record")
     parser.add_argument("--no-mp4", action="store_true", help="only write the aligned CSV")
     args = parser.parse_args(argv)
 
