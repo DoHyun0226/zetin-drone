@@ -52,7 +52,7 @@ Python 패키지는 [requirements.txt](../requirements.txt), 보드 코어·라�
    분석할 때는 `flight_log_*.csv` 경로를 명시한다.
 
 자동 벤치 스크립트의 고정 환경·자동 시동·입력 확인·스로틀 제한 문제는
-[실행 범위](../scripts/README.md#자동-벤치-스크립트의-실행-범위)를 먼저 읽는다.
+[실행 범위](../scripts/archive/README.md)를 먼저 읽는다.
 
 ## 기록 양식
 

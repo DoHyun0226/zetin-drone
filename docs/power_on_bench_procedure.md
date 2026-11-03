@@ -555,7 +555,7 @@ E-0~E-3의 프롭 OFF 검사와 선행 물리 검증을 마친 뒤, 제한된 �
 
 ## 2026-07-29 벤치 실측 기록
 
-펌웨어 `3ea9ca6` 플래시 후 측정. 지상국은 `drone_control.py`,
+펌웨어 `3ea9ca6` 플래시 후 측정. 지상국은 당시 `control_dualsense`(현 `scripts/drone_control.py`),
 로그 `logs/flight_log_2026-07-29_212305.csv`.
 
 ### 부팅·보정 (2회)
@@ -659,9 +659,10 @@ Ki_Rate  0.0500 / 0.0500 / 0.0500    Kd_Rate 0.0150 / 0.0150 / 0.0000
 ```
 
 ✅ **해소됨 — `drone_control.py`가 `gains` 응답을 직접 출력한다.**
-2026-07-29 실측 당시에는 별도 튜닝 콘솔만 `[GAINS]`를 출력했고,
-조종 지상국과 수신·모니터 도구는 `is_gains_packet()`으로 걸러 `continue`했다.
-그래서 링크가 정상이어도 조종 지상국에서 `gains`를 치면 무반응이었다. 현재
+2026-07-29 실측 당시에는 `tune_pid`만 `[GAINS]`를 출력했고,
+`control_dualsense`·`monitor_telemetry`·`receive_telemetry`(모두 현 `scripts/drone_control.py`로
+통합됨)는 `is_gains_packet()`으로 걸러 `continue`했다. 그래서 링크가 정상이어도
+`control_dualsense`에서 `gains`를 치면 무반응이었다. 현재
 `drone_control.py`는 12개 값을 `[GAINS] name=value ...` 형식(소수 4자리)으로
 출력하므로 지상국을 바꾸지 않고 B-1을 확인한다.
 
@@ -669,7 +670,7 @@ Ki_Rate  0.0500 / 0.0500 / 0.0500    Kd_Rate 0.0150 / 0.0150 / 0.0000
 2026-07-29 세션 당시 `[DIAG]`는 `is_armed`, `[AUTO-LAND]`는
 `Failsafe_Phase != 0`을 요구하고 고장 알림은 엣지 트리거라서
 **무장 전 + 고장 없음 = 완전 침묵**이었다. 실제로 링크가 죽은 것인지
-`gains`가 버려진 것인지 구분할 수 없었다(튜닝 콘솔로 바꾸자 `[TELEM]`이
+`gains`가 버려진 것인지 구분할 수 없었다(`tune_pid`로 바꾸자 `[TELEM]`이
 정상 수신됐다). 현재는 무장 여부와 무관한 `[STATUS]` 줄이 Roll/Pitch/Yaw,
 Throttle, Armed, Hover_Est/Valid와 활성 고장을 표시하며, 텔레메트리가
 `TELEM_TIMEOUT_SEC` 넘게 끊기거나 복구될 때도 각각 한 번 알린다.
