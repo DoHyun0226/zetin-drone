@@ -1,9 +1,10 @@
 # 펌웨어 수명주기 카탈로그
 
-이 표는 Git에서 추적하는 **26개 스케치**를 빠짐없이 연결한다: 주력 1개,
-보류 후보 1개, 진단 7개, 보관 17개다. `현행`은 유지되는 경로를 뜻하며
-모든 실기 검증이 끝났다는 표시는 아니다. CI는 주력·보류 후보·진단을
-컴파일하고, 보관된 스케치는 원형 보존하며 빌드하지 않는다.
+이 표는 Git에서 추적하는 **29개 스케치**를 빠짐없이 연결한다: 주력 1개,
+보류 후보 1개, 진단 8개, 실험 2개(flow-hold 비행 스케치, 카메라 보드), 보관 17개다. `현행`은 유지되는
+경로를 뜻하며 모든 실기 검증이 끝났다는 표시는 아니다. CI는 주력·보류 후보·flow-hold 실험·진단을
+ESP32-S3로, 카메라 스케치를 ESP32-CAM(`esp32:esp32:esp32cam`)으로 컴파일하고,
+보관된 스케치는 원형 보존하며 빌드하지 않는다.
 의존성과 빌드 방법은 [펌웨어 안내](../firmware/README.md)를 따른다.
 모터 제어 스케치를 실행하기 전에는 프로펠러를 제거한다.
 
@@ -17,14 +18,17 @@
 | 수명주기 | 대상 MCU | 센서 | 모터 프로토콜 | 안전/빌드 메모 | 링크 |
 |---|---|---|---|---|---|
 | 현행·**주력** | ESP32-S3 | 듀얼 ICM42670 + BMM350 + 3901-L0X | PWM | 75필드 텔레메트리·RC 감시·자동착륙 상태기계 포함. BMM350 yaw 융합은 기본 OFF, 3901-L0X는 기록 전용. 실비행 기록과 자동착륙 한계는 아래 근거 참조 | [`dual_imu_cascade_pwm`](../firmware/flight/dual_imu_cascade_pwm/) |
+| 실험 | ESP32-S3 | 듀얼 ICM42670 + BMM350 + 3901-L0X | PWM | 주력 복사본 + 광류 보정·위치 유지·고도 유지. 91필드 텔레메트리. 호스트·SIL 검증, 위치 유지는 테더 비행 5회(2026-10-30, [기록](superpowers/plans/2026-10-29-flow-position-hold.md)), 고도 유지는 비행 미확인. 공유 헤더는 주력과 동일 강제 | [`dual_imu_cascade_flow_hold`](../firmware/flight/dual_imu_cascade_flow_hold/) |
 | **보류** | ESP32-S3 | 듀얼 ICM42670 | PWM | flix 기반 쿼터니언 후보. 컴파일 대상이지만 실기 검증 미완료. 22필드, `rcr`·`gains`·자동착륙 미지원, 게인 단위·yaw 부호 차이 → README 참조 | [`dual_imu_flix_quat_pwm`](../firmware/flight/dual_imu_flix_quat_pwm/) |
 | 현행 | ESP32-S3 | 없음 | PWM | ESP32Servo 50Hz. **부팅 7초 후 네 모터 자동 램프(최대 1300µs), 시리얼 정지 명령 없음** | [`motor_pwm_bench`](../firmware/diagnostics/motor_pwm_bench/) |
 | 현행 | ESP32-S3 | 없음 | PWM | 수동 단일 모터 식별, 상한 1250µs, 자동 시작 없음. 벤치 Stage A. **비행 펌웨어와 같은 LEDC 400Hz** 사용. 이 기체에서 기록된 ESP32Servo 채널 묶임 문제를 피하는 경로 | [`motor_id_single`](../firmware/diagnostics/motor_id_single/) |
 | 현행 | ESP32-S3 | 없음 | PWM | ESC 설정용 LEDC 50Hz, 기본 GPIO7. **전류 제한 전원·ESC/모터 하나만 연결. `h`는 최대 2000µs를 계속 출력** | [`esc_config_throttle`](../firmware/diagnostics/esc_config_throttle/) |
 | 현행 | ESP32-S3 | ICM42670 1개 | 없음 | raw SPI 읽기. 별도 18/19/23/5 핀 배치 사용 | [`icm42670_single_raw`](../firmware/diagnostics/icm42670_single_raw/) |
 | 현행 | ESP32-S3 | 듀얼 ICM42670 | 없음 | 듀얼 IMU raw SPI 읽기 | [`icm42670_dual_raw`](../firmware/diagnostics/icm42670_dual_raw/) |
-| 현행 | ESP32-S3 | 듀얼 ICM42670 | PWM 최저값 고정 | 구형 추정기 루프 진단. PID·믹서 없음, 전 모터 1000µs. 별도 14필드이며 `receive_dual_imu_debug.py`와 사용 | [`icm42670_dual_loop_debug`](../firmware/diagnostics/icm42670_dual_loop_debug/) |
+| 현행 | ESP32-S3 | 듀얼 ICM42670 | PWM 최저값 고정 | 구형 추정기 루프 진단. PID·믹서 없음, 전 모터 1000µs. 별도 14필드이며 `scripts/archive/receive_dual_imu_debug.py`와 사용 | [`icm42670_dual_loop_debug`](../firmware/diagnostics/icm42670_dual_loop_debug/) |
 | 현행 | ESP32-S3 | 듀얼 ICM42670 | 없음 | PCB v1.5.2 센서 브링업 진단 | [`board_v1_5_2_dual_imu`](../firmware/diagnostics/board_v1_5_2_dual_imu/) |
+| 현행 | ESP32-S3 | 3901-L0X | 없음 | UART 수신 확인. raw 바이트·MSPv2 거리/광류·CRC 요약. RX=GPIO17, 로그는 ESP 자체 USB | [`matek_3901_l0x_raw`](../firmware/diagnostics/matek_3901_l0x_raw/) |
+| 실험 | ESP32 (ESP32-CAM, AI-Thinker 핀맵) | 카메라 OV3660 | 없음 | HTTP MJPEG :81, 상태 :80, 고정 IP 192.168.4.200. 비행 링크 UDP 포트 미사용. CI는 esp32cam FQBN으로 별도 컴파일. USB 전원 벤치 스트림 확인(2026-11-02), BEC·링크 비교 미시험 | [`esp32cam_stream`](../firmware/camera/esp32cam_stream/) |
 | 보관 | ESP32-S3 | ICM42670 1개 | PWM | 대체된 단일 IMU PID. 미지원 | [`single_imu_pid_pwm`](../firmware/archive/legacy_flight/single_imu_pid_pwm/) |
 | 보관 | ESP32-S3 | 듀얼 ICM42670 | PWM | 대체된 듀얼 IMU PID. 단순 평균·시작 시 bias 보정이며 과거 계획의 개별 IMU 폴백·런타임 bias 갱신은 없음. 미지원 | [`dual_imu_pid_pwm`](../firmware/archive/legacy_flight/dual_imu_pid_pwm/) |
 | 보관 | ESP32-S3 | ICM42670 1개 | PWM | 대체된 캐스케이드 실험. 미지원 | [`single_imu_cascade_pwm`](../firmware/archive/legacy_flight/single_imu_cascade_pwm/) |

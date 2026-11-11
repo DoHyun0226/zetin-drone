@@ -20,7 +20,7 @@
 백스톱 때 공중일 가능성도 이 시간만으로 배제할 수 없다. 정확한 분기·상수는
 [UDP 프로토콜](udp_protocol.md#지상국--드론)이 정본이다.
 
-| 상황 | `control_dualsense.py`의 동작 | 드론 상태 확인 |
+| 상황 | `drone_control.py`의 동작 | 드론 상태 확인 |
 |---|---|---|
 | 게임패드 분리·텔레메트리 1.5초 미수신·`Fault_RC` 상승 엣지 | RC 송신만 중단. `stop`·`th 1000` 미전송 | 수신이 있으면 `Armed`와 `Failsafe_Phase`를 함께 확인 |
 | X·stdin `stop`·Ctrl+C | 수동 `stop` 경로. X와 Ctrl+C는 로컬 무장 추정 또는 무장 확인 대기(`ARMING`)일 때 `stop` | 전송 자체는 컷 완료 ACK가 아님 |
@@ -86,7 +86,7 @@ BT airtime 경합이 관측 방향과 맞지만, 수백 ms 정체까지 증폭�
 
 ### 구간별 RC 레이트
 
-현행 `control_dualsense.py` 송신 목표는 **20Hz**(`CTRL_LOOP_HZ=20`)다.
+현행 `drone_control.py` 송신 목표는 **20Hz**(`CTRL_LOOP_HZ=20`)다.
 정상 구간에서는 수신 증가율이 이에 가까워야 하지만 평균 20Hz만으로 500ms
 공백이 없었다고 판단할 수 없다. 카운터는 `start` 때 리셋되지 않으므로
 무장 구간의 마지막 값에서 첫 값을 뺀 증분을 시간으로 나눈다. 재부팅·uint32

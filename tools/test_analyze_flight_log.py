@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ANALYZER = REPO_ROOT / "scripts" / "analyze_flight_log.py"
+DRONE_LOGS = REPO_ROOT / "scripts" / "drone_logs.py"
 
 
 class AnalyzeFlightLogAllocationTest(unittest.TestCase):
@@ -22,7 +22,7 @@ class AnalyzeFlightLogAllocationTest(unittest.TestCase):
             env = os.environ.copy()
             env["MPLBACKEND"] = "Agg"
             return subprocess.run(
-                [sys.executable, str(ANALYZER), str(csv_path), "--no-plot"],
+                [sys.executable, str(DRONE_LOGS), "flight", str(csv_path), "--no-plot"],
                 capture_output=True,
                 text=True,
                 env=env,

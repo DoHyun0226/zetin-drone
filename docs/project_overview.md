@@ -63,14 +63,14 @@ yaw 각속도까지 정착하면 회전이 멈춘 heading을 자동으로 잠그
 않으면 강제 잠금 없이 rate 모드에 남는다. BMM350 자기계 융합(`mag 1`)을 켜면
 자이로 적분 드리프트를 보정한다. 정확도는 자기계 보정·간섭·장착 조건에
 영향받는다. **펌웨어 기본값은 OFF, 지상국의 조종자 선택 기본값은 ON**이다.
-`control_dualsense.py`는 시동 직전 선택값을 전송하며 `--no-mag`나
+`drone_control.py`는 시동 직전 선택값을 전송하며 `--no-mag`나
 `mag off`로 끈 선택을 유지한다. 실제 적용 상태는 `Mag_Enabled`로 확인한다. hard/soft-iron 보정은 Li & Griffiths 제약 타원체 피팅으로 구하고
-(`scripts/magcal_fit.py`), 모터 전류 간섭은 hard/soft-iron·body 변환 후 XYZ의 throttle 보정으로
+(`scripts/drone_logs.py magcal`), 모터 전류 간섭은 hard/soft-iron·body 변환 후 XYZ의 throttle 보정으로
 상쇄한다([`bmm350_yaw_bench_test.md`](bmm350_yaw_bench_test.md)). PID 태스크가
 SPI 행업 등으로 정지하면 태스크 워치독(500ms)이 재부팅을 강제해 마지막
 PWM으로 모터가 고정되는 것을 막는다.
 
-Matek 3901-L0X(PMW3901 광류 + VL53L0X ToF)는 GPIO16으로 INAV MSPv2 프레임을
+Matek 3901-L0X(PMW3901 광류 + VL53L0X ToF)는 GPIO17로 INAV MSPv2 프레임을
 받아 텔레메트리 60~64번으로 내보내기만 한다. **아직 어떤 제어 판정에도 쓰지
 않는다.** 거리 원값은 작동 범위(80~2000mm) 밖이면 음수이고 너무 가까울 때와
 너무 멀 때가 같은 음수이므로, 신선도는 반드시 `*_Quality`의 −1로 판단한다.
@@ -94,7 +94,7 @@ SPI: SCK=12, MISO=13, MOSI=11
 IMU1 CS=10, IMU2 CS=9
 Motor PWM: M1=4 (FL), M2=5 (RR), M3=6 (FR), M4=7 (RL)
 BMM350: I2C 주소 0x14
-3901-L0X: 모듈 TX → GPIO16 (수신 전용, 3.3V 직결). 전원은 반드시 5V
+3901-L0X: 모듈 TX → GPIO17 (PCB 소나 커넥터 ESP RX=17·TX=18 중 RX만, 3.3V 직결). 전원은 반드시 5V
 ```
 
 단일 IMU raw 진단만 별도 배치(SCK/MISO/MOSI/CS = 18/19/23/5)를 쓴다.
@@ -134,16 +134,17 @@ M4 = T + P + R + Y
 
 | 도구 | 역할 |
 |---|---|
-| [`control_dualsense.py`](../scripts/control_dualsense.py) | **정상 조종·벤치의 유일한 대화형 지상국.** RC 스트리밍·stdin 명령·상태 표시·CSV·raw 기록을 한 프로세스에서 처리 |
-| [`tune_pid.py`](../scripts/tune_pid.py) | 게임패드 없이 UDP 명령·게인만 다루는 보조 도구 |
-| [`receive_telemetry.py`](../scripts/receive_telemetry.py) | 터미널 수신기 겸 CSV 로거 |
-| [`monitor_telemetry.py`](../scripts/monitor_telemetry.py) | 실시간 플롯 겸 CSV 로거 |
-| [`analyze_flight_log.py`](../scripts/analyze_flight_log.py) | 20Hz CSV 오프라인 분석 |
-| [`analyze_probe_response.py`](../scripts/analyze_probe_response.py) | 자동착륙 프로브 판정·응답 분포 분석 |
-| [`decode_imu_raw.py`](../scripts/decode_imu_raw.py) | `ZIMU`/`ZCAL` 바이너리 → CSV 디코더 |
-| [`magcal_fit.py`](../scripts/magcal_fit.py) | 캡처 CSV → 제약 타원체 hard/soft-iron 상수 피팅 |
-| [`receive_dual_imu_debug.py`](../scripts/receive_dual_imu_debug.py) | 듀얼 IMU 루프 진단 수신기 |
-| [`bench_sign_test.py`](../scripts/bench_sign_test.py) · [`bench_yaw_test.py`](../scripts/bench_yaw_test.py) · [`bench_thrust_ramp.py`](../scripts/bench_thrust_ramp.py) | 전원 인가 벤치 절차용 스크립트. 시작 시 `trim 0 0`을 보내 드론 트림을 지운다 |
+| [`ground/control_station.py`](../scripts/ground/control_station.py) | **정상 조종·벤치의 유일한 대화형 지상국.** RC 스트리밍·stdin 명령·상태 표시·CSV·raw 기록을 한 프로세스에서 처리 |
+| [`drone_control.py --keyboard`](../scripts/drone_control.py) | 게임패드 없이 명령·게인만 다루는 설정·읽기용 콘솔. `start`·`resume` 거부, 로그 파일 없음 |
+| [`drone_control.py --listen`](../scripts/drone_control.py) | 수신 전용 표시 겸 CSV·raw 로거. `connect` 외에는 보내지 않음 |
+| [`drone_control.py --listen --plot`](../scripts/ground/monitor_plot.py) | 실시간 플롯 겸 CSV 로거. `connect` 외에는 보내지 않음 |
+| [`drone_control.py --pad-check`](../scripts/ground/pad_check.py) | 게임패드 축·버튼·햇 진단. 드론에 아무것도 보내지 않음 |
+| [`drone_logs.py flight`](../scripts/ground/flight_log.py) | 20Hz CSV 오프라인 분석 |
+| [`drone_logs.py probe`](../scripts/ground/probe_response.py) | 자동착륙 프로브 판정·응답 분포 분석 |
+| [`drone_logs.py imuraw`](../scripts/ground/imu_raw.py) | `ZIMU`/`ZCAL` 바이너리 → CSV 디코더 |
+| [`drone_logs.py magcal`](../scripts/ground/magcal.py) | 캡처 CSV → 제약 타원체 hard/soft-iron 상수 피팅 |
+| [`receive_dual_imu_debug.py`](../scripts/archive/receive_dual_imu_debug.py) | 듀얼 IMU 루프 진단 수신기 |
+| [`bench_sign_test.py`](../scripts/archive/bench_sign_test.py) · [`bench_yaw_test.py`](../scripts/archive/bench_yaw_test.py) · [`bench_thrust_ramp.py`](../scripts/archive/bench_thrust_ramp.py) | 전원 인가 벤치 절차용 스크립트. 시작 시 `trim 0 0`을 보내 드론 트림을 지운다 |
 
 ⚠️ 위 도구 중 둘 이상을 **동시에 실행하면 안 된다.** 펌웨어는 들어온 모든 UDP
 패킷의 발신자로 텔레메트리 목적지를 다시 지정하므로, 보조 도구가 명령을 보내는

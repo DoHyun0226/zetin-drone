@@ -2087,7 +2087,7 @@ int main() {
     CHECK(arduino_fake::serial_output.find(
               "Z=14.000000 uT") != std::string::npos);
     CHECK(arduino_fake::serial_output.find(
-              "scripts/magcal_fit.py") != std::string::npos);
+              "scripts/drone_logs.py magcal") != std::string::npos);
     CHECK(arduino_fake::serial_output.find(
               "MAG_HARD_IRON_OFFSET_") == std::string::npos);
   });

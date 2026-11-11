@@ -10,7 +10,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from magcal_fit import (  # noqa: E402
+from ground.magcal import (  # noqa: E402
     CoverageError,
     FitError,
     apply_calibration,

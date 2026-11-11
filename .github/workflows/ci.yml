@@ -28,7 +28,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-multilib g++-multilib
       - name: Byte-compile PC tools
-        run: python -m py_compile scripts/*.py
+        run: python -m compileall -q scripts
       - name: Repository layout checks
         run: python tools/check_repo_layout.py
       # skip 은 실패가 아니다. 그래서 툴체인이 빠지면 네이티브 시험이 통째로
@@ -83,3 +83,11 @@ jobs:
               "$sketch"
             echo "::endgroup::"
           done
+      # 카메라 보드는 ESP32(클래식)라 위 esp32s3 루프와 FQBN 이 다르다.
+      # esp32cam 기본값은 Huge APP 파티션 + PSRAM 사용이다.
+      - name: Compile camera sketch
+        run: |
+          arduino-cli compile --warnings all \
+            --fqbn esp32:esp32:esp32cam \
+            --build-path /tmp/zetin-esp32cam_stream \
+            firmware/camera/esp32cam_stream/
