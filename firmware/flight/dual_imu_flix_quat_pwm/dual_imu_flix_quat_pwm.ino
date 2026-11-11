@@ -752,7 +752,7 @@ static void handleGainCommand(const char *buf) {
   else if (strncmp(buf, "yi", 2) == 0) Ki_Rate_Yaw = value;
   else if (strncmp(buf, "yd", 2) == 0) Kd_Rate_Yaw = value;
 
-  // scripts/tune_pid.py 명령 호환: P/I/D는 inner rate PID에 대응
+  // scripts/drone_control.py --keyboard 명령 호환: P/I/D는 inner rate PID에 대응
   else if (strncmp(buf, "pa", 2) == 0) { Kp_Rate_Roll = value; Kp_Rate_Pitch = value; }
   else if (strncmp(buf, "ia", 2) == 0) { Ki_Rate_Roll = value; Ki_Rate_Pitch = value; }
   else if (strncmp(buf, "da", 2) == 0) { Kd_Rate_Roll = value; Kd_Rate_Pitch = value; }

@@ -204,8 +204,8 @@ const int SPI_CS1 = 10;  // IMU1
 const int SPI_CS2 = 9;   // IMU2
 // Matek 3901-L0X (광류+라이다). 모듈 TX -> 이 핀, 3.3V 로직이라 직결한다.
 // 모듈 RX 는 연결하지 않는다 — 우리는 보낼 것이 없고 수신 전용이다.
-// 19/20 은 USB D-/D+ 라 피했고 스트래핑 핀도 피했다.
-const int MSP_SENSOR_RX_PIN = 16;
+// PCB v1.5.2 의 소나 커넥터 UART(ESP RX=17, TX=18) 중 RX 만 쓴다.
+const int MSP_SENSOR_RX_PIN = 17;
 const uint32_t MSP_SENSOR_BAUD = 115200;
 // 이보다 오래 프레임이 없으면 quality 를 -1 로 보고한다. 얼어붙은 센서가
 // 마지막 값으로 유효해 보이면 안 된다(MAG_STALE_MS 와 같은 이유).
@@ -240,7 +240,7 @@ const float K_MAG = 0.001f;
 const uint32_t MAG_SAMPLE_PERIOD_MS = 20;    // BMM350 read = 50Hz, core 0 only
 const uint32_t MAG_STALE_MS = 100;
 
-// scripts/magcal_fit.py 출력값을 아래 두 상수에 붙여 넣는다.
+// scripts/drone_logs.py magcal 출력값을 아래 두 상수에 붙여 넣는다.
 // 2026-08-04 캘리브 (log flight_log_2026-08-04_023840.csv, 1255샘플 중 inlier
 // 1119, 커버리지비 2.08). 이전 min/max offset은 여기서 6.79µT 벗어나 있었고
 // 그것은 수평성분 32.2µT 대비 최대 ±12.2° heading 오차였다.
@@ -739,7 +739,7 @@ volatile bool     imu1_frozen_now = false;
 volatile bool     imu2_frozen_now = false;
 volatile bool     imu_disagree_now = false;
 
-// scripts/control_dualsense.py 프로토콜 호환용
+// scripts/drone_control.py 프로토콜 호환용
 volatile uint32_t lastRcSeq       = 0;
 volatile bool     rcSeqValid      = false;
 volatile uint32_t rcTotalPkts     = 0;
@@ -993,7 +993,7 @@ static void stopMagCalibration() {
                 magCalMax[1] - magCalMin[1],
                 magCalMax[2] - magCalMin[2]);
   Serial.println(
-      "[MAGCAL] save the telemetry CSV and run scripts/magcal_fit.py <flight_log.csv>");
+      "[MAGCAL] save the telemetry CSV and run scripts/drone_logs.py magcal <flight_log.csv>");
 }
 
 static inline void applyMagCalibration(
@@ -1876,7 +1876,7 @@ static void handleGainCommand(const char *buf) {
   else if (strncmp(buf, "yi", 2) == 0) Ki_Rate_Yaw = value;
   else if (strncmp(buf, "yd", 2) == 0) Kd_Rate_Yaw = value;
 
-  // scripts/tune_pid.py 명령 호환: P/I/D는 inner rate PID에 대응
+  // scripts/drone_control.py --keyboard 명령 호환: P/I/D는 inner rate PID에 대응
   else if (strncmp(buf, "pa", 2) == 0) { Kp_Rate_Roll = value; Kp_Rate_Pitch = value; }
   else if (strncmp(buf, "ia", 2) == 0) { Ki_Rate_Roll = value; Ki_Rate_Pitch = value; }
   else if (strncmp(buf, "da", 2) == 0) { Kd_Rate_Roll = value; Kd_Rate_Pitch = value; }

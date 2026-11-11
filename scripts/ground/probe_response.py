@@ -9,12 +9,11 @@ import statistics
 from dataclasses import dataclass
 from pathlib import Path
 
-from failsafe_telemetry import format_failsafe_phase
-from telemetry_schema import CSV_FIELDS
+from ground.failsafe_telemetry import format_failsafe_phase
+from ground.paths import REPO_ROOT
+from ground.telemetry_schema import CSV_FIELDS
 
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
 FIRMWARE_PATH = (
     REPO_ROOT
     / "firmware"

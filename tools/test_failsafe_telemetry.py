@@ -11,11 +11,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from scripts import failsafe_telemetry
+from scripts.ground import failsafe_telemetry
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ANALYZE_SCRIPT = REPO_ROOT / "scripts" / "analyze_flight_log.py"
+ANALYZE_SCRIPT = REPO_ROOT / "scripts" / "drone_logs.py"
 
 TELEMETRY_FIELDS = (
     "Roll",
@@ -75,7 +75,7 @@ class AnalyzeFailsafeTelemetryTests(unittest.TestCase):
             env = os.environ.copy()
             env["MPLBACKEND"] = "Agg"
             return subprocess.run(
-                [sys.executable, str(ANALYZE_SCRIPT), str(log_path)],
+                [sys.executable, str(ANALYZE_SCRIPT), "flight", str(log_path)],
                 cwd=REPO_ROOT,
                 env=env,
                 capture_output=True,

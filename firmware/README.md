@@ -12,6 +12,16 @@ yaw 융합에, 3901-L0X 거리·광류 센서는 기록에 사용한다. 전체 
   주력 비행 제어 경로. 실비행 기록은 있지만 반복 가능한 안정 비행과
   자동착륙의 실기 검증 완료를 뜻하지 않는다. 운용은
   [전원 인가·벤치 절차](../docs/power_on_bench_procedure.md)를 따른다.
+- [`flight/dual_imu_cascade_flow_hold/`](flight/dual_imu_cascade_flow_hold/):
+  주력 스케치의 복사본에 3901-L0X 광류 보정(`flowcal`), 광류 위치 유지(`poshold`),
+  거리계 고도 유지(`althold`)를 더한 **실험 후보**다. 2026-10-30 테더 비행에서 위치
+  유지가 제동 방향으로 동작함을 확인했다(튜닝 진행 중). 공유 헤더 6개는 주력과 바이트
+  동일해야 한다 (`tools/test_flow_hold_sketch.py`). 미보정이면 `poshold` 를 거부한다.
+  주력과 달리 **부팅 때 IMU 정지 보정을 하지 않고 저장값**(NVS, 없으면 컴파일 값)을
+  쓴다. 다시 재려면 바닥에 가만히 둔 채 지상국에서 `imucal` 을 보낸다(2 s, NVS 저장).
+  텔레메트리는
+  주력 75필드 뒤에 16필드를 더 보낸다. 설계와 벤치 순서는
+  [계획](../docs/superpowers/plans/2026-10-29-flow-position-hold.md).
 - [`flight/dual_imu_flix_quat_pwm/`](flight/dual_imu_flix_quat_pwm/):
   [flix](https://github.com/okalachev/flix) 아키텍처 기반 쿼터니언 자세
   추정·SI 단위 캐스케이드 제어 **보류 후보**다. 빌드 매트릭스에는 포함되지만
@@ -46,12 +56,26 @@ GPIO 12/13/11, IMU1/IMU2 CS = GPIO 10/9.
 - [`diagnostics/icm42670_dual_loop_debug/`](diagnostics/icm42670_dual_loop_debug/):
   구형 듀얼 IMU 추정기의 루프 주기·필터 진단. **PID·믹서 없이 모터는
   1000µs에 고정**된다. 별도 14필드 UDP 형식이므로
-  [`receive_dual_imu_debug.py`](../scripts/receive_dual_imu_debug.py)와 짝지어
+  [`receive_dual_imu_debug.py`](../scripts/archive/receive_dual_imu_debug.py)와 짝지어
   사용한다. 모터 = GPIO 4/5/6/7, SPI = GPIO 12/13/11, CS = GPIO 10/9.
 - [`diagnostics/board_v1_5_2_dual_imu/`](diagnostics/board_v1_5_2_dual_imu/):
   PCB v1.5.2 듀얼 ICM42670의 자이로 Z·가속도 Z 비교 출력.
   SPI SCK/MISO/MOSI = GPIO 12/13/11,
   CS = GPIO 10/9.
+- [`diagnostics/matek_3901_l0x_raw/`](diagnostics/matek_3901_l0x_raw/):
+  3901-L0X 수신 확인. 받은 바이트를 16진수로 찍고 MSPv2 거리·광류 프레임을
+  같은 줄에 풀며, 1초마다 바이트 수·정상/CRC 오류·프레임 밖 바이트를
+  요약한다. 모듈 TX → GPIO17(PCB v1.5.2 소나 커넥터의 ESP RX), 모듈 RX 미연결, 전원 5V.
+  로그는 `USB CDC On Boot` 설정과 상관없이 ESP 자체 USB로 나간다. 모터·IMU를
+  건드리지 않는다. 업로드 후 모니터는 DTR/RTS를 꺼서 연다
+  (`arduino-cli monitor -p /dev/ttyACM0 -c baudrate=115200,dtr=off,rts=off`).
+
+## 카메라 보드
+
+[`camera/esp32cam_stream/`](camera/esp32cam_stream/)은 기체에 다는 ESP32-CAM
+보드용 **실험** 스케치다. 비행 ESP32의 SoftAP에 고정 IP로 붙어 노트북에 MJPEG를
+내보내고, 비행 펌웨어와는 따로 빌드·업로드한다. 보드 설정과 업로드 방법은
+[카메라 안내](camera/README.md)를 본다.
 
 ## 빌드
 

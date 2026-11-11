@@ -34,14 +34,14 @@
 | `firmware/include` | `firmware/archive/platformio_skeleton/include` | 보관 |
 | `firmware/platformio_config/platformio.ini` | `firmware/archive/platformio_skeleton/platformio.ini` | 보관 |
 | `test/README` | `firmware/archive/platformio_skeleton/test/README` | 보관 |
-| `scripts/Drone_Control_Dualsense.py` | `scripts/control_dualsense.py` | 현행 |
-| `scripts/Drone_Tuning.py` | `scripts/tune_pid.py` | 현행 |
-| `scripts/Drone_Reciever.py` | `scripts/receive_telemetry.py` | 현행 |
-| `scripts/Drone_Monitor.py` | `scripts/monitor_telemetry.py` | 현행 |
-| `scripts/Drone_Analasys.py` | `scripts/analyze_flight_log.py` | 현행 |
-| `scripts/drone_telemetry.py` | `scripts/telemetry_schema.py` | 현행 |
-| `scripts/dual_imu_pid_debug_receiver.py` | `scripts/receive_dual_imu_debug.py` | 현행 |
-| `scripts/Controller_test.py` | `scripts/test_dualsense_input.py` | 현행 |
+| `scripts/Drone_Control_Dualsense.py` | `scripts/ground/control_station.py` | 현행 |
+| `scripts/Drone_Tuning.py` | `scripts/drone_control.py` | 현행 |
+| `scripts/Drone_Reciever.py` | `scripts/drone_control.py` | 현행 |
+| `scripts/Drone_Monitor.py` | `scripts/drone_control.py` | 현행 |
+| `scripts/Drone_Analasys.py` | `scripts/ground/flight_log.py` | 현행 |
+| `scripts/drone_telemetry.py` | `scripts/ground/telemetry_schema.py` | 현행 |
+| `scripts/dual_imu_pid_debug_receiver.py` | `scripts/archive/receive_dual_imu_debug.py` | 보관 |
+| `scripts/Controller_test.py` | `scripts/drone_control.py` | 현행 |
 | `scripts/GPS_Reciever.py` | `scripts/archive/receive_gps_udp_legacy.py` | 보관 |
 | `test/tcp_test.py` | `scripts/archive/test_tcp_legacy.py` | 보관 |
 | `docs/ONBOARDING.md` | `docs/project_overview.md` | 현행 |
@@ -50,6 +50,34 @@
 | `docs/presentation.c` | `docs/archive/pid_dshot_presentation_snippet.c` | 보관 |
 | `docs/commit_message.txt` | `docs/archive/commit_message_snapshot.txt` | 보관 |
 | `test/README.md` | `scripts/archive/README.md` | 보관 메모로 통합 |
+
+## 지상국 스크립트 정리 (세 도구로 통합)
+
+`scripts/` 최상위에는 `drone_control.py`·`drone_video.py`·`drone_logs.py`만 남고,
+라이브러리 코드는 `scripts/ground/`로, 벤치·특수 펌웨어용 스크립트는 `scripts/archive/`로 옮겼다.
+
+| 이전 경로 | 새 경로 | 수명주기 |
+|---|---|---|
+| `scripts/control_dualsense.py` | `scripts/ground/control_station.py` | 현행 (진입점 `scripts/drone_control.py`) |
+| `scripts/tune_pid.py` | `scripts/drone_control.py` | 현행 (`--keyboard`) |
+| `scripts/receive_telemetry.py` | `scripts/drone_control.py` | 현행 (`--listen`) |
+| `scripts/monitor_telemetry.py` | `scripts/drone_control.py` | 현행 (`--listen --plot`) |
+| `scripts/gamepad_probe.py` | `scripts/ground/pad_check.py` | 현행 (`drone_control.py --pad-check --live`) |
+| `scripts/test_dualsense_input.py` | `scripts/ground/pad_check.py` | 현행 (`drone_control.py --pad-check`) |
+| `scripts/record_camera.py` | `scripts/ground/camera_record.py` | 현행 (`drone_video.py`) |
+| `scripts/camera_to_mp4.py` | `scripts/ground/camera_mp4.py` | 현행 (`drone_video.py mp4`) |
+| `scripts/analyze_flight_log.py` | `scripts/ground/flight_log.py` | 현행 (`drone_logs.py flight`) |
+| `scripts/decode_imu_raw.py` | `scripts/ground/imu_raw.py` | 현행 (`drone_logs.py imuraw`) |
+| `scripts/analyze_probe_response.py` | `scripts/ground/probe_response.py` | 현행 (`drone_logs.py probe`) |
+| `scripts/magcal_fit.py` | `scripts/ground/magcal.py` | 현행 (`drone_logs.py magcal`) |
+| `scripts/telemetry_schema.py` | `scripts/ground/telemetry_schema.py` | 현행 |
+| `scripts/failsafe_telemetry.py` | `scripts/ground/failsafe_telemetry.py` | 현행 |
+| `scripts/camera_stream.py` | `scripts/ground/camera_stream.py` | 현행 |
+| `scripts/bench_sign_test.py` | `scripts/archive/bench_sign_test.py` | 보관 |
+| `scripts/bench_yaw_test.py` | `scripts/archive/bench_yaw_test.py` | 보관 |
+| `scripts/bench_thrust_ramp.py` | `scripts/archive/bench_thrust_ramp.py` | 보관 |
+| `scripts/motor_serial.py` | `scripts/archive/motor_serial.py` | 보관 |
+| `scripts/receive_dual_imu_debug.py` | `scripts/archive/receive_dual_imu_debug.py` | 보관 |
 
 머신 로컬 파일인 `.gemini/settings.json`, `.vscode/extensions.json`,
 `.vscode/settings.json`은 버전 관리에서 제거됐다. 이 디렉터리들은 `.codex/`,

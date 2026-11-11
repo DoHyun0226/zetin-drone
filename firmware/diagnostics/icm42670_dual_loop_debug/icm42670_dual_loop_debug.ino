@@ -7,7 +7,7 @@
 //
 // Safety: ESCs are held at 1000us (idle) for the whole run.
 // No PID, no motor mixing, no start/stop command.
-// Pair with scripts/receive_dual_imu_debug.py
+// Pair with scripts/archive/receive_dual_imu_debug.py
 // ==========================================================
 
 #include <Arduino.h>

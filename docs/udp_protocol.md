@@ -16,7 +16,7 @@
 펌웨어는 SSID `Drone_Tuning`으로 SoftAP를 운영한다. 주소와 포트는
 [`dual_imu_cascade_pwm.ino`](../firmware/flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)에
 정의돼 있다.
-RC 송신 목표는 `control_dualsense.py`의 20Hz, ASCII 텔레메트리는 약 20Hz,
+RC 송신 목표는 `drone_control.py`의 20Hz, ASCII 텔레메트리는 약 20Hz,
 raw IMU 생산은 명목 1kHz다. 서로 다른 주기이므로 혼동하지 않는다.
 텔레메트리 수신과 `connect` 응답 목적지 등록은 시동·RC 수락 ACK가 아니다.
 펌웨어는 마지막 UDP 발신자의 IP/포트 하나로 회신하므로 제어·수신 도구를
@@ -33,7 +33,7 @@ RC 두절 시 자동착륙 없이 즉시 컷하며 **주력 지상국으로 조�
 ## 지상국 → 드론
 
 명령은 UTF-8/ASCII 텍스트 데이터그램이다. 인자는 공백으로 구분한다.
-다음은 와이어 명령이며 `control_dualsense.py` stdin에서는 `mag on/off`,
+다음은 와이어 명령이며 `drone_control.py` stdin에서는 `mag on/off`,
 `raw on/off`를 각각 `mag 1/0`, `raw 1/0`으로 바꿔 보낸다. 그 콘솔의
 `start`·`stop`·`resume`·`th`는 로컬 상태도 갱신하는 전용 경로다.
 일반 명령에는 UDP ACK가 없고, `gains`만 별도 응답을 보낸다. 시리얼의
@@ -160,7 +160,7 @@ ar|at|ay <value>      # roll / pitch / yaw
   걸리면 `Phase=4`(중단컷)로 끝난다.
 - `rcr`은 패킷 시퀀스와 목표 roll·pitch 각도, yaw 각속도(dps)를 담는 현행
   조종 명령이다. roll·pitch 목표는 ±30°, yaw 각속도는 펌웨어에서 ±180dps로
-  제한된다. `control_dualsense.py`는 이 펌웨어 한도와 별개인
+  제한된다. `drone_control.py`는 이 펌웨어 한도와 별개인
   `YAW_RATE_MAX_DPS = 90.0`으로 최대 스틱 명령을 ±90dps로 제한한다.
   시퀀스·드롭 계수·RC 워치독 상태는 `rc`와 공유한다.
 - `rc`는 기존 벤치 도구 호환을 위해 그대로 유지되는 roll·pitch·yaw **각도**
@@ -191,7 +191,7 @@ ar|at|ay <value>      # roll / pitch / yaw
   않는다(상대 heading 유지 전용, 자북·편각·항법 아님). 보정은 250Hz 바깥
   루프에서 시정수 약 4초로 천천히 끌어당긴다. `mag 1`은 `magcal` 진행 중과
   무장 상태의 최초 센서 초기화가 필요한 경우 거부된다. `mag 0`은 수락된다.
-  `control_dualsense.py` stdin에서는 `mag on`/`mag off`로 선택하며, 다음
+  `drone_control.py` stdin에서는 `mag on`/`mag off`로 선택하며, 다음
   `start` 직전에 선택값을 `mag 1`/`mag 0`으로 다시 전송한다. 지상국 선택
   기본은 ON이므로 펌웨어 부팅 기본 OFF와 구분한다.
 - `magcal 1`은 hard/soft-iron 캘리브레이션용 raw 캡처를 시작한다(시동
@@ -199,7 +199,7 @@ ar|at|ay <value>      # roll / pitch / yaw
   BMM350 raw `Mag_X/Y/Z`를 같은 스냅샷으로 보내므로 지상국 CSV에 회전 전체가
   남는다. 모든 방향으로 회전한 뒤
   `magcal 0`을 보내면 시리얼에는 샘플 수와 축별 span만 출력된다. CSV에
-  `scripts/magcal_fit.py`를 실행해 Li & Griffiths 제약 타원체 + MAD 클리핑으로
+  `scripts/drone_logs.py magcal`을 실행해 Li & Griffiths 제약 타원체 + MAD 클리핑으로
   `MAG_HARD_IRON`/`MAG_SOFT_IRON`과 재환산 `mag_comp`를 얻는다. 전체 절차와
   통과 기준은
   [`bmm350_yaw_bench_test.md`](bmm350_yaw_bench_test.md)를 따른다.
@@ -213,7 +213,7 @@ ar|at|ay <value>      # roll / pitch / yaw
   2026-08-04 보정 후 모터 간섭 재검증 기록과 그 수치의 재분석 범위는
   [`bmm350_yaw_bench_test.md`](bmm350_yaw_bench_test.md)에 남겼다.
   `magc 0 0 0`은 보정을 끄며, 하강 중 계수 변경은 거부한다.
-  `magcal_fit.py`의 `--mag-comp`는 입력 벡터에 새 행렬을 곱할 뿐 기존 행렬을 역변환하지
+  `drone_logs.py magcal`의 `--mag-comp`는 입력 벡터에 새 행렬을 곱할 뿐 기존 행렬을 역변환하지
   않는다. 이미 보정된 현행 계수를 그대로 넣어 이중 변환하지 말고, 입력의
   좌표계를 확인한 뒤 새 보정 기준에서 모터 간섭을 다시 측정한다.
 - `raw 1`은 1kHz 제어 루프에서 읽은 두 IMU의 int16 레지스터 원값을
@@ -222,15 +222,15 @@ ar|at|ay <value>      # roll / pitch / yaw
   연결 전에는 링을 채우거나 `dropped`를 올리지 않는다. 따라서 `dropped`는
   실제 스트리밍 중 소비자가 생산자를 따라가지 못한 경우만 뜻한다. 부호,
   bias/scale, 소프트웨어 LPF, body-frame 변환은 이 스트림에 적용하지 않는다.
-  `control_dualsense.py` stdin에서는 각각 `raw on`, `raw off`로 보낸다.
+  `drone_control.py` stdin에서는 각각 `raw on`, `raw off`로 보낸다.
 - `gains`는 현재 cascade PID 게인 12개를 `GAINS,<...>` 데이터그램 한 개로
   요청을 보낸 지상국에 응답한다. 값은 소수점 아래 4자리로 전송한다.
 - 게인 값은 0~100 범위의 유한한 수만 수락하며, 범위를 벗어나거나 파싱에
   실패한 명령은 무시된다. 자동착륙 하강 중에는 유효한 값도 변경하지 않는다.
 
 수신된 데이터그램은 그 출발지 주소를 텔레메트리 목적지로도 등록한다.
-[`receive_telemetry.py`](../scripts/receive_telemetry.py)와
-[`monitor_telemetry.py`](../scripts/monitor_telemetry.py)는 이를 위해 주기적으로
+[`drone_control.py`](../scripts/drone_control.py)(모든 모드)와
+[`ground/monitor_plot.py`](../scripts/ground/monitor_plot.py)(`--listen --plot`)는 이를 위해 주기적으로
 `connect`를 보낸다.
 
 ### RC 순서와 카운터
@@ -383,7 +383,7 @@ quality로 판단한다 — 얼어붙은 센서가 마지막 값으로 유효해
 size(u16 LE) payload crc8`이 오고, **CRC(crc8_dvb_s2, 다항식 0xD5, 초기값 0)는
 방향 바이트 다음부터** 적용된다. `MSP2_SENSOR_RANGEFINDER=0x1F01`
 (`u8 quality; i32 distanceMm`), `MSP2_SENSOR_OPTIC_FLOW=0x1F02`
-(`u8 quality; i32 motionX; i32 motionY`). 배선은 모듈 TX → ESP32 GPIO16
+(`u8 quality; i32 motionX; i32 motionY`). 배선은 모듈 TX → ESP32 GPIO17
 (수신 전용, 3.3V 직결), 전원은 **반드시 5V**다(3.3V로 주면 측정거리가 줄어든다).
 
 목표 각도 필드는 다음처럼 해석해야 한다.
@@ -434,7 +434,7 @@ Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw
 
 위 이름은 설명을 위한 것이며 실제 패킷에는 같은 순서의 숫자 12개만 들어간다.
 수신기는 `GAINS,` 접두사를 먼저 분리하므로 이 응답을 텔레메트리 불량으로
-계수하지 않는다. `tune_pid.py`는 각 이름과 값을 한 줄로 출력한다.
+계수하지 않는다. `drone_control.py`는 각 이름과 값을 `[GAINS]` 한 줄로 출력한다.
 
 
 `telemetry_schema.py`는 과거 패킷도 받아들인다. 아래 길이는 역사적 확장
@@ -465,7 +465,7 @@ Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw
   현행 CSV는 76개 열이 된다.
 
 공유 구현은
-[`telemetry_schema.py`](../scripts/telemetry_schema.py)에 있다.
+[`telemetry_schema.py`](../scripts/ground/telemetry_schema.py)에 있다.
 
 ### 1kHz IMU 원시 배치 (`ZIMU`)
 
