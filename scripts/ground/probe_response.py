@@ -9,18 +9,14 @@ import statistics
 from dataclasses import dataclass
 from pathlib import Path
 
+from ground import firmware_source
 from ground.failsafe_telemetry import format_failsafe_phase
 from ground.paths import REPO_ROOT
 from ground.telemetry_schema import CSV_FIELDS
 
 
-FIRMWARE_PATH = (
-    REPO_ROOT
-    / "firmware"
-    / "flight"
-    / "zetin_fc"
-    / "zetin_fc.ino"
-)
+# The flight sketch directory; constants may live in any of its files.
+FIRMWARE_PATH = firmware_source.SKETCH_DIR
 MIN_SAMPLE_COUNT = 20
 HOVER_TOLERANCE_US = 1.0
 
@@ -55,25 +51,36 @@ class ProbeExtraction:
 
 
 def read_firmware_float_constant(name, firmware_path=FIRMWARE_PATH):
-    """Read a finite ``const[expr] float`` value from the current sketch."""
+    """Read a finite ``const[expr] float`` value from the current sketch.
 
-    try:
-        source = Path(firmware_path).read_text(encoding="utf-8")
-    except OSError as exc:
-        raise RuntimeError(
-            f"펌웨어 상수 파일을 읽을 수 없습니다: {firmware_path}: {exc}"
-        ) from exc
+    ``firmware_path`` is the sketch directory (every ``.ino``/``fc``/``logic``
+    file is searched and the definition must appear exactly once) or a single
+    source file.
+    """
 
+    firmware_path = Path(firmware_path)
     number = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
-    match = re.search(
-        rf"\b(?:const|constexpr)\s+float\s+{re.escape(name)}\s*=\s*"
-        rf"({number})f?\s*;",
-        source,
-    )
-    if match is None:
-        raise RuntimeError(
-            f"펌웨어에서 float 상수 {name}를 찾을 수 없습니다: {firmware_path}"
-        )
+    pattern = (rf"\b(?:const|constexpr)\s+float\s+{re.escape(name)}\s*=\s*"
+               rf"({number})f?\s*;")
+    if firmware_path.is_dir():
+        try:
+            match = firmware_source.find_unique(pattern, firmware_path)
+        except (LookupError, OSError) as exc:
+            raise RuntimeError(
+                f"펌웨어에서 float 상수 {name}를 찾을 수 없습니다: {firmware_path}: {exc}"
+            ) from exc
+    else:
+        try:
+            source = firmware_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(
+                f"펌웨어 상수 파일을 읽을 수 없습니다: {firmware_path}: {exc}"
+            ) from exc
+        match = re.search(pattern, source)
+        if match is None:
+            raise RuntimeError(
+                f"펌웨어에서 float 상수 {name}를 찾을 수 없습니다: {firmware_path}"
+            )
 
     value = float(match.group(1))
     if not math.isfinite(value):

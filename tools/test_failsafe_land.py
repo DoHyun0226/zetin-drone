@@ -2,6 +2,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,20 +10,14 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_TEST_DIR = REPO_ROOT / "tools" / "native_tests"
-SKETCH_DIR = REPO_ROOT / "firmware" / "archive" / "legacy_flight" / "dual_imu_cascade_pwm"
-SKETCH_PATH = SKETCH_DIR / "dual_imu_cascade_pwm.ino"
+SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from ground import firmware_source  # noqa: E402
 
 
 def _firmware_float_constant(name):
-    source = SKETCH_PATH.read_text(encoding="utf-8")
-    match = re.search(
-        rf"\b(?:const|constexpr)\s+float\s+{re.escape(name)}\s*=\s*"
-        r"([0-9]+(?:\.[0-9]+)?f)\s*;",
-        source,
-    )
-    if match is None:
-        raise AssertionError(f"firmware float constant not found: {name}")
-    return match.group(1)
+    # Any file of the sketch; the definition must appear exactly once.
+    return firmware_source.read_float_constant(name, SKETCH_DIR)
 
 
 class FailsafeLandTest(unittest.TestCase):
@@ -68,6 +63,7 @@ class FailsafeLandTest(unittest.TestCase):
                 compiler, "-std=c++17", "-O0", "-g", "-Wall", "-m32",
                 "-I", str(NATIVE_TEST_DIR / "shims"),
                 "-I", str(SKETCH_DIR),
+                "-I", str(SKETCH_DIR / "logic"),
                 (
                     "-DFIRMWARE_FS_LAND_LPF_ALPHA="
                     f"{_firmware_float_constant('FS_LAND_LPF_ALPHA')}"

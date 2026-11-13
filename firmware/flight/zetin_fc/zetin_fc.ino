@@ -20,16 +20,16 @@
 #include <errno.h>
 #include <float.h>
 
-#include "mag_yaw_fusion.h"
-#include "yaw_command.h"
-#include "failsafe_land.h"
-#include "msp_sensor.h"
-#include "control_allocator.h"
-#include "yaw_authority.h"
-#include "flow_calibration.h"
-#include "flow_odometry.h"
-#include "flow_hold.h"
-#include "range_land.h"
+#include "logic/mag_yaw_fusion.h"
+#include "logic/yaw_command.h"
+#include "logic/failsafe_land.h"
+#include "logic/msp_sensor.h"
+#include "logic/control_allocator.h"
+#include "logic/yaw_authority.h"
+#include "logic/flow_calibration.h"
+#include "logic/flow_odometry.h"
+#include "logic/flow_hold.h"
+#include "logic/range_land.h"
 
 static const uint32_t IMU_RAW_RING_SIZE = 512;
 static const uint32_t IMU_RAW_RING_MASK = IMU_RAW_RING_SIZE - 1;

@@ -8,7 +8,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_TEST_DIR = REPO_ROOT / "tools" / "native_tests"
-SKETCH_DIR = REPO_ROOT / "firmware" / "archive" / "legacy_flight" / "dual_imu_cascade_pwm"
+SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 
 
 class YawCommandTest(unittest.TestCase):
@@ -54,6 +54,7 @@ class YawCommandTest(unittest.TestCase):
                 compiler, "-std=c++17", "-O0", "-g", "-Wall", "-m32",
                 "-I", str(NATIVE_TEST_DIR / "shims"),
                 "-I", str(SKETCH_DIR),
+                "-I", str(SKETCH_DIR / "logic"),
                 "-x", "c++",
                 str(NATIVE_TEST_DIR / "test_yaw_command.cpp"),
                 "-o", str(executable),

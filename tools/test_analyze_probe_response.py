@@ -471,9 +471,9 @@ class AnalyzeProbeResponseTests(unittest.TestCase):
     def test_reads_current_firmware_constants_and_fails_clearly_when_missing(self):
         analyzer = analyzer_module()
         import re as _re
-        expected = float(_re.search(
-            r"FS_PROBE_RESPONSE_G\s*=\s*([0-9.]+)f",
-            analyzer.FIRMWARE_PATH.read_text(encoding="utf-8")).group(1))
+        from ground import firmware_source
+        expected = float(firmware_source.read_float_constant(
+            "FS_PROBE_RESPONSE_G", analyzer.FIRMWARE_PATH).rstrip("f"))
         self.assertAlmostEqual(
             expected,
             analyzer.read_firmware_float_constant(

@@ -2,6 +2,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,8 +11,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_TEST_DIR = REPO_ROOT / "tools" / "native_tests"
 SKETCH_DIR = (
-    REPO_ROOT / "firmware" / "archive" / "legacy_flight" / "dual_imu_cascade_pwm"
+    REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 )
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from ground import firmware_source  # noqa: E402
 
 
 class NativeControlMathTest(unittest.TestCase):
@@ -56,6 +59,7 @@ class NativeControlMathTest(unittest.TestCase):
                 compiler, "-std=c++17", "-O0", "-g", "-m32",
                 "-I", str(NATIVE_TEST_DIR / "shims"),
                 "-I", str(SKETCH_DIR),
+                "-I", str(SKETCH_DIR / "logic"),
                 "-x", "c++", str(NATIVE_TEST_DIR / "test_control_math.cpp"),
                 "-o", str(executable),
             ]
@@ -135,24 +139,22 @@ class NativeControlMathTest(unittest.TestCase):
                     f"stdout:\n{probe.stdout}\nstderr:\n{probe.stderr}"
                 )
 
-            mutated_sketch = tmp_path / "dual_imu_cascade_pwm"
+            mutated_sketch = tmp_path / "zetin_fc"
             shutil.copytree(SKETCH_DIR, mutated_sketch)
-            sketch_path = mutated_sketch / "dual_imu_cascade_pwm.ino"
-            source = sketch_path.read_text(encoding="utf-8")
-            source, replacements = re.subn(
+            sketch_path = mutated_sketch / "zetin_fc.ino"
+            # The constant may live in any sketch file; it must occur exactly once.
+            firmware_source.subn_unique(
+                mutated_sketch,
                 r"(const int\s+FS_DESCENT_DELTA_US\s*=\s*)60;",
                 r"\g<1>150;",
-                source,
-                count=1,
             )
-            self.assertEqual(replacements, 1, "failed to create invalid delta fixture")
-            sketch_path.write_text(source, encoding="utf-8")
 
             object_path = tmp_path / "invalid_delta.o"
             compile_command = [
                 compiler, "-std=c++17", "-O0", "-g", "-m32",
                 "-I", str(NATIVE_TEST_DIR / "shims"),
                 "-I", str(mutated_sketch),
+                "-I", str(mutated_sketch / "logic"),
                 "-x", "c++", "-c", str(sketch_path), "-o", str(object_path),
             ]
             compiled = subprocess.run(

@@ -77,7 +77,7 @@ static ControlAllocation silDispatchAllocateControl(
 }
 
 #define allocateControl silDispatchAllocateControl
-#include "dual_imu_cascade_pwm.ino"
+#include "zetin_fc.ino"
 #undef allocateControl
 
 namespace {
@@ -477,6 +477,11 @@ void resetFirmwareState(const PlantState &initial) {
   hover_valid = false;
   calibration_ok = true;
 
+  // zetin_fc ships the airframe trim (-2.2/-1.8 deg) and flow-hold state; these
+  // cases model an untrimmed airframe without a 3901-L0X, so start both clean.
+  trim_roll = 0.0f;
+  trim_pitch = 0.0f;
+  resetFlowHoldForHarness();
   targetAngleX = 0.0f;
   targetAngleY = 0.0f;
   targetAngleZ = 0.0f;
@@ -1587,21 +1592,31 @@ int main() {
         ",0,-1,0,0,-1,0"
         ",1.000,1.000,1000.00,0.00,0.00,0.00"
         ",0.00,0.00,0.00,0";
-    detail << "actual field_count=" << field_count
-           << ", packet_suffix="
-           << packet.substr(
-                  packet.size() > expected_suffix.size()
-                      ? packet.size() - expected_suffix.size()
-                      : 0U)
-           << "; expected field_count=75 and suffix " << expected_suffix;
-    CHECK_MSG(field_count == 75U, detail.str());
-    CHECK_MSG(
-        packet.size() >= expected_suffix.size() &&
-            packet.compare(
-                packet.size() - expected_suffix.size(),
-                expected_suffix.size(),
-                expected_suffix) == 0,
-        detail.str());
+    // zetin_fc appends fields 76-97 after these 75; fields 38-75 (indices 38-74)
+    // must keep their place and content, so compare that slice in position.
+    std::vector<std::string> fields;
+    {
+      std::stringstream ss(packet);
+      std::string f;
+      while (std::getline(ss, f, ',')) fields.push_back(f);
+    }
+    std::string slice;
+    for (std::size_t i = 38; i < 75 && i < fields.size(); i++) slice += "," + fields[i];
+    detail << "actual field_count=" << field_count << ", fields 38-74=" << slice
+           << "; expected field_count=97 and fields 38-74 " << expected_suffix;
+    CHECK_MSG(field_count == 97U, detail.str());
+    CHECK_MSG(slice == expected_suffix, detail.str());
+    // Flow-hold and range auto-land fields (75-96) right after the harness reset,
+    // before any pid_task tick publishes: the reset snapshot (height 0, not the
+    // -1 a tick writes when invalid), holds off, calibration idle, no landing,
+    // auto-land switch off.
+    const std::string expected_flow =
+        ",0,0.0,0,0.000,0.000,0.000,0.000,0.000,0.000,0,0.00,0.00,0,0.0,0,0"
+        ",0,0,0.00,0,1000,0";
+    std::string flow;
+    for (std::size_t i = 75; i < fields.size(); i++) flow += "," + fields[i];
+    CHECK_MSG(flow == expected_flow,
+              "fields 75-96=" + flow + "; expected " + expected_flow);
   });
 
   runCase("vertical: 1g specific force preserves legacy IMU raw bytes", [] {

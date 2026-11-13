@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "dual_imu_cascade_pwm.ino"
+#include "zetin_fc.ino"
 
 namespace {
 
@@ -137,6 +137,11 @@ void resetCommonFirmwareState(float roll_deg, float pitch_deg, float yaw_deg) {
   tgtRate[1] = 0.0f;
   tgtRate[2] = 0.0f;
   pidLoopHz = 0;
+  // zetin_fc ships the airframe trim (-2.2/-1.8 deg) and flow-hold state; these
+  // cases model an untrimmed airframe without a 3901-L0X, so start both clean.
+  trim_roll = 0.0f;
+  trim_pitch = 0.0f;
+  resetFlowHoldForHarness();
   mag_comp_x = 0.0f;
   mag_comp_y = 0.0f;
   mag_comp_z = 0.0f;
@@ -413,7 +418,7 @@ int runFusionTests() {
     startMagCalibration();
 
     std::vector<std::string> fields = sendTelemetryFields();
-    CHECK(fields.size() == 75U);
+    CHECK(fields.size() == 97U);  // zetin_fc: 75 + flow-hold/auto-land 22
     CHECK_NEAR(std::stof(fields.at(31)), 1.25f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(32)), -2.50f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(33)), 3.75f, 0.01f);
@@ -464,7 +469,7 @@ int runFusionTests() {
     stopMagCalibration();
 
     const std::vector<std::string> fields = sendTelemetryFields();
-    CHECK(fields.size() == 75U);
+    CHECK(fields.size() == 97U);  // zetin_fc: 75 + flow-hold/auto-land 22
     CHECK_NEAR(std::stof(fields.at(31)), 1.25f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(32)), -2.50f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(33)), 3.75f, 0.01f);

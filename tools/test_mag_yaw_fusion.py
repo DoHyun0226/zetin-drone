@@ -2,6 +2,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,7 +10,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_TEST_DIR = REPO_ROOT / "tools" / "native_tests"
-SKETCH_DIR = REPO_ROOT / "firmware" / "archive" / "legacy_flight" / "dual_imu_cascade_pwm"
+SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from ground import firmware_source  # noqa: E402
 SUPPORTED_MUTATIONS = {"none", "disabled", "inverted", "tilt-inverted"}
 
 
@@ -59,8 +62,6 @@ class MagYawFusionTest(unittest.TestCase):
             if mutation != "none":
                 sketch_dir = tmp_path / "mutated_sketch"
                 shutil.copytree(SKETCH_DIR, sketch_dir)
-                fusion_header = sketch_dir / "mag_yaw_fusion.h"
-                source = fusion_header.read_text()
                 if mutation == "disabled":
                     old = "return gain * wrapDeg(mag_heading_deg - yaw_deg);"
                     new = "return 0.0f;"
@@ -76,17 +77,20 @@ class MagYawFusionTest(unittest.TestCase):
                         "const float roll = -roll_deg * PI / 180.0f;\n"
                         "  const float pitch = -pitch_deg * PI / 180.0f;"
                     )
-                if source.count(old) != 1:
+                # Whichever sketch file holds it; it must occur exactly once.
+                try:
+                    firmware_source.mutate_unique(sketch_dir, old, new)
+                except LookupError:
                     self.fail(
                         f"{mutation} mutation target was not found exactly once"
                     )
-                fusion_header.write_text(source.replace(old, new, 1))
 
             executable = tmp_path / "test_mag_yaw_fusion"
             compile_command = [
                 compiler, "-std=c++17", "-O0", "-g", "-Wall", "-m32",
                 "-I", str(NATIVE_TEST_DIR / "shims"),
                 "-I", str(sketch_dir),
+                "-I", str(sketch_dir / "logic"),
                 "-x", "c++",
                 str(NATIVE_TEST_DIR / "test_mag_yaw_fusion.cpp"),
                 "-o", str(executable),

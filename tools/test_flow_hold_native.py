@@ -52,6 +52,7 @@ class FlowHoldNativeTest(unittest.TestCase):
             self.compiler, "-std=c++17", "-O1", "-g", "-Wall", "-m32",
             "-I", str(NATIVE_TEST_DIR / "shims"),
             "-I", str(SKETCH_DIR),
+            "-I", str(SKETCH_DIR / "logic"),
             "-x", "c++", str(NATIVE_TEST_DIR / f"{name}.cpp"),
             "-o", str(executable),
         ]

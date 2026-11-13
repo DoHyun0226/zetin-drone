@@ -144,7 +144,9 @@ def stale_scan_files(repo):
         for path in maintained_markdown_files(repo)
         if path != repo / "docs/migration_map.md"
     ]
+    # The flight sketch is split into .ino + fc/*.h + logic/*.h; scan all of it.
     files.extend(sorted((repo / "firmware/flight").rglob("*.ino")))
+    files.extend(sorted((repo / "firmware/flight").rglob("*.h")))
     files.extend(sorted((repo / "firmware/diagnostics").rglob("*.ino")))
     files.extend(sorted((repo / "scripts").rglob("*.py")))
     return files

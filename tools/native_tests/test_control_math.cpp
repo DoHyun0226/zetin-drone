@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "dual_imu_cascade_pwm.ino"
+#include "zetin_fc.ino"
 
 namespace {
 
@@ -140,6 +140,10 @@ void resetRcState() {
   lastRcMs = 6;
   arduino_fake::millis_value = 100;
   targetYawRate = 0.0f;
+  // zetin_fc ships the airframe trim (-2.2/-1.8 deg) and adds it to RC targets.
+  // These cases check RC parsing and sequencing, so they run untrimmed.
+  trim_roll = 0.0f;
+  trim_pitch = 0.0f;
 }
 
 struct GainSlot {
@@ -2571,7 +2575,7 @@ int main() {
     limited.scaled = true;
     publishAllocationTelemetry(
         limited, 11.0f, 12.0f, 13.0f, 1.0f, 2.0f, 3.0f,
-        YAW_AUTH_LIMITED);
+        YAW_AUTH_LIMITED, 1205);
 
     // Deliberately disagree with the published tick. Field 19 must come from
     // the same protected record as fields 66 and 67, not this live global.
@@ -2580,10 +2584,13 @@ int main() {
 
     const std::vector<std::string> fields =
         splitCsv(wifi_udp_fake::telemetry_output);
-    CHECK_EQ(fields.size(), 75U);
+    // zetin_fc sends 97 fields (75 + flow-hold 16 + range auto-land 5 + switch).
+    CHECK_EQ(fields.size(), 97U);
     CHECK_EQ(fields[18], "1");
     CHECK_EQ(fields[65], "0.800");
     CHECK_EQ(fields[66], "0.400");
+    // Field 96 Land_Req_US comes from the same snapshot as field 68.
+    CHECK_EQ(fields[95], "1205");
   });
 
   runCase("default allocation reset clears legacy and axis diagnostics", [] {
@@ -2595,7 +2602,7 @@ int main() {
     mixer_scaled = true;
     publishAllocationTelemetry(
         limited, 10.0f, 20.0f, 30.0f, 1.0f, 2.0f, 3.0f,
-        YAW_AUTH_LIMITED);
+        YAW_AUTH_LIMITED, 1195);
 
     // The post-mix lock path relies only on this common reset helper.
     resetAllocationTelemetry();
