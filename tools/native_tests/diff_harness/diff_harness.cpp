@@ -206,6 +206,7 @@ struct Scenario {
   bool imu_offsets = false;         // IMU 마다 다른 gyro bias·accel scale(원값)
   uint32_t rc_off_at_tick = 0;      // 이 플랜트 tick 에 RC 를 끊는다(0 = 없음)
   uint32_t resume_at_tick = 0;      // 이 플랜트 tick 에 resume 을 보낸다(0 = 없음)
+  bool prev_handover = false;       // 직전 PID tick 의 rl_resume_handover
   bool mag_inject = false;
   // 관찰
   uint32_t plant_tick = 0;
@@ -418,9 +419,11 @@ int run(Scenario &sc, const char *logPath) {
     } else if (!sc.rc_on) {
       nextRcUs = g_now_us;
     }
+    // 플랜트·센서는 어느 태스크 차례든 가상 시간에 맞춰 진행한다(PID 가 늦어도 센서는
+    // 제때 프레임을 낸다 — Codex 재검토 P2).
+    if (sc.held && !safety_lock) sc.held = false;   // 시동이 걸리면 손을 놓는다
+    plantAdvance(sc);
     if (who == PID) {
-      if (sc.held && !safety_lock) sc.held = false;   // 시동이 걸리면 손을 놓는다
-      plantAdvance(sc);
       const uint64_t gap = g_now_us - g_last_pid_us;
       if (gap > 10000U) sc.mark("pid_gap_long");
       if (gap > 0 && gap < 200U) sc.mark("pid_gap_short");
@@ -513,7 +516,6 @@ void observeCommon(Scenario &sc) {
   if (rl_stage >= RL_STAGE_NEAR_GROUND) sc.mark("near_ground");
   if (mag_enabled && !safety_lock) sc.mark("mag_fusing_armed");
   if (rl_resume_handover) sc.mark("handover");
-  if (sc.saw("handover") && fs_phase == FS_DESCENDING && !rl_resume_handover) sc.mark("after_handover_descending");
   if (sc.saw("near_ground") && fs_phase == FS_DESCENDING && rl_mode == RL_MODE_RANGE &&
       rl_stage < RL_STAGE_NEAR_GROUND) sc.mark("revoked");
   if (sc.saw("no_imu") && !safety_lock) sc.mark("rearmed_after_imu_loss");
@@ -591,36 +593,40 @@ std::map<std::string, std::function<void(Scenario &)>> scenarios() {
   };
 
   m["range_resume_handover"] = [](Scenario &sc) {
-    sc.s.h = 1.5;
+    // 테더 바닥(0.05 m)에 걸려 거리 기반 하강이 기준 스로틀을 지상 경계 아래로 내린 뒤, RC 패킷
+    // 하나만 보내고 480 ms 뒤 resume 한다. 인계(그 collective → 호버, 300 µs/s)가 끝나기 전에
+    // RC 가 다시 타임아웃되어 인계 중 재진입한다(SIL sil_rc_loss_during_resume_handover_reenters).
+    sc.s.h = 0.6;
+    sc.P.tether_floor = [](uint32_t) { return 0.05; };
     landSensor(sc);
     sc.send(150, "rangeland 1");
     flyUp(sc, true);
     sc.at(6500, [](Scenario &s) { s.rc_on = false; });
-    // 바닥 근접(기준 스로틀이 호버보다 내려간 뒤)에서 링크를 살리고 resume 한다. 인계는
-    // 그 collective 에서 호버까지 천천히 오르며, 그 도중에 다시 끊긴다.
+    stalls(sc, 7300);
     sc.per_tick = [](Scenario &s) {
       observeCommon(s);
-      if (s.saw("near_ground") && !s.saw("rc_back")) {
-        s.mark("rc_back");
-        s.rc_on = true;
-        s.resume_at_tick = s.plant_tick + 100;   // RC 패킷이 몇 개 들어온 뒤
+      if (!s.saw("one_rc_sent") && s.saw("near_ground") && fs_phase == FS_DESCENDING &&
+          base_throttle <= FS_GROUND_CUT_MAX_US) {
+        s.mark("one_rc_sent");
+        char b[64];
+        std::snprintf(b, sizeof b, "rcr %u 0.00 0.00 0.00", (unsigned)++s.rc_seq);
+        s.inbox.push_back(b);
+        s.resume_at_tick = s.plant_tick + 480;
       }
       if (s.resume_at_tick && s.plant_tick >= s.resume_at_tick) {
         s.resume_at_tick = 0;
         s.inbox.push_back("resume");
       }
-      if (s.saw("handover") && !s.saw("reloss_sent")) {
-        s.mark("reloss_sent");
-        s.rc_off_at_tick = s.plant_tick + 150;
+      if (s.prev_handover && fs_phase == FS_DESCENDING) {
+        s.mark("reentered_during_handover");
+        if (rl_base_ceiling != RL_NO_CAP) s.mark("reentry_ceiling_set");
       }
-      if (s.rc_off_at_tick && s.plant_tick >= s.rc_off_at_tick) {
-        s.rc_on = false;
-        s.rc_off_at_tick = 0;
-      }
+      s.prev_handover = rl_resume_handover;
     };
-    sc.duration_ms = 24000;
+    sc.duration_ms = 20000;
     sc.reach = [](Scenario &s) {
-      return join(need(s, {"range_descent", "handover", "after_handover_descending"}),
+      return join(need(s, {"range_descent", "handover", "reentered_during_handover",
+                           "reentry_ceiling_set", "pid_gap_long"}),
                   needSerial(s, {">>> RESUME"}));
     };
   };

@@ -93,6 +93,10 @@ def build_conditions():
     parts = [f"SOURCE_DATE_EPOCH={SOURCE_DATE_EPOCH}", f"FQBN={FQBN}"]
     for args in (["version"], ["core", "list"], ["lib", "list"]):
         r = subprocess.run(["arduino-cli", *args], capture_output=True, text=True, check=False)
+        if r.returncode != 0 or not r.stdout.strip():
+            # 조회에 실패하면 조건을 모르는 것이다. 빈 값으로 키를 만들면 엉뚱한 기준을
+            # 재사용할 수 있다(Codex 재검토 P3).
+            raise SystemExit(f"arduino-cli {' '.join(args)} failed; cannot key the baseline build")
         parts.append(r.stdout.strip())
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
