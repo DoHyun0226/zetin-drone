@@ -57,4 +57,3 @@ PosHoldGains posHoldGains = posHoldDefaultGains();
 AltHoldGains altHoldGains = altHoldDefaultGains();
 uint32_t flowSeqSeen = 0, rangeSeqSeen = 0;
 uint8_t flowcal_state = FLOWCAL_IDLE;
-

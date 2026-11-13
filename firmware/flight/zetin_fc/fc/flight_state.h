@@ -59,4 +59,3 @@ volatile uint32_t lastRcSeq       = 0;
 volatile bool     rcSeqValid      = false;
 volatile uint32_t rcTotalPkts     = 0;
 volatile uint32_t rcDroppedPkts   = 0;
-

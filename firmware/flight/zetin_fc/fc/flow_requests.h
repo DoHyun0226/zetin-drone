@@ -121,4 +121,3 @@ static inline void requestFlowCalCommand(uint8_t cmd) {
   flowcal_command = cmd;
   portEXIT_CRITICAL(&flowRequestMux);
 }
-

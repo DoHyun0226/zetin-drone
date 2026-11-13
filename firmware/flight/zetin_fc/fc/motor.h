@@ -21,4 +21,3 @@ static MotorMix mixAndDesaturate(float roll, float pitch, float yaw,
                                  int throttle, int minMotor, int maxMotor) {
   return allocateControl(roll, pitch, yaw, throttle, minMotor, maxMotor);
 }
-

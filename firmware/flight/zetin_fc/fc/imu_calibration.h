@@ -221,4 +221,3 @@ static void imuCalStep(bool readOk, const inv_imu_sensor_event_t &a,
     imucal_result_pending = true;   // Core 0 가 저장·출력한다
   }
 }
-

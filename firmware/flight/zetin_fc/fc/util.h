@@ -195,4 +195,3 @@ static bool checkFreeze(FreezeMon &m, const inv_imu_sensor_event_t &e, uint32_t 
 static inline bool rcTimedOut(uint32_t nowMs, uint32_t lastMs) {
   return (int32_t)(nowMs - lastMs) > (int32_t)RC_TIMEOUT_MS;
 }
-

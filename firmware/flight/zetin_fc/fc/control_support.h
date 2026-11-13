@@ -54,4 +54,3 @@ static inline AllocationTelemetrySample readAllocationTelemetrySnapshot() {
   portEXIT_CRITICAL(&allocationTelemetryMux);
   return sample;
 }
-

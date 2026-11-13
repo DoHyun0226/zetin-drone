@@ -203,4 +203,3 @@ static void sampleMagnetometer(uint32_t now_ms) {
   applyMagCalibration(raw, MAG_HARD_IRON, MAG_SOFT_IRON, calibrated);
   publishMagSample(calibrated[0], calibrated[1], calibrated[2], now_ms);
 }
-

@@ -31,4 +31,3 @@ static inline void publishImuRawRegisters(
     rawProducerTimeValid = true;
   }
 }
-
