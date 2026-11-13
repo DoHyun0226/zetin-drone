@@ -17,6 +17,10 @@ libraries, FQBN and options, once per ``--debug`` value of
 ``WIFI_LATENCY_DEBUG`` (default: 0 and 1). The comparison is
 ``tools/compare_firmware_elf.py``.
 
+The host view is compared too: ``g++ -E -P -x c++`` with the native shims
+(what the SIL and native tests compile), blank lines dropped, otherwise
+character for character.
+
 Needs arduino-cli with the board core used by CI (see firmware/README.md).
 """
 
@@ -86,6 +90,28 @@ def build(sketch, build_dir, debug, jobs):
     return elf
 
 
+def host_preprocess(sketch, debug):
+    """Host view of the program (what the SIL and native tests compile).
+
+    g++ -E -P with the native shims; blank lines dropped, everything else kept
+    character for character (string literals included). Refuses empty output:
+    without -x c++ g++ ignores a .ino and prints nothing.
+    """
+    shims = REPO_ROOT / "tools" / "native_tests" / "shims"
+    ino = sketch / f"{sketch.name}.ino"
+    cmd = ["g++", "-std=c++17", "-m32", "-E", "-P", "-x", "c++",
+           f"-DWIFI_LATENCY_DEBUG={debug}", "-I", str(shims), "-I", str(sketch),
+           str(ino)]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
+        raise SystemExit(f"host preprocessing failed: {ino}")
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    if len(lines) < 1000:
+        raise SystemExit(f"host preprocessing of {ino} produced only {len(lines)} lines")
+    return lines
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--base-rev", required=True)
@@ -94,6 +120,8 @@ def main():
     ap.add_argument("--sketch", required=True, help="working-tree sketch directory")
     ap.add_argument("--debug", nargs="*", default=["0", "1"],
                     help="WIFI_LATENCY_DEBUG values to build (default: 0 1)")
+    ap.add_argument("--host-only", action="store_true",
+                    help="only compare host preprocessing (no ESP32 builds)")
     ap.add_argument("--jobs", type=int, default=0,
                     help="parallel compile jobs (default: arduino-cli's own default)")
     ap.add_argument("--keep", type=Path,
@@ -133,6 +161,18 @@ def main():
             shutil.rmtree(cand)
         shutil.copytree(candidate, cand)
         for debug in args.debug:
+            host_a, host_b = host_preprocess(base, debug), host_preprocess(cand, debug)
+            if host_a != host_b:
+                failed = True
+                first = next((i for i, (x, y) in enumerate(zip(host_a, host_b)) if x != y),
+                             min(len(host_a), len(host_b)))
+                print(f"[debug={debug}] HOST DIFF at non-blank line {first}: "
+                      f"{host_a[first:first + 1]} vs {host_b[first:first + 1]}")
+            else:
+                print(f"[debug={debug}] host preprocessing identical "
+                      f"({len(host_a)} non-blank lines)")
+            if args.host_only:
+                continue
             base_build = tmp / f"build-base-{debug}"
             base_elf = base_build / f"{name}.ino.elf"
             elf_a = base_elf if base_elf.is_file() else build(base, base_build, debug,
