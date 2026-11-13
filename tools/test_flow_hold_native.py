@@ -21,7 +21,7 @@ NATIVE_TESTS = (
 
 
 class FlowHoldNativeTest(unittest.TestCase):
-    """Compile and run the flow-hold native tests at -m32."""
+    """flow-hold native 시험을 -m32 로 컴파일해 실행한다."""
 
     @classmethod
     def setUpClass(cls):

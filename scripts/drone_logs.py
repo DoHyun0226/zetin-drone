@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline log analysis entry point: flight, imuraw, probe, magcal."""
+"""오프라인 로그 분석 진입점: flight, imuraw, probe, magcal."""
 
 import importlib
 import sys

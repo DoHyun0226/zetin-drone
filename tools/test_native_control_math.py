@@ -18,9 +18,9 @@ from ground import firmware_source  # noqa: E402
 
 
 class NativeControlMathTest(unittest.TestCase):
-    """Compile the real cascade sketch with host shims and run the C++ control-math
-    assertions. unittest-style so it is collected by the repo's `unittest discover`
-    CI; skips (does not fail) when the g++/-m32 toolchain is unavailable."""
+    """실제 비행 펌웨어(`zetin_fc`)를 host shim 과 함께 컴파일해 C++ control-math
+    assertion 을 실행한다. 저장소의 `unittest discover` CI 가 수집하도록 unittest 형식으로
+    둔다. g++/-m32 툴체인이 없으면 실패하지 않고 skip 한다."""
 
     def test_native_control_math(self):
         compiler = shutil.which("g++")
@@ -89,8 +89,8 @@ class NativeControlMathTest(unittest.TestCase):
                     "native firmware logic tests timed out after 10 seconds\n"
                     f"stdout:\n{error.stdout or ''}\nstderr:\n{error.stderr or ''}"
                 )
-            # Some sandboxes block the 32-bit binary's syscalls with SIGSYS; retry
-            # under qemu-i386 when present, otherwise skip rather than false-fail.
+            # 일부 샌드박스는 32비트 바이너리의 syscall 을 SIGSYS 로 막는다. qemu-i386 이 있으면
+            # 그 위에서 다시 돌리고, 없으면 거짓 실패 대신 skip 한다.
             if completed.returncode == -signal.SIGSYS:
                 qemu_i386 = shutil.which("qemu-i386-static")
                 if qemu_i386 is None:

@@ -1,4 +1,4 @@
-"""Regression tests for the ground-station and bench failsafe review fixes."""
+"""지상국·벤치 failsafe 검토에서 고친 사항의 회귀 시험."""
 
 import builtins
 import contextlib
@@ -91,7 +91,7 @@ class _RecordingUI:
 
 
 class _RaisingUI(_RecordingUI):
-    """A broken UI: every output call raises, as a dead terminal pipe would."""
+    """고장 난 UI. 죽은 터미널 파이프처럼 모든 출력 호출이 예외를 낸다."""
 
     def event(self, text):
         raise BrokenPipeError("synthetic event failure")
@@ -168,7 +168,7 @@ class _LoopEvent:
 
 
 class _BlockingThrottle(float):
-    """Pause a controller tick after it has loaded the old throttle value."""
+    """controller tick 이 이전 throttle 값을 읽어 들인 뒤에 멈춰 세운다."""
 
     def __new__(cls, value, stale_read_started, resume_completed):
         instance = super().__new__(cls, value)
@@ -496,7 +496,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.telem_hover_valid = True
         self.module.telem_total_pkts = 40
         self.module.telem_dropped_pkts = 3
-        # setUp stamps telemetry with the real clock; restate it on the mocked one
+        # setUp 은 실제 시계로 텔레메트리 시각을 찍으므로 mock 시계 기준으로 다시 찍는다
         self.module.last_telem_time = 9.5
         with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
             self.module.request_resume("test")
@@ -528,7 +528,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.telem_hover_valid = True
         self.module.telem_total_pkts = 40
         self.module.telem_dropped_pkts = 3
-        # setUp stamps telemetry with the real clock; restate it on the mocked one
+        # setUp 은 실제 시계로 텔레메트리 시각을 찍으므로 mock 시계 기준으로 다시 찍는다
         self.module.last_telem_time = 9.5
         with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
             self.module.request_resume("test")
@@ -600,7 +600,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.telem_hover_valid = True
         self.module.telem_total_pkts = 40
         self.module.telem_dropped_pkts = 3
-        # setUp stamps telemetry with the real clock; restate it on the mocked one
+        # setUp 은 실제 시계로 텔레메트리 시각을 찍으므로 mock 시계 기준으로 다시 찍는다
         self.module.last_telem_time = 9.5
         with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
             self.module.request_resume("test")
@@ -729,7 +729,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.telem_hover_valid = True
         self.module.telem_total_pkts = 40
         self.module.telem_dropped_pkts = 3
-        # setUp stamps telemetry with the real clock; restate it on the mocked one
+        # setUp 은 실제 시계로 텔레메트리 시각을 찍으므로 mock 시계 기준으로 다시 찍는다
         self.module.last_telem_time = 9.5
         with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
             self.module.request_resume("test")
@@ -767,7 +767,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.telem_hover_valid = True
         self.module.telem_total_pkts = 40
         self.module.telem_dropped_pkts = 3
-        # setUp stamps telemetry with the real clock; restate it on the mocked one
+        # setUp 은 실제 시계로 텔레메트리 시각을 찍으므로 mock 시계 기준으로 다시 찍는다
         self.module.last_telem_time = 9.5
         with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
             self.module.request_resume("test")
@@ -2360,7 +2360,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.is_armed = False
         self.module.is_streaming = False
         self._prime_prearm_telemetry()
-        # setUp stamps telemetry with the real clock; restate it on the mocked one
+        # setUp 은 실제 시계로 텔레메트리 시각을 찍으므로 mock 시계 기준으로 다시 찍는다
         self.module.last_telem_time = 9.5
         with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
             self.assertTrue(self.module.arm())
@@ -2387,7 +2387,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.is_armed = False
         self.module.is_streaming = False
         self._prime_prearm_telemetry()
-        # setUp stamps telemetry with the real clock; restate it on the mocked one
+        # setUp 은 실제 시계로 텔레메트리 시각을 찍으므로 mock 시계 기준으로 다시 찍는다
         self.module.last_telem_time = 9.5
         with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
             self.assertTrue(self.module.arm())
@@ -2421,7 +2421,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.is_armed = False
         self.module.is_streaming = False
         self._prime_prearm_telemetry()
-        # setUp stamps telemetry with the real clock; restate it on the mocked one
+        # setUp 은 실제 시계로 텔레메트리 시각을 찍으므로 mock 시계 기준으로 다시 찍는다
         self.module.last_telem_time = 9.5
         with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
             self.assertTrue(self.module.arm())
@@ -2468,7 +2468,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.is_armed = False
         self.module.is_streaming = False
         self._prime_prearm_telemetry()
-        # setUp stamps telemetry with the real clock; restate it on the mocked one
+        # setUp 은 실제 시계로 텔레메트리 시각을 찍으므로 mock 시계 기준으로 다시 찍는다
         self.module.last_telem_time = 9.5
         with mock.patch.object(self.module.time, "monotonic", return_value=10.0):
             self.assertTrue(self.module.arm())
@@ -2555,7 +2555,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.is_armed = False
         self.module.is_streaming = False
         self._prime_prearm_telemetry()
-        # setUp stamps telemetry with the real clock; restate it on the mocked one
+        # setUp 은 실제 시계로 텔레메트리 시각을 찍으므로 mock 시계 기준으로 다시 찍는다
         self.module.last_telem_time = 122.5
 
         def observe_armed_state():
@@ -2756,10 +2756,10 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
                 rows = list(csv.reader(saved_log))
             self.assertEqual(rows, [list(self.module.CSV_FIELDS), record])
 
-    # --- worker wrapper, fault latch, EOF, port check, UI routing ---
+    # --- worker wrapper, fault latch, EOF, 포트 검사, UI 라우팅 ---
 
     def _run_telemetry_wrapped(self, samples):
-        """Run the wrapped telemetry worker; csv_writer is left to the caller."""
+        """감싼 telemetry worker 를 실행한다. csv_writer 는 호출자에게 맡긴다."""
         self.module.sock = _FakeSocket([b"packet"] * len(samples))
         self.module.csv_file = types.SimpleNamespace(flush=lambda: None)
         output = io.StringIO()
@@ -2812,7 +2812,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         )
         self.assertIn(">>> [SYSTEM] 로컬 해제 (수신 스레드 오류) - stop 미전송", out)
         self.assertEqual(self.module.snapshot()["worker_fault"], "telemetry")
-        # stop_streaming_only semantics: never a stop while the drone may be descending
+        # stop_streaming_only 의미: 드론이 하강 중일 수 있으면 stop 을 보내지 않는다
         self.assertNotIn(b"stop", [data for data, _ in self.module.sock.sent])
 
     def test_controller_exception_stops_rc_streaming(self):
@@ -2855,7 +2855,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self._run_telemetry_wrapped([_telemetry_sample(Failsafe_Phase=0)])
         self.assertFalse(self.module.is_streaming)
 
-        # every precondition for a resume is otherwise satisfied
+        # 그 밖의 resume 전제 조건은 모두 충족된 상태
         self.module.telem_failsafe_phase = 1
         self.module.telem_hover_est = 1360.0
         self.module.telem_hover_valid = True
@@ -2873,7 +2873,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertEqual(self.module.resume_state, "idle")
         self.assertIn("[RESUME] 실패: 수신 스레드 오류로 잠김", output.getvalue())
 
-        # even if streaming were somehow re-opened, no rc/rcr leaves the station
+        # streaming 이 어떻게든 다시 열려도 rc/rcr 은 스테이션 밖으로 나가지 않는다
         self.module.is_streaming = True
         self._run_controller_with_joystick(_Joystick(_LoopEvent(0)), iterations=3)
         sent = [data for data, _ in latched_socket.sent]
@@ -2881,12 +2881,12 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.send_cmd("rcr 9 0.00 0.00 0.0")
         self.module.send_cmd("rc 1500 1500 1500 1500")
         self.assertEqual(latched_socket.sent, [])
-        # the latch blocks only rc/rcr, not other commands
+        # latch 는 rc/rcr 만 막고 다른 명령은 막지 않는다
         self.module.send_cmd("gains")
         self.assertEqual([d for d, _ in latched_socket.sent], [b"gains"])
 
     def test_controller_skips_rcr_while_latched_even_with_a_raw_sender(self):
-        # the controller's own guard, independent of the send_cmd gate
+        # send_cmd 관문과 별개인 controller 자체 guard
         commands = []
         self.module.send_cmd = commands.append
         self.module.worker_fault = "telemetry"
@@ -2919,7 +2919,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
 
         out = self._run_controller_with_joystick(_RaisingJoystick())
         self.assertEqual(self.module.snapshot()["worker_fault"], "controller")
-        # the arm attempt is cancelled the way every other arm cancel is: stop
+        # arm 시도는 다른 arm 취소와 같은 방식으로 취소된다: stop
         self.assertEqual(commands, ["stop"])
         self.assertIn("[ARM] 실패: 조종 스레드 오류로 무장 시도 취소, stop 전송", out)
 
@@ -2957,7 +2957,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.ui = _RaisingUI()
         self._break_csv_writer()
 
-        # must return normally even though every UI call raises
+        # UI 호출이 모두 예외를 내도 정상 반환해야 한다
         self._run_telemetry_wrapped([_telemetry_sample(Failsafe_Phase=0)])
 
         self.assertFalse(self.module.is_streaming)
@@ -2967,7 +2967,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.sock = _FakeSocket()
         self._run_controller_with_joystick(_RaisingJoystick())
         self.assertFalse(self.module.is_streaming)
-        # the first fault stays latched
+        # 첫 fault 가 latch 된 채 남는다
         self.assertEqual(self.module.worker_fault, "telemetry")
 
     def test_eof_disarms_when_armed(self):
@@ -3172,11 +3172,11 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertTrue(any(line.startswith(" IMU cal:") for line in help_lines))
         self.assertEqual(recording.texts("event")[:len(help_lines)], help_lines)
 
-    # --- review round 1 regressions ---
+    # --- 검토 1차 회귀 시험 ---
 
     def test_rc_send_cannot_interleave_with_the_latch_write(self):
-        # Pause send_cmd between its latch check and sendto (inside encode),
-        # write the latch from another thread, then let the send finish.
+        # send_cmd 를 latch 검사와 sendto 사이(encode 안)에서 멈추고,
+        # 다른 스레드에서 latch 를 쓴 뒤 전송을 마저 끝내게 한다.
         module = self.module
         entered = threading.Event()
         release = threading.Event()
@@ -3218,13 +3218,13 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
 
         module.send_cmd("rcr 2 0.00 0.00 0.0")
         rc_sends = [(d, f) for d, f in observed if d.startswith(b"rcr")]
-        # an rcr may leave only if the latch was not yet written when it left
+        # rcr 은 나가던 시점에 latch 가 아직 쓰이지 않았을 때만 나갈 수 있다
         self.assertTrue(all(fault is None for _d, fault in rc_sends), rc_sends)
         self.assertLessEqual(len(rc_sends), 1)
 
     def test_latch_written_before_the_rc_lock_is_taken_drops_the_send(self):
-        # Pause the sender just before it takes rc_send_lock, write the latch,
-        # then let it continue: the latch check must happen inside the lock.
+        # 송신 쪽을 rc_send_lock 을 잡기 직전에 멈추고 latch 를 쓴 뒤
+        # 계속 진행시킨다. latch 검사는 lock 안에서 일어나야 한다.
         module = self.module
         entered = threading.Event()
         release = threading.Event()
@@ -3312,7 +3312,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
             observed, "[FAULT] 텔레메트리",
         )
         self.assertFalse(streaming)
-        # console order is unchanged: [FAULT] first, then the local release line
+        # 콘솔 순서는 그대로: [FAULT] 먼저, 그다음 로컬 해제 줄
         texts = [o[0] for o in observed]
         self.assertLess(
             texts.index(_text),
@@ -3419,7 +3419,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
             ready(**overrides)
             self.assertFalse(module.request_resume("test"))
 
-        # accepted request, then the "RC accepted, resume sent" event
+        # 수락된 요청, 그다음 "RC accepted, resume sent" 이벤트
         ready()
         module.telem_total_pkts = 40
         module.telem_dropped_pkts = 3
@@ -3461,7 +3461,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         visit(tree, False)
         self.assertEqual(offenders, [])
 
-    # --- Task 7: --keyboard / --listen modes and bad-packet counting ---
+    # --- Task 7: --keyboard / --listen 모드와 bad packet 집계 ---
 
     KEYBOARD_REFUSAL = "[STDIN] 키보드 모드: 시동·복구는 패드로만 합니다"
     LISTEN_REFUSAL = "[STDIN] 수신 전용 모드"
@@ -3499,7 +3499,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         return started
 
     def _replay(self, module, samples):
-        """Feed parsed samples through telemetry_thread on the module's socket."""
+        """모듈의 socket 을 거쳐 파싱된 샘플을 telemetry_thread 에 넣는다."""
         rows = []
         module.csv_writer = types.SimpleNamespace(writerow=rows.append)
         module.csv_file = types.SimpleNamespace(flush=lambda: None)
@@ -3714,7 +3714,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.module.shutdown_workers_and_close_log(())
         self.assertIn("[LOG] 저장 2개, 잘못된 패킷 2개", recording.texts("event"))
 
-    # --- Task 7 review round 1 ---
+    # --- Task 7 검토 1차 ---
 
     def test_malformed_only_traffic_publishes_the_bad_packet_count(self):
         recording = _RecordingUI()
@@ -3755,11 +3755,11 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.module.main(["--keyboard"], ui=_RecordingUI())
 
-    # --- final whole-branch review ---
+    # --- 브랜치 전체 최종 검토 ---
 
     @staticmethod
     def _threading_with(module, thread_class):
-        """The module's ``threading`` with only Thread replaced (prompt_toolkit untouched)."""
+        """Thread 만 바꾼 모듈의 ``threading``(prompt_toolkit 은 그대로)."""
         return types.SimpleNamespace(
             Thread=thread_class, Event=threading.Event, Lock=threading.Lock,
             local=threading.local, current_thread=threading.current_thread,
@@ -3873,7 +3873,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertEqual(recording.texts("update")[0]["mode"], "pad")
 
     def test_dashboard_shows_local_safety_changes_without_a_datagram(self):
-        # Real station state and snapshot(), real DashboardUI, wired by main().
+        # 실제 스테이션 상태와 snapshot(), 실제 DashboardUI 를 main() 이 연결한다.
         m, _sock = self._load_mode_module((), "final_dashboard_pull")
         self._arm_locally(m)
         m.current_throttle = 1400
@@ -3901,7 +3901,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
                 self.assertTrue(self._wait(lambda: shown().get("is_streaming") is True))
                 self.assertEqual(shown().get("current_throttle"), 1400)
 
-                # 1) link loss while streaming: stop_streaming_only, no datagram after
+                # 1) streaming 중 링크 끊김: stop_streaming_only, 그 뒤 datagram 없음
                 m.last_telem_time = m.time.monotonic() - 5.0
                 m.sock = _FakeSocket([])
                 with self.assertRaises(_LoopComplete):
@@ -3911,7 +3911,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
                                 shown())
                 self.assertEqual(shown().get("current_throttle"), 1000)
 
-                # 2) a telemetry-worker fault: latch shown without any packet
+                # 2) telemetry-worker fault: 패킷이 없어도 latch 가 표시됨
                 m._handle_worker_fault("telemetry", RuntimeError("synthetic"))
                 self.assertTrue(self._wait(
                     lambda: shown().get("worker_fault") == "telemetry"), shown())
@@ -3923,10 +3923,10 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertEqual(result, [0])
 
     def test_dashboard_render_failure_latches_a_fault_without_stop(self):
-        # Amendment (finding 2): an internal dashboard error while armed and
-        # streaming is a fault, not an operator stop: latch, RC stops, the
-        # drone's RC-timeout autoland takes over, no stop packet; the station
-        # keeps running on line output until the operator's Ctrl+C.
+        # 수정안(finding 2): armed·streaming 중 대시보드 내부 오류는 운용자 정지가
+        # 아니라 fault 다: latch, RC 중단, 드론의 RC-timeout autoland 가
+        # 이어받고 stop 패킷은 없다. 스테이션은 운용자가 Ctrl+C 를 누를 때까지
+        # 줄 출력으로 계속 돈다.
         from prompt_toolkit.input import create_pipe_input
         from prompt_toolkit.output import DummyOutput
         from ground.station_ui import DashboardUI
@@ -3957,7 +3957,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
                                       b"stop" in [d for d, _ in sock.sent]))
             input_started.set()
             release_input.wait(timeout=5.0)
-            raise KeyboardInterrupt   # the operator's Ctrl+C on the line console
+            raise KeyboardInterrupt   # 줄 콘솔에서 운용자가 누른 Ctrl+C
 
         result = []
 
@@ -3983,10 +3983,10 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
                 self.assertEqual(m.worker_fault, "dashboard")
                 self.assertFalse(m.is_streaming)
                 self.assertNotIn(b"stop", [d for d, _ in sock.sent])
-                # the latch holds: no RC, no arm
+                # latch 유지: RC 없음, arm 없음
                 m.send_cmd("rcr 1 0.00 0.00 0.0")
                 self.assertFalse(any(d.startswith(b"rcr") for d, _ in sock.sent))
-                # later station events reach the fallback console
+                # 이후 스테이션 이벤트는 fallback 콘솔에 나온다
                 m.ui.event("[WARN] after the fallback")
                 self.assertIn("[WARN] after the fallback", output.getvalue())
             finally:
@@ -3996,7 +3996,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertEqual(result, [0])
         text = output.getvalue()
         self.assertIn("[ERR] 대시보드 스레드 오류: OSError", text)
-        # the operator's Ctrl+C afterwards keeps the conditional-disarm semantics
+        # 그 뒤 운용자의 Ctrl+C 는 조건부 disarm 의미를 그대로 따른다
         self.assertIn(b"stop", [d for d, _ in sock.sent])
 
     def _observe_every_ui_call(self, sent_socket):
@@ -4064,7 +4064,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertTrue(any(k.startswith("[AUTO-LAND]") for k in kinds), packet_calls)
         self.assertTrue(all(not streaming for _k, _t, streaming, _a, _s in packet_calls),
                         packet_calls)
-        # console order is unchanged: [STATUS], [AUTO-LAND], then the fault lines
+        # 콘솔 순서는 그대로: [STATUS], [AUTO-LAND], 그다음 fault 줄
         texts = [o[1] for o in packet_calls]
         status = next(i for i, t in enumerate(texts) if t.startswith("[STATUS]"))
         fault = next(i for i, t in enumerate(texts) if "[FAULT] 드론: RC 타임아웃" in t)
@@ -4076,7 +4076,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         critical = _telemetry_sample(Failsafe_Phase=0, Armed=1, Fault_Critical=1)
 
         def lose_the_link_first():
-            # not streaming: the loss is only reported, then [OK] on recovery
+            # streaming 아님: 끊김은 알리기만 하고, 복구되면 [OK]
             self.module.is_streaming = False
             self.module.last_telem_time = self.module.time.monotonic() - 5.0
 
@@ -4090,8 +4090,8 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
                 break
         ok = [o for o in first_packet if o[1] == "[OK] 텔레메트리 수신 복구"]
         self.assertEqual(len(ok), 1, first_packet)
-        self.assertFalse(ok[0][3])   # disarmed already
-        self.assertTrue(ok[0][4])    # stop already sent
+        self.assertFalse(ok[0][3])   # 이미 disarm 됨
+        self.assertTrue(ok[0][4])    # stop 은 이미 전송됨
         self.assertTrue(all(not armed for _k, _t, _s, armed, _st in first_packet),
                         first_packet)
 
@@ -4107,10 +4107,10 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertTrue(diag[0][4])
 
     def test_packet_output_is_flushed_after_the_worker_fault_safety(self):
-        # An arm attempt is pending and the link was lost (reported only). The
-        # next packet prints [OK] and a start-retry line, then the CSV write
-        # crashes the receiver. Those lines must wait until the worker-fault
-        # handler has cancelled the arm attempt with stop.
+        # arm 시도가 대기 중이고 링크가 끊겼다(알리기만 함). 다음 패킷이
+        # [OK] 와 start 재시도 줄을 찍은 뒤 CSV 쓰기가 수신 스레드를
+        # 죽인다. 이 줄들은 worker-fault handler 가 stop 으로 arm 시도를
+        # 취소할 때까지 기다려야 한다.
         self._prime_prearm_telemetry()
         self.module.arm_state = "arming"
         self.module.arm_deadline = self.module.time.monotonic() + 30.0
@@ -4138,7 +4138,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
                                     "[ARM] 펌웨어 확인 대기: start 재전송")]
         self.assertEqual(len(packet_lines), 2, observed)
         self.assertTrue(all(stop for _k, _t, _s, _a, stop in packet_lines), observed)
-        # original console order: the packet's lines, then the fault lines
+        # 원래 콘솔 순서: 패킷의 줄, 그다음 fault 줄
         ok = texts.index("[OK] 텔레메트리 수신 복구")
         err = next(i for i, t in enumerate(texts) if t.startswith("[ERR] 수신 스레드 오류"))
         cancel = next(i for i, t in enumerate(texts) if "무장 시도 취소" in t)
@@ -4155,8 +4155,8 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
             handler = signal.getsignal(signal.SIGTERM)
             seen.append(handler)
             if not callable(handler) or handler is before:
-                raise EOFError  # no SIGTERM handler: end so the test can fail cleanly
-            handler(signal.SIGTERM, None)   # the main thread's handler, as the kernel would
+                raise EOFError  # SIGTERM handler 없음: 시험이 깔끔하게 실패하도록 끝낸다
+            handler(signal.SIGTERM, None)   # 커널이 하듯 main 스레드의 handler 를 부른다
             raise AssertionError("the SIGTERM handler returned inside input()")
 
         def arm_locally(module):
@@ -4173,7 +4173,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         self.assertIsNot(seen[0], before)
         self.assertFalse(m.is_armed)
         self.assertIn(b"stop", [d for d, _ in sock.sent])
-        # main() restores the previous handler when it returns
+        # main() 은 반환할 때 이전 handler 를 되돌린다
         self.assertIs(signal.getsignal(signal.SIGTERM), before)
 
     def test_sigterm_after_the_ui_returned_does_not_abort_log_saving(self):
@@ -4185,7 +4185,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
             def after_run(self):
                 handler = signal.getsignal(signal.SIGTERM)
                 handlers.append(handler)
-                handler(signal.SIGTERM, None)   # must not raise during cleanup
+                handler(signal.SIGTERM, None)   # 정리 중에 예외를 내면 안 된다
 
         m, _sock = self._load_mode_module((), "final_sigterm_cleanup")
         m.csv_file = io.StringIO()
@@ -4208,13 +4208,13 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         for command in commands:
             m.handle_stdin_command(command)
         self.assertEqual(recording.texts("event"), [self.KEYBOARD_RC_REFUSAL] * len(commands))
-        # the keyboard-mode sending boundary itself drops RC and start/resume
+        # keyboard 모드의 송신 경계 자체가 RC 와 start/resume 을 버린다
         for command in ("rcr 3 0.00 0.00 0.0", "rc 1500 1500 1500 1500", "start", "resume"):
             m.send_cmd(command)
         sent = [d for d, _ in sock.sent]
         self.assertFalse(any(d.split()[0].lower() in (b"rc", b"rcr", b"start", b"resume")
                              for d in sent if d), sent)
-        # other commands still pass
+        # 다른 명령은 그대로 통과
         m.send_cmd("gains")
         self.assertIn(b"gains", [d for d, _ in sock.sent])
 
@@ -4231,7 +4231,7 @@ class ControlDualsenseRegressionTests(unittest.TestCase):
         def sleep(seconds):
             sleeps.append(seconds)
             if len(sleeps) >= 5:
-                raise KeyboardInterrupt   # SIGINT/SIGTERM while receiving
+                raise KeyboardInterrupt   # 수신 중 SIGINT/SIGTERM
 
         output = io.StringIO()
         with (
@@ -4311,9 +4311,9 @@ class BenchTrimResetTests(unittest.TestCase):
                 )
 
 
-# A station process for the SIGTERM test: real control_station + DashboardUI in
-# a pty, with the UDP socket, pygame and the log directory replaced so nothing
-# reaches the network or the repository's logs/.
+# SIGTERM 시험용 스테이션 프로세스: pty 안의 실제 control_station + DashboardUI.
+# UDP socket, pygame, 로그 디렉터리는 바꿔치기해 네트워크나 저장소의 logs/ 에
+# 아무것도 닿지 않게 한다.
 _SIGTERM_STATION_DRIVER = r'''
 import pathlib, socket, sys, time, types
 scripts, log_dir, sent_path = sys.argv[1:4]
@@ -4357,7 +4357,7 @@ sys.exit(station.main([]))
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "pty test needs Linux")
 class StationSigtermTest(unittest.TestCase):
-    """SIGTERM to a station running the dashboard in a pty (final review #6)."""
+    """pty 에서 대시보드를 띄운 스테이션에 SIGTERM 을 보낸다(최종 검토 #6)."""
 
     def _drain(self, master, chunks, until=None, timeout=15.0):
         import os
@@ -4408,7 +4408,7 @@ class StationSigtermTest(unittest.TestCase):
             def screen():
                 return b"".join(chunks).decode("utf-8", errors="replace")
 
-            # the dashboard is up once its panels and hint line are drawn
+            # 패널과 힌트 줄이 그려지면 대시보드가 뜬 것이다
             self.assertTrue(
                 self._drain(master, chunks, until=lambda: "도움말" in screen()),
                 screen()[-2000:],

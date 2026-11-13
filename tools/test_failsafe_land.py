@@ -21,7 +21,7 @@ def _firmware_float_constant(name):
 
 
 class FailsafeLandTest(unittest.TestCase):
-    """Compile and run the failsafe-land unit test at -m32."""
+    """failsafe-land 단위 시험을 -m32 로 컴파일해 실행한다."""
 
     def test_failsafe_land(self):
         compiler = shutil.which("g++")

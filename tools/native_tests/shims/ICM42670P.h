@@ -9,10 +9,10 @@ struct inv_imu_sensor_event_t {
   int16_t accel[3] = {0, 0, 0};
 };
 
-// Low-level driver surface the firmware's ICM42670WithLPF subclass reaches into.
-// The host tests never touch the IMU, so these are inert stubs that only need to
-// compile. `icm_driver` is protected in the real library; keep it protected here
-// so the subclass can access it just as it does on target.
+// 펌웨어의 ICM42670WithLPF 서브클래스가 직접 접근하는 저수준 드라이버 인터페이스.
+// 호스트 시험은 IMU 를 건드리지 않으므로 컴파일만 되면 되는 동작 없는 stub 이다.
+// 실제 라이브러리에서 `icm_driver` 는 protected 다. 여기서도 protected 로 두어
+// 타깃에서처럼 서브클래스가 접근하게 한다.
 struct inv_imu_device_t {};
 
 enum {

@@ -12,7 +12,7 @@ SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 
 
 class MspSensorTest(unittest.TestCase):
-    """Compile and run the msp-sensor unit test at -m32."""
+    """msp-sensor 단위 시험을 -m32 로 컴파일해 실행한다."""
 
     def test_msp_sensor(self):
         compiler = shutil.which("g++")

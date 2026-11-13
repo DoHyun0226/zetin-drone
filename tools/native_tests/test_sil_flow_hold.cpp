@@ -13,7 +13,7 @@
 
 #include "zetin_fc.ino"
 
-// dual_imu_cascade_flow_hold 를 호스트에서 폐루프로 돌린다. 플랜트는 자세 SIL 과
+// zetin_fc 를 호스트에서 폐루프로 돌린다. 플랜트는 자세 SIL 과
 // 같은 소형 쿼드 추정 파라미터에 수평 병진을 더했다. 광류 센서는 "광축이
 // 지난 프레임에 맞힌 지면점이 이번 프레임에 기체 좌표에서 얼마나 벗어났는가"를
 // 기하로 계산한다 — 계획 §2 의 시선 각속도 식을 쓰지 않으므로, 그 식에서 나온
@@ -1597,7 +1597,7 @@ int main() {
     std::string f;
     while (std::getline(ss, f, ',')) after.push_back(f);
     CHECK(after.size() == 97);
-    CHECK(after[94] == "1");           // Land_Cut_Reason CONTACT, kept after the cut
+    CHECK(after[94] == "1");           // Land_Cut_Reason CONTACT, 컷 뒤에도 유지
     // 요청·실제 collective 는 같은 스냅숏이다: 컷 뒤 둘 다 1000(차이 0).
     CHECK_MSG(std::fabs(std::stod(after[67]) - std::stod(after[95])) < 0.5,
               "collective " + after[67] + " vs requested " + after[95]);

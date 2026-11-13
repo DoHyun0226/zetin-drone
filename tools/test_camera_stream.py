@@ -27,7 +27,7 @@ JPEG = b"\xff\xd8abc\xff\xd9"
 
 
 def make_part(jpeg, ts="3000.000123", seq=7, headers=None):
-    """Bytes for one part exactly as the camera sketch sends it."""
+    """카메라 스케치가 보내는 그대로의 part 하나의 바이트열."""
     if headers is None:
         headers = [b"Content-Type: image/jpeg", b"Content-Length: %d" % len(jpeg)]
         if ts is not None:
@@ -42,7 +42,7 @@ def make_stream(parts):
 
 
 def feed_all(parser, *chunks, tag=None):
-    """Feed chunks, then finish(): the parser holds a part until its trailing boundary or EOF."""
+    """청크를 넣고 finish() 를 부른다. 파서는 뒤따르는 boundary 나 EOF 까지 part 를 붙잡아 둔다."""
     out = []
     for chunk in chunks:
         out.extend(parser.feed(chunk, tag=tag))
@@ -122,7 +122,7 @@ class MjpegParserTest(unittest.TestCase):
 
     def test_tag_is_header_arrival_chunk(self):
         data = make_part(b"\xff\xd8" + b"y" * 100 + b"\xff\xd9")
-        cut = data.index(b"\r\n\r\n") + 4 + 10  # headers complete, body still incomplete
+        cut = data.index(b"\r\n\r\n") + 4 + 10  # 헤더는 다 왔고 본문은 아직 덜 옴
         parser = MjpegParser(BOUNDARY)
         self.assertEqual(parser.feed(data[:cut], tag="A"), [])
         parts = parser.feed(data[cut:], tag="B") + parser.finish()[0]
@@ -144,7 +144,7 @@ class MjpegParserTest(unittest.TestCase):
         self.assertEqual(parser.finish(), ([], True))
 
         parser = MjpegParser(BOUNDARY)
-        self.assertEqual(parser.feed(data), [])  # held until the next boundary or EOF
+        self.assertEqual(parser.feed(data), [])  # 다음 boundary 나 EOF 까지 보류
         remaining, truncated = parser.finish()
         self.assertEqual([p.jpeg for p in remaining], [b"\xff\xd8" + b"q" * 50 + b"\xff\xd9"])
         self.assertFalse(truncated)
@@ -160,7 +160,7 @@ class MjpegParserTest(unittest.TestCase):
                 with self.assertRaises(StreamFormatError):
                     emitted.extend(parser.feed(data[:cut]))
                     emitted.extend(parser.feed(data[cut:]))
-                self.assertEqual(emitted, [])  # the frame without its EOI is never handed out
+                self.assertEqual(emitted, [])  # EOI 가 없는 프레임은 내보내지 않는다
 
     def test_bad_numeric_header_is_stream_format_error(self):
         for headers in (
@@ -182,7 +182,7 @@ class MjpegParserTest(unittest.TestCase):
         parser = MjpegParser(BOUNDARY)
         header_only = b"\r\n--" + BOUNDARY + b"\r\nContent-Length: 1000000000\r\n\r\n"
         with self.assertRaises(StreamFormatError):
-            parser.feed(header_only)  # rejected before any body is buffered
+            parser.feed(header_only)  # 본문을 버퍼에 담기 전에 거부
 
     def test_valid_part_survives_following_bad_part(self):
         body = b"\xff\xd8" + b"z" * 20 + b"\xff\xd9"
@@ -264,7 +264,7 @@ class ClockAlignmentTest(unittest.TestCase):
 
     def test_drift_report_linear_drift(self):
         rows = []
-        for i in range(3001):  # 300 s at 10 Hz, offset grows as 1e-4 * t
+        for i in range(3001):  # 10 Hz 로 300 s, offset 은 1e-4 * t 로 커진다
             t = i * 0.1
             rows.append(row(0, i, t, epoch=1000 + t + 1e-4 * t, capture=t))
         self.assertAlmostEqual(drift_report(rows)[0], 0.024, delta=0.001)

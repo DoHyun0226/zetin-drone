@@ -1,9 +1,8 @@
-"""Static guards for the ESP32-CAM stream sketch and the laptop camera tools.
+"""ESP32-CAM 스트림 스케치와 노트북 카메라 도구의 정적 검사.
 
-These do not build anything. They pin the spec's anti-goals that a compile
-cannot see: the camera path must never touch the flight UDP port, the capture
-timestamp must not be printed with a 32-bit format, and the static IP must
-stay outside the flight SoftAP's DHCP pool.
+이 시험은 아무것도 빌드하지 않는다. 컴파일로는 드러나지 않는 스펙의 금지 사항을 고정한다.
+카메라 경로는 비행 UDP 포트를 절대 건드리지 않는다. 캡처 타임스탬프는 32비트 형식으로
+출력하지 않는다. 고정 IP 는 비행 SoftAP 의 DHCP 풀 밖에 둔다.
 """
 
 import re
@@ -47,27 +46,27 @@ class CameraSketchStaticTest(unittest.TestCase):
         self.assertNotIn(200, DHCP_POOL)
 
     def test_full_tx_power_by_default(self):
-        # 11 dBm measured 0.7-1.2 fps with 17-640 ms ping on the bench
-        # (2026-11-02); 19.5 dBm gave 7.9 fps and 18-91 ms.
+        # 벤치(2026-11-02)에서 11 dBm 은 0.7-1.2 fps, ping 17-640 ms 로 측정됐다.
+        # 19.5 dBm 은 7.9 fps, 18-91 ms.
         self.assertIn("CAM_WIFI_TX_POWER = WIFI_POWER_19_5dBm;", SKETCH.read_text(encoding="utf-8"))
 
     def test_vga_quality_10_by_default(self):
-        # user-chosen default (2026-11-02); bench: VGA q10 = 15-22 kB, 2.8-7.7 fps; SVGA q10 fell to 1.3 fps
-        # because a 28 kB frame needs ~5 round trips through the 5744 B TCP send buffer
+        # 사용자가 고른 기본값(2026-11-02). 벤치: VGA q10 = 15-22 kB, 2.8-7.7 fps. SVGA q10 은 1.3 fps 로 떨어졌다.
+        # 28 kB 프레임이 5744 B TCP 송신 버퍼를 거치려면 약 5번 왕복해야 하기 때문이다.
         text = SKETCH.read_text(encoding="utf-8")
         self.assertIn("const framesize_t FRAME_SIZE = FRAMESIZE_VGA;", text)
         self.assertIn("const int JPEG_QUALITY = 10;", text)
 
     def test_xclk_12mhz_by_default(self):
-        # bench 2026-11-02: XCLK 20 MHz alone (sensor powered down) cut the camera link to
-        # ~70-110 kB/s and the stream to 5.0/0.65 fps; 12 MHz gave 9.5-9.7 fps. 24 MHz corrupts frames.
+        # 벤치 2026-11-02: XCLK 20 MHz 만으로(센서 전원 꺼짐) 카메라 링크가 약 70-110 kB/s,
+        # 스트림이 5.0/0.65 fps 로 떨어졌다. 12 MHz 는 9.5-9.7 fps. 24 MHz 는 프레임을 깨뜨린다.
         text = SKETCH.read_text(encoding="utf-8")
         self.assertIn("const int CAM_XCLK_HZ = 12000000;", text)
         self.assertRegex(text, r"config\.xclk_freq_hz\s*=\s*CAM_XCLK_HZ;")
 
     def test_mirror_and_flip_are_applied_from_constants(self):
         text = SKETCH.read_text(encoding="utf-8")
-        self.assertIn("const bool CAM_HMIRROR = true;", text)  # OV3660 board: image came out mirrored
+        self.assertIn("const bool CAM_HMIRROR = true;", text)  # OV3660 보드: 영상이 좌우 반전되어 나왔다
         self.assertIn("const bool CAM_VFLIP = false;", text)
         self.assertRegex(text, r"set_hmirror\(\s*s\s*,\s*CAM_HMIRROR")
         self.assertRegex(text, r"set_vflip\(\s*s\s*,\s*CAM_VFLIP")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract and judge failsafe probe responses from telemetry CSV logs."""
+"""텔레메트리 CSV 로그에서 failsafe probe 응답을 뽑아 판정한다."""
 
 import argparse
 import csv
@@ -51,7 +51,7 @@ class ProbeExtraction:
 
 
 def read_firmware_float_constant(name, firmware_path=FIRMWARE_PATH):
-    """Read a finite ``const[expr] float`` value from the current sketch.
+    """현재 스케치에서 유한한 ``const[expr] float`` 값을 읽는다.
 
     ``firmware_path`` 는 스케치 폴더(``.ino``·``fc``·``logic`` 의 모든 파일을 찾고
     정의는 정확히 한 번 나와야 한다)나 소스 파일 하나다.
@@ -155,12 +155,11 @@ def _event_from_row(
 
 
 def extract_probe_events_with_stats(csv_path, label="unlabeled"):
-    """Extract one event per observed probe decision.
+    """관측된 probe 판정마다 이벤트 하나를 뽑는다.
 
-    A sampled DIP→EVALUATE/BLOCKED transition is authoritative. If the 1 ms
-    decision state falls between 20 Hz samples, a change in the latched
-    response value is the fallback evidence. Exact 0.0 responses are firmware
-    resets, not probe decisions, and are counted separately.
+    샘플에 잡힌 DIP→EVALUATE/BLOCKED 전이를 우선 근거로 삼는다. 1 ms 판정 상태가
+    20 Hz 샘플 사이에 끼어 있으면, latch된 응답 값의 변화를 대체 근거로 쓴다.
+    정확히 0.0인 응답은 probe 판정이 아니라 펌웨어 리셋이므로 따로 센다.
     """
 
     path = Path(csv_path).expanduser().resolve()
@@ -235,7 +234,7 @@ def extract_probe_events_with_stats(csv_path, label="unlabeled"):
 
 
 def extract_probe_events(csv_path, label="unlabeled"):
-    """Return probe events while preserving the original list-only API."""
+    """probe 이벤트를 돌려준다. 원래의 리스트만 돌려주는 API를 유지한다."""
 
     return extract_probe_events_with_stats(csv_path, label).events
 
@@ -448,7 +447,7 @@ def print_distribution_judgement(
 
 
 def plot_distributions(events, response_threshold):
-    """Plot usable labeled responses; matplotlib stays an optional import."""
+    """쓸 수 있는 라벨 붙은 응답을 그린다. matplotlib은 선택적 import로 둔다."""
 
     try:
         import matplotlib.pyplot as plt

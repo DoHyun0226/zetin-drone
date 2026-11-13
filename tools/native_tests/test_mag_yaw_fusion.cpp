@@ -191,7 +191,7 @@ void injectImu(float roll_deg, float pitch_deg, float body_gz_dps,
   event1.accel[1] = rawValue(body_ax / ACCEL_SCALE);
   event1.accel[2] = rawValue(body_az / ACCEL_SCALE);
 
-  // Keep the freeze monitor live without adding a mean gyro bias.
+  // 평균 자이로 바이어스를 더하지 않고 freeze 모니터를 살려 둔다.
   const int dither = (tick & 1U) ? -1 : 1;
   event1.gyro[0] = static_cast<int16_t>(dither);
   event1.accel[2] = static_cast<int16_t>(event1.accel[2] + 2 * dither);
@@ -260,8 +260,8 @@ BodyMag syntheticBodyMag(float roll_deg, float pitch_deg,
   const float sh = std::sin(heading);
   const float ch = std::cos(heading);
 
-  // Inverse of Rz(heading) * Ry(pitch) * Rx(roll), for a horizontal
-  // navigation-frame magnetic vector [1, 0, 0].
+  // Rz(heading) * Ry(pitch) * Rx(roll) 의 역변환. 항법 좌표계의
+  // 수평 자기 벡터 [1, 0, 0] 에 대한 것이다.
   return {
       cp * ch,
       sr * sp * ch - cr * sh,

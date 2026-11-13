@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-// In-memory stand-in for the ESP32 Preferences (NVS) API. One store per process;
-// tests call preferences_fake::reset() to start from an empty flash.
+// ESP32 Preferences (NVS) API 의 메모리 내 대체물. 프로세스당 저장소 하나다.
+// 시험은 preferences_fake::reset() 을 불러 빈 flash 에서 시작한다.
 namespace preferences_fake {
 inline std::map<std::string, std::vector<uint8_t>> store;
 inline void reset() { store.clear(); }

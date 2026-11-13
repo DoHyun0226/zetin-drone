@@ -109,8 +109,8 @@ int main() {
   });
 
   runCase("frame_captured_before_stream_start_is_stale", [] {
-    CHECK(frameIsStale(1000000, 61000000));    // sat in the single buffer for a minute
-    CHECK(!frameIsStale(61000001, 61000000));  // captured after the client connected
+    CHECK(frameIsStale(1000000, 61000000));    // 단일 버퍼에 1분 동안 머묾
+    CHECK(!frameIsStale(61000001, 61000000));  // 클라이언트 접속 뒤 캡처
     CHECK(!frameIsStale(61000000, 61000000));
   });
 

@@ -17,7 +17,7 @@ SUPPORTED_MUTATIONS = {"none", "disabled", "inverted", "tilt-inverted"}
 
 
 class MagYawFusionTest(unittest.TestCase):
-    """Compile the real flight sketch and exercise BMM350 yaw fusion at -m32."""
+    """실제 비행 스케치를 -m32 로 컴파일해 BMM350 yaw fusion 을 돌려 본다."""
 
     def test_mag_yaw_fusion(self):
         compiler = shutil.which("g++")

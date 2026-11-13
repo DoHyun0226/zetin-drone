@@ -12,7 +12,7 @@ SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 
 
 class ControlAllocatorTest(unittest.TestCase):
-    """Compile and run the pure priority-control allocator at ESP32-width."""
+    """순수 priority-control allocator 를 ESP32 폭으로 컴파일해 실행한다."""
 
     def test_control_allocator(self):
         compiler = shutil.which("g++")

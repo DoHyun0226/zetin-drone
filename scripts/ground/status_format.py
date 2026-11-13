@@ -1,7 +1,7 @@
-"""Pure value formatters shared by the console status lines and the dashboard.
+"""콘솔 상태 줄과 대시보드가 같이 쓰는 순수 값 formatter.
 
-Depends only on the standard library and ground.failsafe_telemetry so that
-control_station can import it when prompt_toolkit is not installed.
+표준 라이브러리와 ground.failsafe_telemetry에만 의존한다. 그래서
+prompt_toolkit이 설치되지 않아도 control_station이 import할 수 있다.
 """
 
 import math
@@ -19,7 +19,7 @@ POSHOLD_STATE_NAMES = ("OFF", "ACTIVE", "COAST", "SUSPENDED", "OVERRIDE")
 ALTHOLD_STATE_NAMES = ("OFF", "ACTIVE", "ADJUST", "SUSPENDED")
 
 # ---------------------------------------------------------------------------
-# Value formatters shared with the console status lines
+# 콘솔 상태 줄과 같이 쓰는 값 formatter
 # ---------------------------------------------------------------------------
 def _format_optional_float(value, decimal_places):
     try:
@@ -94,7 +94,7 @@ def _state_name(names, value):
 
 
 def _format_flow_hold_status(sample):
-    """Flow-hold firmware only; the main firmware leaves these fields None."""
+    """zetin_fc만 보낸다. 옛 75필드 펌웨어에서는 이 필드들이 None이다."""
     if sample.get("PosHold_State") is None:
         return ""
     return (

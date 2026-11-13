@@ -12,7 +12,7 @@ SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 
 
 class YawAuthorityTest(unittest.TestCase):
-    """Compile and run the pure yaw-authority contract at ESP32 width."""
+    """순수 yaw-authority 계약을 ESP32 폭으로 컴파일해 실행한다."""
 
     def test_yaw_authority(self):
         compiler = shutil.which("g++")

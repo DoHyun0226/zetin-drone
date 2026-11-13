@@ -90,7 +90,7 @@ class AnalyzeProbeResponseTests(unittest.TestCase):
 
     @staticmethod
     def repeated_descent_samples(values, hover_est=1340.0):
-        """Model repeated start → auto-land → one probe → landed cycles."""
+        """start → auto-land → probe 1회 → landed 주기의 반복을 모사한다."""
 
         samples = [
             {
