@@ -77,7 +77,7 @@ class MagYawFusionTest(unittest.TestCase):
                         "const float roll = -roll_deg * PI / 180.0f;\n"
                         "  const float pitch = -pitch_deg * PI / 180.0f;"
                     )
-                # Whichever sketch file holds it; it must occur exactly once.
+                # 어느 스케치 파일에 있든 정확히 한 번 나와야 한다.
                 try:
                     firmware_source.mutate_unique(sketch_dir, old, new)
                 except LookupError:

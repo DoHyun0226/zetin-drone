@@ -15,7 +15,7 @@ from ground.paths import REPO_ROOT
 from ground.telemetry_schema import CSV_FIELDS
 
 
-# The flight sketch directory; constants may live in any of its files.
+# 비행 스케치 폴더. 상수는 그 안의 어느 파일에 있어도 된다.
 FIRMWARE_PATH = firmware_source.SKETCH_DIR
 MIN_SAMPLE_COUNT = 20
 HOVER_TOLERANCE_US = 1.0
@@ -53,9 +53,8 @@ class ProbeExtraction:
 def read_firmware_float_constant(name, firmware_path=FIRMWARE_PATH):
     """Read a finite ``const[expr] float`` value from the current sketch.
 
-    ``firmware_path`` is the sketch directory (every ``.ino``/``fc``/``logic``
-    file is searched and the definition must appear exactly once) or a single
-    source file.
+    ``firmware_path`` 는 스케치 폴더(``.ino``·``fc``·``logic`` 의 모든 파일을 찾고
+    정의는 정확히 한 번 나와야 한다)나 소스 파일 하나다.
     """
 
     firmware_path = Path(firmware_path)

@@ -1,4 +1,4 @@
-"""Tests for tools/compare_firmware_elf.py on small host-built ELF32 files."""
+"""tools/compare_firmware_elf.py 를 호스트에서 만든 작은 ELF32 로 시험한다."""
 
 import shutil
 import subprocess

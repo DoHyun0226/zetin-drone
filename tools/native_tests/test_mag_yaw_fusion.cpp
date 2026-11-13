@@ -137,8 +137,8 @@ void resetCommonFirmwareState(float roll_deg, float pitch_deg, float yaw_deg) {
   tgtRate[1] = 0.0f;
   tgtRate[2] = 0.0f;
   pidLoopHz = 0;
-  // zetin_fc ships the airframe trim (-2.2/-1.8 deg) and flow-hold state; these
-  // cases model an untrimmed airframe without a 3901-L0X, so start both clean.
+  // zetin_fc 는 기체 트림(-2.2/-1.8°)과 광류 상태를 갖고 시작한다. 이 시험은 트림 없고
+  // 3901-L0X 없는 기체를 모델로 하므로 둘 다 깨끗하게 시작한다.
   trim_roll = 0.0f;
   trim_pitch = 0.0f;
   resetFlowHoldForHarness();
@@ -418,7 +418,7 @@ int runFusionTests() {
     startMagCalibration();
 
     std::vector<std::string> fields = sendTelemetryFields();
-    CHECK(fields.size() == 97U);  // zetin_fc: 75 + flow-hold/auto-land 22
+    CHECK(fields.size() == 97U);  // zetin_fc: 75 + 광류·자동착륙 22
     CHECK_NEAR(std::stof(fields.at(31)), 1.25f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(32)), -2.50f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(33)), 3.75f, 0.01f);
@@ -469,7 +469,7 @@ int runFusionTests() {
     stopMagCalibration();
 
     const std::vector<std::string> fields = sendTelemetryFields();
-    CHECK(fields.size() == 97U);  // zetin_fc: 75 + flow-hold/auto-land 22
+    CHECK(fields.size() == 97U);  // zetin_fc: 75 + 광류·자동착륙 22
     CHECK_NEAR(std::stof(fields.at(31)), 1.25f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(32)), -2.50f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(33)), 3.75f, 0.01f);

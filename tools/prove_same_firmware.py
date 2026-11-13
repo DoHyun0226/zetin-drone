@@ -1,27 +1,24 @@
 #!/usr/bin/env python3
-"""Build a baseline revision and the working-tree sketch, then compare ELFs.
+"""기준 리비전과 작업 트리의 스케치를 빌드해 ELF 를 비교한다.
 
-Proves that a source reorganisation of the flight firmware (moving code
-between files, comments, renames) leaves the ESP32 program unchanged.
+비행 펌웨어의 소스 재배치(파일 사이 코드 이동, 주석, 이름 변경)가 ESP32 프로그램을
+바꾸지 않았음을 증명한다.
 
     python tools/prove_same_firmware.py \
         --base-rev a41a6f6 \
         --base-path firmware/flight/dual_imu_cascade_flow_hold \
         --sketch firmware/flight/zetin_fc
 
-The baseline directory is exported whole with ``git archive`` (headers
-included) into a temporary folder and renamed to the candidate sketch's name,
-so both builds share the sketch name (the app descriptor's project name and
-any name-derived strings). Both are built with the same arduino-cli, core,
-libraries, FQBN and options, once per ``--debug`` value of
-``WIFI_LATENCY_DEBUG`` (default: 0 and 1). The comparison is
-``tools/compare_firmware_elf.py``.
+기준 디렉터리는 ``git archive`` 로 통째로(헤더 포함) 임시 폴더에 꺼내고 후보 스케치
+이름으로 바꾼다. 그래야 두 빌드의 스케치 이름(앱 설명자의 프로젝트 이름, 이름에서 나온
+문자열)이 같다. 둘 다 같은 arduino-cli·코어·라이브러리·FQBN·옵션으로, ``--debug`` 로
+준 ``WIFI_LATENCY_DEBUG`` 값마다(기본 0 과 1) 빌드한다. 비교는
+``tools/compare_firmware_elf.py`` 가 한다.
 
-The host view is compared too: ``g++ -E -P -x c++`` with the native shims
-(what the SIL and native tests compile), blank lines dropped, otherwise
-character for character.
+호스트 쪽도 비교한다: native shim 으로 ``g++ -E -P -x c++``(SIL·native 시험이 컴파일하는
+것), 빈 줄만 빼고 문자 단위로.
 
-Needs arduino-cli with the board core used by CI (see firmware/README.md).
+CI 와 같은 보드 코어가 깔린 arduino-cli 가 필요하다(firmware/README.md).
 """
 
 import argparse
@@ -69,16 +66,16 @@ def build(sketch, build_dir, debug, jobs):
         cmd += ["--build-property",
                 f"compiler.cpp.extra_flags=-DWIFI_LATENCY_DEBUG={debug}"]
     cmd.append(str(sketch))
-    # A reused build folder may hold core objects compiled with another pinned
-    # time; start it over unless it was made with this one.
+    # 재사용하는 빌드 폴더에 다른 고정 시각으로 컴파일된 코어 오브젝트가 남아 있을 수
+    # 있다. 이 값으로 만든 폴더가 아니면 처음부터 다시 만든다.
     marker = build_dir / ".source_date_epoch"
     if build_dir.exists() and (not marker.is_file()
                                or marker.read_text().strip() != SOURCE_DATE_EPOCH):
         shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True, exist_ok=True)
     marker.write_text(SOURCE_DATE_EPOCH + "\n")
-    # The ESP32 Arduino core prints a build date/time (__DATE__/__TIME__) in its
-    # boot report; pin it so two builds of the same source are byte-identical.
+    # ESP32 Arduino 코어는 부팅 보고에 빌드 날짜·시각(__DATE__/__TIME__)을 찍는다.
+    # 같은 소스의 두 빌드가 바이트까지 같도록 고정한다.
     env = dict(os.environ, SOURCE_DATE_EPOCH=SOURCE_DATE_EPOCH)
     result = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
     if result.returncode != 0:
@@ -91,11 +88,11 @@ def build(sketch, build_dir, debug, jobs):
 
 
 def host_preprocess(sketch, debug):
-    """Host view of the program (what the SIL and native tests compile).
+    """호스트에서 본 프로그램(SIL·native 시험이 컴파일하는 것).
 
-    g++ -E -P with the native shims; blank lines dropped, everything else kept
-    character for character (string literals included). Refuses empty output:
-    without -x c++ g++ ignores a .ino and prints nothing.
+    native shim 으로 g++ -E -P. 빈 줄만 빼고 나머지는 문자 단위로(문자열 리터럴 포함)
+    남긴다. 출력이 비면 거부한다 — -x c++ 없이는 g++ 가 .ino 를 무시하고 아무것도 찍지
+    않는다.
     """
     shims = REPO_ROOT / "tools" / "native_tests" / "shims"
     ino = sketch / f"{sketch.name}.ino"
@@ -155,7 +152,7 @@ def main():
             export_baseline(rev, args.base_path, tmp, name)
             stamp.write_text(f"{rev} {args.base_path}\n")
         base = tmp / "base" / name
-        # Same path depth and name for both: copy the candidate next to the baseline.
+        # 경로 깊이와 이름을 같게: 후보를 기준 옆에 복사한다.
         cand = tmp / "cand" / name
         if cand.exists():
             shutil.rmtree(cand)

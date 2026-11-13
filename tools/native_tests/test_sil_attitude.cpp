@@ -477,8 +477,8 @@ void resetFirmwareState(const PlantState &initial) {
   hover_valid = false;
   calibration_ok = true;
 
-  // zetin_fc ships the airframe trim (-2.2/-1.8 deg) and flow-hold state; these
-  // cases model an untrimmed airframe without a 3901-L0X, so start both clean.
+  // zetin_fc 는 기체 트림(-2.2/-1.8°)과 광류 상태를 갖고 시작한다. 이 시험은 트림 없고
+  // 3901-L0X 없는 기체를 모델로 하므로 둘 다 깨끗하게 시작한다.
   trim_roll = 0.0f;
   trim_pitch = 0.0f;
   resetFlowHoldForHarness();
@@ -1592,8 +1592,8 @@ int main() {
         ",0,-1,0,0,-1,0"
         ",1.000,1.000,1000.00,0.00,0.00,0.00"
         ",0.00,0.00,0.00,0";
-    // zetin_fc appends fields 76-97 after these 75; fields 38-75 (indices 38-74)
-    // must keep their place and content, so compare that slice in position.
+    // zetin_fc 는 이 75필드 뒤에 76~97번을 덧붙인다. 38~75번(인덱스 38~74)은 자리와
+    // 내용이 그대로여야 하므로 그 구간을 제자리에서 비교한다.
     std::vector<std::string> fields;
     {
       std::stringstream ss(packet);
@@ -1606,10 +1606,9 @@ int main() {
            << "; expected field_count=97 and fields 38-74 " << expected_suffix;
     CHECK_MSG(field_count == 97U, detail.str());
     CHECK_MSG(slice == expected_suffix, detail.str());
-    // Flow-hold and range auto-land fields (75-96) right after the harness reset,
-    // before any pid_task tick publishes: the reset snapshot (height 0, not the
-    // -1 a tick writes when invalid), holds off, calibration idle, no landing,
-    // auto-land switch off.
+    // 하네스 리셋 직후, pid_task 가 한 번도 게시하기 전의 광류·자동착륙 필드(75~96):
+    // 리셋 스냅숏(높이 0 — tick 이 무효일 때 쓰는 -1 이 아니다), 유지 꺼짐, 보정 대기,
+    // 착지 없음, 자동착륙 스위치 꺼짐.
     const std::string expected_flow =
         ",0,0.0,0,0.000,0.000,0.000,0.000,0.000,0.000,0,0.00,0.00,0,0.0,0,0"
         ",0,0,0.00,0,1000,0";

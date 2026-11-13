@@ -1,4 +1,4 @@
-"""Tests for scripts/ground/firmware_source.py (multi-file sketch reading)."""
+"""scripts/ground/firmware_source.py(여러 파일로 나뉜 스케치 읽기) 시험."""
 
 import shutil
 import sys

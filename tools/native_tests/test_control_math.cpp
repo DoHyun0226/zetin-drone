@@ -140,8 +140,8 @@ void resetRcState() {
   lastRcMs = 6;
   arduino_fake::millis_value = 100;
   targetYawRate = 0.0f;
-  // zetin_fc ships the airframe trim (-2.2/-1.8 deg) and adds it to RC targets.
-  // These cases check RC parsing and sequencing, so they run untrimmed.
+  // zetin_fc 는 기체 트림(-2.2/-1.8°)을 기본값으로 갖고 RC 목표에 더한다.
+  // 이 시험들은 RC 파싱·시퀀스만 보므로 트림 없이 돈다.
   trim_roll = 0.0f;
   trim_pitch = 0.0f;
 }
@@ -2584,12 +2584,12 @@ int main() {
 
     const std::vector<std::string> fields =
         splitCsv(wifi_udp_fake::telemetry_output);
-    // zetin_fc sends 97 fields (75 + flow-hold 16 + range auto-land 5 + switch).
+    // zetin_fc 는 97필드를 보낸다(75 + 광류 16 + 거리 기반 자동착륙 5 + 스위치).
     CHECK_EQ(fields.size(), 97U);
     CHECK_EQ(fields[18], "1");
     CHECK_EQ(fields[65], "0.800");
     CHECK_EQ(fields[66], "0.400");
-    // Field 96 Land_Req_US comes from the same snapshot as field 68.
+    // 96번 Land_Req_US 는 68번과 같은 스냅숏에서 나온다.
     CHECK_EQ(fields[95], "1205");
   });
 

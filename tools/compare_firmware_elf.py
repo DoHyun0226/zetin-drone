@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
-"""Compare two firmware ELF files for program identity.
+"""두 펌웨어 ELF 가 같은 프로그램인지 비교한다.
 
-Used to prove that a source reorganisation (moving code between files,
-changing comments) produced the same firmware. Compares what the chip loads:
+소스 재배치(파일 사이 코드 이동, 주석 변경)가 같은 펌웨어를 만들었음을 증명하는 데
+쓴다. 칩이 올리는 것을 비교한다:
 
-- ELF entry point;
-- every SHF_ALLOC section: name, type, flags, address, size, alignment
-  (NOBITS sections such as .bss included, in order);
-- the bytes of every allocated section that has file contents.
+- ELF 진입점
+- 모든 SHF_ALLOC 섹션의 이름·종류·flags·주소·크기·정렬(.bss 같은 NOBITS 포함, 순서대로)
+- 파일 내용이 있는 할당 섹션의 바이트
 
-The ESP-IDF application descriptor (``esp_app_desc_t``, symbol
-``esp_app_desc``) carries the build time, date and the ELF's own SHA-256;
-only those three fields are masked. Everything else in it (secure_version,
-eFuse revisions, MMU page size, project name, IDF version) is compared.
-Non-allocated sections (debug info, symbol tables) are ignored because they
-are not loaded and record source paths and line numbers.
+ESP-IDF 앱 설명자(``esp_app_desc_t``, 심볼 ``esp_app_desc``)에는 빌드 시각·날짜와
+ELF 자신의 SHA-256 이 들어 있다. 이 세 필드만 가린다. 나머지(secure_version, eFuse
+리비전, MMU 페이지 크기, 프로젝트 이름, IDF 버전)는 비교한다. 할당되지 않는 섹션
+(디버그 정보, 심볼 표)은 칩에 올라가지 않고 소스 경로·줄 번호를 담으므로 보지 않는다.
 
-Do not compare ``.bin`` files: their checksum and appended SHA change with
-any masked field, so a byte count of differences says nothing about where.
+``.bin`` 은 비교하지 않는다. 가린 필드 하나만 달라도 체크섬과 덧붙인 SHA 가 바뀌어,
+차이 바이트 수로는 어디가 다른지 알 수 없다.
 
-Usage: compare_firmware_elf.py BASELINE.elf CANDIDATE.elf
-Exit 0 when identical, 1 when different (differences are printed).
+사용: compare_firmware_elf.py BASELINE.elf CANDIDATE.elf
+같으면 종료 코드 0, 다르면 1(차이를 출력).
 """
 
 import struct
@@ -31,7 +28,7 @@ SHF_ALLOC = 0x2
 SHT_NOBITS = 8
 SHT_SYMTAB = 2
 
-# esp_app_desc_t (ESP-IDF 5.x, esp_app_desc.h): byte ranges that change per build.
+# esp_app_desc_t(ESP-IDF 5.x, esp_app_desc.h)에서 빌드마다 바뀌는 바이트 범위.
 APP_DESC_SYMBOL = "esp_app_desc"
 APP_DESC_SIZE = 256
 APP_DESC_MASKED = (
@@ -98,7 +95,7 @@ def _layout(section):
 
 
 def _mask_app_desc(elf, buffers):
-    """Mask the per-build fields of esp_app_desc in place. Returns notes."""
+    """esp_app_desc 의 빌드별 필드를 제자리에서 가린다. 알림 목록을 돌려준다."""
     sym = elf.symbols().get(APP_DESC_SYMBOL)
     if sym is None:
         return [f"{elf.path.name}: no {APP_DESC_SYMBOL} symbol (nothing masked)"]

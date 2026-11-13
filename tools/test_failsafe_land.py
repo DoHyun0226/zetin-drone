@@ -16,7 +16,7 @@ from ground import firmware_source  # noqa: E402
 
 
 def _firmware_float_constant(name):
-    # Any file of the sketch; the definition must appear exactly once.
+    # 스케치의 어느 파일이든 된다. 정의는 정확히 한 번 나와야 한다.
     return firmware_source.read_float_constant(name, SKETCH_DIR)
 
 

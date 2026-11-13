@@ -142,7 +142,7 @@ class NativeControlMathTest(unittest.TestCase):
             mutated_sketch = tmp_path / "zetin_fc"
             shutil.copytree(SKETCH_DIR, mutated_sketch)
             sketch_path = mutated_sketch / "zetin_fc.ino"
-            # The constant may live in any sketch file; it must occur exactly once.
+            # 상수는 스케치의 어느 파일에 있어도 된다. 정확히 한 번 나와야 한다.
             firmware_source.subn_unique(
                 mutated_sketch,
                 r"(const int\s+FS_DESCENT_DELTA_US\s*=\s*)60;",

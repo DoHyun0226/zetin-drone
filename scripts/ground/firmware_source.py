@@ -1,11 +1,9 @@
-"""Read the flight firmware's source as one text, across all its files.
+"""비행 펌웨어 소스를 파일 여러 개에 걸쳐 하나처럼 읽는다.
 
-The flight sketch ``firmware/flight/zetin_fc`` is split into the ``.ino``,
-``fc/*.h`` (firmware modules) and ``logic/*.h`` (pure logic). Tools that read
-a constant from the firmware, and tests that plant a mutation in it, must not
-assume which file a definition lives in. These helpers look in every file
-and insist on exactly one match, so a moved or duplicated definition is an
-error instead of a silently wrong value.
+비행 스케치 ``firmware/flight/zetin_fc`` 는 ``.ino``, ``fc/*.h``(펌웨어 모듈),
+``logic/*.h``(순수 로직)로 나뉜다. 펌웨어에서 상수를 읽는 도구와 뮤테이션을 심는 시험은
+정의가 어느 파일에 있는지 가정하면 안 된다. 이 도우미는 모든 파일을 보고 정확히 한 곳에서만
+찾도록 강제한다. 정의가 옮겨지거나 중복되면 조용히 틀린 값을 쓰는 대신 오류가 난다.
 """
 
 import re
@@ -16,8 +14,8 @@ SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 
 
 def sketch_files(sketch_dir=SKETCH_DIR):
-    """The ``.ino`` first, then ``fc/*.h`` and ``logic/*.h`` (sorted), then
-    any header directly in the sketch folder."""
+    """``.ino`` 먼저, 다음 ``fc/*.h`` 와 ``logic/*.h``(정렬), 마지막으로 스케치 폴더
+    바로 아래의 헤더."""
     sketch_dir = Path(sketch_dir)
     files = sorted(sketch_dir.glob("*.ino"))
     for sub in ("fc", "logic"):
@@ -29,9 +27,9 @@ def sketch_files(sketch_dir=SKETCH_DIR):
 
 
 def find_unique(pattern, sketch_dir=SKETCH_DIR, flags=0):
-    """Return the one ``re.Match`` of ``pattern`` across the sketch files.
+    """스케치 파일 전체에서 ``pattern`` 의 유일한 ``re.Match`` 를 돌려준다.
 
-    Raises ``LookupError`` when it matches nowhere or more than once.
+    한 곳도 없거나 두 곳 이상이면 ``LookupError``.
     """
     regex = re.compile(pattern, flags)
     found = []
@@ -46,7 +44,7 @@ def find_unique(pattern, sketch_dir=SKETCH_DIR, flags=0):
 
 
 def find_unique_file(pattern, sketch_dir=SKETCH_DIR, flags=0):
-    """Like :func:`find_unique` but return ``(path, match)``."""
+    """:func:`find_unique` 와 같되 ``(path, match)`` 를 돌려준다."""
     regex = re.compile(pattern, flags)
     found = []
     for path in sketch_files(sketch_dir):
@@ -60,7 +58,7 @@ def find_unique_file(pattern, sketch_dir=SKETCH_DIR, flags=0):
 
 
 def read_float_constant(name, sketch_dir=SKETCH_DIR):
-    """Value of ``const``/``constexpr float NAME = <number>f;`` as written (e.g. ``0.03f``)."""
+    """``const``/``constexpr float NAME = <수>f;`` 의 값을 적힌 그대로(예: ``0.03f``)."""
     match = find_unique(
         rf"\b(?:const|constexpr)\s+float\s+{re.escape(name)}\s*=\s*"
         r"([0-9]+(?:\.[0-9]+)?f)\s*;",
@@ -70,10 +68,10 @@ def read_float_constant(name, sketch_dir=SKETCH_DIR):
 
 
 def mutate_unique(sketch_dir, old, new):
-    """Replace the one literal occurrence of ``old`` in a copied sketch.
+    """복사한 스케치에서 ``old`` 가 나오는 단 한 곳을 바꾼다.
 
-    ``sketch_dir`` must be a scratch copy. Returns the file that was changed.
-    Raises ``LookupError`` unless ``old`` occurs exactly once across the files.
+    ``sketch_dir`` 는 임시 복사본이어야 한다. 바꾼 파일을 돌려준다. ``old`` 가 파일
+    전체에서 정확히 한 번 나오지 않으면 ``LookupError``.
     """
     hits = []
     for path in sketch_files(sketch_dir):
@@ -87,7 +85,7 @@ def mutate_unique(sketch_dir, old, new):
 
 
 def subn_unique(sketch_dir, pattern, replacement):
-    """Regex form of :func:`mutate_unique`; returns the changed file."""
+    """:func:`mutate_unique` 의 정규식판. 바꾼 파일을 돌려준다."""
     path, _ = find_unique_file(pattern, sketch_dir)
     text, n = re.subn(pattern, replacement, path.read_text(encoding="utf-8"), count=1)
     if n != 1:
