@@ -196,6 +196,8 @@ STATE_TRANSITION_FIELDS = (
     "Yaw_Authority_State",
     "PosHold_State",
     "AltHold_State",
+    "Land_Mode",
+    "Land_Stage",
 )
 
 # [FIX] RC 시퀀스 번호 — 지연 도착한 낡은 패킷을 드론 측에서 폐기할 수 있도록
@@ -1254,6 +1256,7 @@ def startup_help_lines():
         " Control: th <val>, yaw <0|1>, raw on|off, mag on|off, gains, start, stop, resume",
         "          trim <roll> <pitch>, magc <x> <y> <z>",
         " FlowHold: flowcal 1|0, poshold 1|0, althold 1|0, hg <name> <val>",
+        " RangeLand: rangeland 1|0 (disarmed only; default 0 = timed descent)",
         " IMU cal:  imucal (disarmed, drone still on the floor, 2 s; saved to NVS)",
         "======================================",
     ]

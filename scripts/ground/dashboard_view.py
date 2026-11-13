@@ -12,6 +12,9 @@ from prompt_toolkit.utils import get_cwidth
 from ground.failsafe_telemetry import (
     FAILSAFE_PHASE_NAMES,
     FAILSAFE_PROBE_STATE_NAMES,
+    LAND_CUT_REASON_NAMES,
+    LAND_MODE_NAMES,
+    LAND_STAGE_NAMES,
     phase_number,
 )
 from ground.status_format import (
@@ -309,6 +312,11 @@ def render(snap, width, height, now):
     # flow-hold panel (flow firmware only)
     if data.get("PosHold_State") is not None:
         r = row("위치")
+        # 거리 기반 자동착륙 스위치. 좁은 화면에서도 잘리지 않게 맨 앞에 둔다. 필드가 없는
+        # 펌웨어는 OFF 로 단정하지 않는다.
+        rangeland = phase_number(data.get("RangeLand_On"))
+        if rangeland is not None:
+            r.kv("RangeLand", "ON" if rangeland else "OFF")
         r.kv("PosHold", _state_name(POSHOLD_STATE_NAMES, data.get("PosHold_State")))
         r.kv("AltHold", _state_name(ALTHOLD_STATE_NAMES, data.get("AltHold_State")))
         r.kv("Vel R/P", f"{_signed(data.get('Flow_Vel_R'), 2)}/"
@@ -331,6 +339,17 @@ def render(snap, width, height, now):
             fr.kv("Resp_G", _format_optional_float(data.get("Failsafe_Probe_Response_G"), 4),
                   style)
         lines.append(fr.segments)
+        # 거리 기반 자동착륙(flow-hold 펌웨어만 보낸다)
+        land_mode = phase_number(data.get("Land_Mode"))
+        if land_mode is not None:
+            lr = _Row(style).label("Land")
+            lr.kv("Mode", _state_name(LAND_MODE_NAMES, land_mode), style)
+            lr.kv("Stage", _state_name(LAND_STAGE_NAMES, data.get("Land_Stage")), style)
+            lr.kv("Ref", _format_optional_float(data.get("Land_Ref_M"), 2), style)
+            reason = phase_number(data.get("Land_Cut_Reason"))
+            if reason:
+                lr.kv("Cut", _state_name(LAND_CUT_REASON_NAMES, reason), style)
+            lines.append(lr.segments)
 
     return [_clip(line, width) for line in lines[:max(0, height)]]
 

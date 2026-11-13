@@ -10,11 +10,12 @@ NATIVE_TEST_DIR = REPO_ROOT / "tools" / "native_tests"
 SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "dual_imu_cascade_flow_hold"
 EXECUTION_TIMEOUT_S = 600
 
-# 헤더 단위 시험 3개와, 새 스케치를 통째로 넣은 폐루프 SIL 하나.
+# 헤더 단위 시험 4개와, 새 스케치를 통째로 넣은 폐루프 SIL 하나.
 NATIVE_TESTS = (
     "test_flow_calibration",
     "test_flow_odometry",
     "test_flow_hold",
+    "test_range_land",
     "test_sil_flow_hold",
 )
 
@@ -78,6 +79,9 @@ class FlowHoldNativeTest(unittest.TestCase):
 
     def test_flow_hold(self):
         self._compile_and_run("test_flow_hold")
+
+    def test_range_land(self):
+        self._compile_and_run("test_range_land")
 
     def test_sil_flow_hold(self):
         self._compile_and_run("test_sil_flow_hold")
