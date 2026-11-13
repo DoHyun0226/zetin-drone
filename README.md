@@ -39,8 +39,8 @@ USB 게임패드를 연결한 지상국과 WiFi SoftAP UDP로 통신한다.
 | 명령·필드·바이너리 규격 변경 | [UDP 프로토콜](docs/udp_protocol.md) |
 | 다음 실험과 착지 감지 연구 | [현재 상태](docs/current_status.md) → [착지 감지 연구](docs/failsafe_land_research.md) |
 
-주력 소스는 [`dual_imu_cascade_pwm`](firmware/flight/dual_imu_cascade_pwm/)다.
-[`dual_imu_flix_quat_pwm`](firmware/flight/dual_imu_flix_quat_pwm/)는 보류 후보이며
+주력 소스는 [`dual_imu_cascade_pwm`](firmware/archive/legacy_flight/dual_imu_cascade_pwm/)다.
+[`dual_imu_flix_quat_pwm`](firmware/archive/legacy_flight/dual_imu_flix_quat_pwm/)는 보류 후보이며
 주력 지상국의 `rcr` 조종을 지원하지 않는다. 진단·보관 코드까지 포함한
 26개 스케치의 용도와 실행 범위는 [펌웨어 카탈로그](docs/firmware_catalog.md)를 따른다.
 

@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "dual_imu_cascade_flow_hold.ino"
+#include "zetin_fc.ino"
 
 // dual_imu_cascade_flow_hold 를 호스트에서 폐루프로 돌린다. 플랜트는 자세 SIL 과
 // 같은 소형 쿼드 추정 파라미터에 수평 병진을 더했다. 광류 센서는 "광축이

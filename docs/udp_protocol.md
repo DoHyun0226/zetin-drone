@@ -14,7 +14,7 @@
 ```
 
 펌웨어는 SSID `Drone_Tuning`으로 SoftAP를 운영한다. 주소와 포트는
-[`dual_imu_cascade_pwm.ino`](../firmware/flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)에
+[`dual_imu_cascade_pwm.ino`](../firmware/archive/legacy_flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)에
 정의돼 있다.
 RC 송신 목표는 `drone_control.py`의 20Hz, ASCII 텔레메트리는 약 20Hz,
 raw IMU 생산은 명목 1kHz다. 서로 다른 주기이므로 혼동하지 않는다.
@@ -22,12 +22,12 @@ raw IMU 생산은 명목 1kHz다. 서로 다른 주기이므로 혼동하지 않
 펌웨어는 마지막 UDP 발신자의 IP/포트 하나로 회신하므로 제어·수신 도구를
 동시에 실행하지 않는다.
 보류 트랙인
-[`dual_imu_flix_quat_pwm`](../firmware/flight/dual_imu_flix_quat_pwm/)은 같은
+[`dual_imu_flix_quat_pwm`](../firmware/archive/legacy_flight/dual_imu_flix_quat_pwm/)은 같은
 엔드포인트와 일부 `rc` 절대각 명령을 공유하지만 `rcr`은 지원하지 않는다.
 RC 두절 시 자동착륙 없이 즉시 컷하며 **주력 지상국으로 조종할 수 없다.**
 게인 명령의 단위가 SI(rad 기반)이고 yaw 각도 부호가 반대(CCW+)다.
 `gains`·`mag`·`magcal`을 구현하지 않고 텔레메트리도 `Armed`까지 22필드만
-보낸다. [해당 README](../firmware/flight/dual_imu_flix_quat_pwm/README.md)를
+보낸다. [해당 README](../firmware/archive/legacy_flight/dual_imu_flix_quat_pwm/README.md)를
 참조한다.
 
 ## 지상국 → 드론
@@ -366,7 +366,7 @@ yaw 권한 상태(66~75)를 순서대로 append한다.
 
 ### flow-hold 스케치 전용 필드 (76~97)
 
-`firmware/flight/dual_imu_cascade_flow_hold`는 75필드 뒤에 필드를 더 붙인다.
+`firmware/flight/zetin_fc`는 75필드 뒤에 필드를 더 붙인다.
 주력 펌웨어 패킷은 75필드에서 끝나므로 지상국은 이 필드들을 `None`(CSV 빈 셀)으로
 둔다. 76~91(광류·위치 유지·고도 유지·보정 상태)의 이름과 해석은
 `scripts/ground/telemetry_schema.py` 모듈 설명이 정본이다.

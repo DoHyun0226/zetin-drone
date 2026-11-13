@@ -7,7 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_TEST_DIR = REPO_ROOT / "tools" / "native_tests"
-SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "dual_imu_cascade_flow_hold"
+SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 EXECUTION_TIMEOUT_S = 600
 
 # 헤더 단위 시험 4개와, 새 스케치를 통째로 넣은 폐루프 SIL 하나.

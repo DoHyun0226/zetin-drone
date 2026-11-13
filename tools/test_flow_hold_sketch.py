@@ -10,8 +10,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BASE = REPO_ROOT / "firmware" / "flight" / "dual_imu_cascade_pwm"
-FLOW = REPO_ROOT / "firmware" / "flight" / "dual_imu_cascade_flow_hold"
+BASE = REPO_ROOT / "firmware" / "archive" / "legacy_flight" / "dual_imu_cascade_pwm"
+FLOW = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 
 SHARED_HEADERS = (
     "control_allocator.h",

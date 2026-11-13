@@ -2,7 +2,7 @@
 
 The first 10 fields are common to legacy firmware. The first 14 fields retain
 the format used by firmware/archive/legacy_flight/dual_imu_pid_pwm, fields
-15-21 are diagnostics added by firmware/flight/dual_imu_cascade_pwm, field 22
+15-21 are diagnostics added by firmware/archive/legacy_flight/dual_imu_cascade_pwm, field 22
 (Armed) reports the firmware safety-lock state so ground tools can detect a
 refused/ignored start, and fields 23-30 are Tier 1 observability (motor
 outputs, measured loop rate, and outer-loop target rates). Field 31 appends the
@@ -48,7 +48,7 @@ Fields 66-75 append allocator scale/collective, the PID and integral terms
 used for that control tick, and yaw-authority state (0=NORMAL, 1=LIMITED,
 2=RECOVERING).
 Fields 76-91 (zero-based indices 75-90) are sent only by
-``firmware/flight/dual_imu_cascade_flow_hold``; packets from the main cascade
+``firmware/flight/zetin_fc``; packets from the main cascade
 firmware stop at 75 fields and leave them ``None``. ``Flow_Reject`` is 0 when
 the last flow interval was usable and otherwise a ``FlowReject`` code from
 ``flow_odometry.h``. ``Flow_Vel_R``/``Flow_Vel_P`` and ``Pos_R``/``Pos_P`` are

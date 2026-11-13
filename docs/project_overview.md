@@ -16,10 +16,10 @@
 |---|---|---|
 | 4채널 ESC PWM | 벤치 검증됨 | [`motor_pwm_bench`](../firmware/diagnostics/motor_pwm_bench/) |
 | 단일·듀얼 ICM42670 raw 읽기 | 벤치 검증됨 | [`firmware/diagnostics/`](../firmware/diagnostics/) |
-| 듀얼 IMU 캐스케이드 제어 | **실비행 검증됨** (2026-08-01, 176초 무장·고장 0건) | [`dual_imu_cascade_pwm`](../firmware/flight/dual_imu_cascade_pwm/) |
+| 듀얼 IMU 캐스케이드 제어 | **실비행 검증됨** (2026-08-01, 176초 무장·고장 0건) | [`dual_imu_cascade_pwm`](../firmware/archive/legacy_flight/dual_imu_cascade_pwm/) |
 | BMM350 yaw 융합 | 벤치 4단계 + 실비행 heading-hold 검증됨 | [`bmm350_yaw_bench_test.md`](bmm350_yaw_bench_test.md) |
 | RC 두절 자동착륙 | 실비행 4회 수행. 착지 감지는 **미해결**(시간 기반 하강) | [`failsafe_land_research.md`](failsafe_land_research.md) |
-| 3901-L0X 광류·거리계 | 텔레메트리 기록만. **제어에 쓰지 않음** | [`msp_sensor.h`](../firmware/flight/dual_imu_cascade_pwm/msp_sensor.h) |
+| 3901-L0X 광류·거리계 | 텔레메트리 기록만. **제어에 쓰지 않음** | [`msp_sensor.h`](../firmware/archive/legacy_flight/dual_imu_cascade_pwm/msp_sensor.h) |
 | 테더 이륙·수동 호버·착륙 반복 | 별도 실험 구성에서 2026-08-19 5회 기록 | [현재 상태와 적용 범위](current_status.md) |
 | 자동 고도·위치 유지 | 미구현 | 거리·광류 피드백을 제어에 연결하지 않음 |
 
@@ -52,7 +52,7 @@ tools/                    repository and telemetry checks
 ## 현행 비행 제어 후보
 
 대표 소스는
-[`dual_imu_cascade_pwm.ino`](../firmware/flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)다.
+[`dual_imu_cascade_pwm.ino`](../firmware/archive/legacy_flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)다.
 ESP32-S3의 FreeRTOS 태스크에서 듀얼 IMU를 읽고, 자세 바깥 루프와 각속도
 안쪽 루프를 거쳐 4개 ESC PWM을 계산한다. 통신은 ESP32 SoftAP와 UDP
 4210을 쓴다. 자세한 문자열 명령과 필드 순서는
@@ -169,7 +169,7 @@ yaw 권한 상태(66~75)가 붙는다. PC 수신기는 맨 앞에 수신
 arduino-cli compile --warnings all \
   --fqbn esp32:esp32:esp32s3 \
   --build-path /tmp/zetin-flight-build \
-  firmware/flight/dual_imu_cascade_pwm
+  firmware/archive/legacy_flight/dual_imu_cascade_pwm
 ```
 
 PC를 펌웨어의 `Drone_Tuning` SoftAP에 연결한 뒤 필요한 도구를 실행한다.

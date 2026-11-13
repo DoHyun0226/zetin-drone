@@ -7,12 +7,12 @@ yaw 융합에, 3901-L0X 거리·광류 센서는 기록에 사용한다. 전체 
 
 ## 비행 펌웨어 선택
 
-- [`flight/dual_imu_cascade_pwm/`](flight/dual_imu_cascade_pwm/): 듀얼
+- [`archive/legacy_flight/dual_imu_cascade_pwm/`](archive/legacy_flight/dual_imu_cascade_pwm/): 듀얼
   ICM42670, 바깥쪽 자세 루프와 안쪽 각속도 루프, 4채널 PWM을 사용하는
   주력 비행 제어 경로. 실비행 기록은 있지만 반복 가능한 안정 비행과
   자동착륙의 실기 검증 완료를 뜻하지 않는다. 운용은
   [전원 인가·벤치 절차](../docs/power_on_bench_procedure.md)를 따른다.
-- [`flight/dual_imu_cascade_flow_hold/`](flight/dual_imu_cascade_flow_hold/):
+- [`flight/zetin_fc/`](flight/zetin_fc/):
   주력 스케치의 복사본에 3901-L0X 광류 보정(`flowcal`), 광류 위치 유지(`poshold`),
   거리계 고도 유지(`althold`)를 더한 **실험 후보**다. 2026-10-30 테더 비행에서 위치
   유지가 제동 방향으로 동작함을 확인했다(튜닝 진행 중). 공유 헤더 6개는 주력과 바이트
@@ -22,12 +22,12 @@ yaw 융합에, 3901-L0X 거리·광류 센서는 기록에 사용한다. 전체 
   텔레메트리는
   주력 75필드 뒤에 16필드를 더 보낸다. 설계와 벤치 순서는
   [계획](../docs/superpowers/plans/2026-10-29-flow-position-hold.md).
-- [`flight/dual_imu_flix_quat_pwm/`](flight/dual_imu_flix_quat_pwm/):
+- [`archive/legacy_flight/dual_imu_flix_quat_pwm/`](archive/legacy_flight/dual_imu_flix_quat_pwm/):
   [flix](https://github.com/okalachev/flix) 아키텍처 기반 쿼터니언 자세
   추정·SI 단위 캐스케이드 제어 **보류 후보**다. 빌드 매트릭스에는 포함되지만
   현행 지상국의 `rcr` 명령·자동착륙·확장 텔레메트리를 지원하지 않는다.
   게인 단위와 yaw 부호도 다르다. 호환성 범위와 벤치 검증 절차는
-  [해당 README](flight/dual_imu_flix_quat_pwm/README.md) 참조.
+  [해당 README](archive/legacy_flight/dual_imu_flix_quat_pwm/README.md) 참조.
 
 핀 배치: 모터 FL/RR/FR/RL = GPIO 4/5/6/7, SPI SCK/MISO/MOSI =
 GPIO 12/13/11, IMU1/IMU2 CS = GPIO 10/9.
@@ -98,7 +98,7 @@ arduino-cli lib install --git-url https://github.com/DFRobot/DFRobot_BMM350.git
 저장소 루트에서 빌드한다. 빌드 산출물은 저장소 밖 `/tmp`에 둔다:
 
 ```bash
-sketch=firmware/flight/dual_imu_cascade_pwm
+sketch=firmware/archive/legacy_flight/dual_imu_cascade_pwm
 name=$(basename "$sketch")
 arduino-cli compile --warnings all \
   --fqbn esp32:esp32:esp32s3 \

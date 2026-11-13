@@ -18,8 +18,8 @@ FIRMWARE_PATH = (
     REPO_ROOT
     / "firmware"
     / "flight"
-    / "dual_imu_cascade_pwm"
-    / "dual_imu_cascade_pwm.ino"
+    / "zetin_fc"
+    / "zetin_fc.ino"
 )
 MIN_SAMPLE_COUNT = 20
 HOVER_TOLERANCE_US = 1.0
