@@ -463,6 +463,420 @@ static void handleHoldGainCommand(char *buf) {
   Serial.printf(">>> hold gain %s = %.3f\n", name, (double)v);
 }
 
+// 시동 요청. 조건을 모두 통과해야 Core 1 에 무장을 요청한다.
+static inline __attribute__((always_inline)) void udpCmdStart() {
+  bool overTilt = fabsf(angleX) > SAFETY_ANGLE || fabsf(angleY) > SAFETY_ANGLE;
+  bool noUsableImu = imu1_frozen_now && imu2_frozen_now;
+  if (fs_phase == FS_DESCENDING) {
+    Serial.println(">>> START REFUSED (auto-land descending)");
+  }
+  else if (!safety_lock || safety_arm_requested) {
+    // 이미 시동 상태. 지상국은 start를 여러 번 재전송하므로, 지연
+    // 도착한 중복 start가 비행 중 fault latch를 지우고 스로틀 창을
+    // 리셋하는 것을 막는다.
+    Serial.println(">>> START ignored (already armed)");
+  }
+  else if (flowcal_running) {
+    Serial.println(">>> START REFUSED (flowcal running)");
+  }
+  else if (imucal_running) {
+    Serial.println(">>> START REFUSED (imucal running)");
+  }
+  else if (!calibration_ok || overTilt || noUsableImu
+           || imu_disagree_now || mag_calibrating) {
+    Serial.printf(">>> START REFUSED calib=%d tilt=%d imu=%d disagree=%d magcal=%d\n",
+                  (int)calibration_ok, (int)overTilt,
+                  (int)noUsableImu, (int)imu_disagree_now,
+                  (int)mag_calibrating);
+  } else {
+    // safety_lock=true인 동안 Core 0 소유 비행 상태를 초기화한다.
+    // hover tracker는 requestSafetyArm()이 Core 1 reset을 함께 요청한다.
+    fault_rc = false;
+    fault_imu1 = imu1_frozen_now;
+    fault_imu2 = imu2_frozen_now;
+    fault_disagree = false;
+    fault_attitude = false;
+    lastRcSeq = 0;
+    rcSeqValid = false;
+    lastRcMs = millis();
+    base_throttle = 1100; min_throttle = 1050; max_throttle = 1250;
+    targetAngleX = 0.0f;
+    targetAngleY = 0.0f;
+    targetAngleZ = 0.0f;
+    angleZ = 0.0f;
+    requestMagReferenceUpdate();
+    fs_probe_state = FS_PROBE_WAIT;
+    fs_probe_no_response = 0;
+    fs_probe_response_g = 0.0f;
+    requestSafetyArm();
+    Serial.println(">>> START");
+  }
+}
+
+// 즉시 시동 해제 요청.
+static inline __attribute__((always_inline)) void udpCmdStop() {
+  poshold_requested = false;
+  althold_requested = false;
+  requestSafetyDisarm();
+  base_throttle = 1000;
+  Serial.println(">>> STOP");
+}
+
+// 자동착륙 중 조종권 복귀 요청.
+static inline __attribute__((always_inline)) void udpCmdResume() {
+  const ResumeRefusalReason refusal = resumeRefusalReason(millis());
+  if (refusal != RESUME_ALLOWED) {
+    logResumeRefusal(refusal);
+  } else {
+    requestFailsafeResume();
+  }
+}
+
+// 기준 스로틀과 스로틀 창.
+static inline __attribute__((always_inline)) void udpCmdThrottle(char *buf) {
+  long parsed;
+  if (parseIntStrict(buf + 2, parsed)) {
+    int nb = constrain((int)parsed, 1000, 1900);
+    base_throttle = nb;
+    min_throttle = max(1050, nb - CTRL_MARGIN);
+    max_throttle = min(1900, nb + CTRL_MARGIN);
+  }
+}
+
+// heading 잠금 강제(시동 해제 때만 켬).
+static inline __attribute__((always_inline)) void udpCmdYawHold(char *buf) {
+  long enabled;
+  if (parseIntStrict(buf + 3, enabled) && (enabled == 0 || enabled == 1)) {
+    if (enabled == 0) {
+      yaw_hold_override = false;
+      Serial.println(">>> Yaw hold OFF (auto)");
+    } else if (!safety_lock) {
+      // 비행 중 임의로 켜면 지상국 setpoint와 어긋난 채 최대 권한
+      // 슬램이 날 수 있다. 시동 해제 상태에서만 켤 수 있게 한다.
+      Serial.println(">>> Yaw hold refused (armed)");
+    } else {
+      targetAngleZ = angleZ;
+      yaw_hold_override = true;
+      Serial.println(">>> Yaw hold ON (override)");
+    }
+  }
+}
+
+// 자기계 raw 캡처 시작·끝.
+static inline __attribute__((always_inline)) void udpCmdMagcal(char *buf) {
+  long enabled;
+  if (parseIntStrict(buf + 6, enabled) && (enabled == 0 || enabled == 1)) {
+    if (enabled == 0) {
+      stopMagCalibration();
+    } else if (!safety_lock) {
+      Serial.println(">>> Magcal refused (armed)");
+    } else if (initMagnetometer()) {
+      startMagCalibration();
+    }
+  }
+}
+
+// 모터 전류 간섭 보정 계수.
+static inline __attribute__((always_inline)) void udpCmdMagComp(char *buf) {
+  char *save = nullptr;
+  char *token = strtok_r(buf, " \t", &save); // "magc"
+  (void)token;
+  char *arg[3] = {nullptr, nullptr, nullptr};
+  int count = 0;
+  while (count < 3 && (arg[count] = strtok_r(nullptr, " \t", &save)) != nullptr) count++;
+  if (count == 3 && strtok_r(nullptr, " \t", &save) == nullptr) {
+    float x, y, z;
+    if (parseFloatStrict(arg[0], x) && parseFloatStrict(arg[1], y) &&
+        parseFloatStrict(arg[2], z)) {
+      if (configChangeAllowed("Mag comp")) {
+        mag_comp_x = x;
+        mag_comp_y = y;
+        mag_comp_z = z;
+        Serial.printf(">>> mag comp = %.4f %.4f %.4f uT/us\n",
+                      (double)mag_comp_x, (double)mag_comp_y, (double)mag_comp_z);
+      }
+    }
+  }
+}
+
+// 자기계 yaw 융합 켜고 끄기.
+static inline __attribute__((always_inline)) void udpCmdMag(char *buf) {
+  long enabled;
+  if (parseIntStrict(buf + 3, enabled) && (enabled == 0 || enabled == 1)) {
+    if (enabled == 0) {
+      mag_enabled = false;
+      requestMagReferenceUpdate();
+      Serial.println(">>> Mag OFF");
+    } else if (mag_calibrating) {
+      Serial.println(">>> Mag refused (magcal active)");
+    } else if (!mag_ready && !safety_lock) {
+      // First-time init does blocking I2C/delay(100); only when disarmed.
+      Serial.println(">>> Mag refused (armed, not initialized)");
+    } else if (initMagnetometer()) {
+      requestMagReferenceUpdate();
+      mag_enabled = true;
+      Serial.println(">>> Mag ON");
+    }
+  }
+}
+
+// 1 kHz raw IMU 스트림.
+static inline __attribute__((always_inline)) void udpCmdRaw(char *buf) {
+  long enabled;
+  if (parseIntStrict(buf + 3, enabled) && (enabled == 0 || enabled == 1)) {
+    const bool wasEnabled =
+        __atomic_load_n(&raw_stream_enabled, __ATOMIC_ACQUIRE);
+    if (enabled == 0) {
+      __atomic_store_n(&raw_stream_enabled, false, __ATOMIC_RELEASE);
+      Serial.println(">>> Raw IMU OFF");
+    } else {
+      if (!wasEnabled) {
+        const uint32_t head =
+            __atomic_load_n(&imuRawRing.head, __ATOMIC_ACQUIRE);
+        __atomic_store_n(&imuRawRing.tail, head, __ATOMIC_RELEASE);
+        rawProducerTimeValid = false;
+        rawConsumerTimeValid = false;
+        rawLastSendMs = millis();
+        rawLastCalMs = rawLastSendMs - 1000U;
+        __atomic_store_n(
+            &raw_stream_enabled, true, __ATOMIC_RELEASE);
+      }
+      Serial.println(">>> Raw IMU ON");
+    }
+  }
+}
+
+// 절대 트림.
+static inline __attribute__((always_inline)) void udpCmdTrim(char *buf) {
+  char *save = nullptr;
+  (void)strtok_r(buf, " \t", &save);          // "trim"
+  char *arg0 = strtok_r(nullptr, " \t", &save);
+  char *arg1 = strtok_r(nullptr, " \t", &save);
+  if (arg0 != nullptr && arg1 != nullptr &&
+      strtok_r(nullptr, " \t", &save) == nullptr) {
+    float r, p;
+    if (parseFloatStrict(arg0, r) && parseFloatStrict(arg1, p)) {
+      if (configChangeAllowed("Trim")) {
+        trim_roll  = constrain(r, -TRIM_MAX_DEG, TRIM_MAX_DEG);
+        trim_pitch = constrain(p, -TRIM_MAX_DEG, TRIM_MAX_DEG);
+        Serial.printf(">>> Trim R:%.2f P:%.2f\n", trim_roll, trim_pitch);
+      }
+    }
+  }
+}
+
+// 광류 위치 유지 요청.
+static inline __attribute__((always_inline)) void udpCmdPosHold(char *buf) {
+  long enabled;
+  if (parseIntStrict(buf + 7, enabled) && (enabled == 0 || enabled == 1)) {
+    if (enabled == 0) {
+      poshold_requested = false;
+      Serial.println(">>> PosHold OFF");
+    } else if (!flowOdomCfg.calibrated) {
+      Serial.println(">>> PosHold refused (flow not calibrated)");
+    } else {
+      poshold_requested = true;
+      Serial.println(">>> PosHold ON");
+    }
+  }
+}
+
+// 거리 기반 자동착륙 스위치 요청.
+static inline __attribute__((always_inline)) void udpCmdRangeLand(char *buf) {
+  long enabled;
+  if (parseIntStrict(buf + 9, enabled) && (enabled == 0 || enabled == 1)) {
+    requestRangeLand((int8_t)enabled);   // 허용 판단은 Core 1 (시동 해제 때만)
+  }
+}
+
+// 고도 유지 요청.
+static inline __attribute__((always_inline)) void udpCmdAltHold(char *buf) {
+  long enabled;
+  if (parseIntStrict(buf + 7, enabled) && (enabled == 0 || enabled == 1)) {
+    althold_requested = (enabled == 1);
+    Serial.println(enabled ? ">>> AltHold ON" : ">>> AltHold OFF");
+  }
+}
+
+// 광류 보정 시작·끝.
+static inline __attribute__((always_inline)) void udpCmdFlowCal(char *buf) {
+  long enabled;
+  if (parseIntStrict(buf + 7, enabled) && (enabled == 0 || enabled == 1)) {
+    if (enabled == 0) {
+      if (flowcal_running) {
+        flowcal_running = false;
+        requestFlowCalCommand(FLOWCAL_CMD_STOP);
+        Serial.println(">>> FlowCal STOP (solving)");
+      }
+    } else if (!safety_lock || safety_arm_requested) {
+      Serial.println(">>> FlowCal refused (armed)");
+    } else if (imucal_running) {
+      Serial.println(">>> FlowCal refused (imucal running)");
+    } else {
+      flowcal_running = true;
+      requestFlowCalCommand(FLOWCAL_CMD_START);
+      Serial.println(">>> FlowCal START - shake roll, then pitch, 40~70cm");
+    }
+  }
+}
+
+// 정지 IMU 보정 요청.
+static inline __attribute__((always_inline)) void udpCmdImuCal() {
+  // 바닥에 가만히 둔 상태에서만. 2 s 동안 Core 1 이 샘플을 모은다.
+  if (!safety_lock || safety_arm_requested) {
+    Serial.println(">>> IMUCAL refused (armed)");
+  } else if (flowcal_running) {
+    Serial.println(">>> IMUCAL refused (flowcal running)");
+  } else if (!imucal_running) {
+    imucal_running = true;
+    portENTER_CRITICAL(&flowRequestMux);
+    imucal_request = true;
+    portEXIT_CRITICAL(&flowRequestMux);
+    Serial.println(">>> IMUCAL START - keep the drone still on the floor (2 s)");
+  }
+}
+
+// 현재 PID 게인 응답.
+static inline __attribute__((always_inline)) void udpCmdGains() {
+  if (connectionEstablished) {
+    udp.beginPacket(laptopIP, laptopPort);
+    udp.printf("GAINS,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f",
+               Kp_Angle_Roll, Kp_Angle_Pitch, Kp_Angle_Yaw,
+               Kp_Rate_Roll, Kp_Rate_Pitch, Kp_Rate_Yaw,
+               Ki_Rate_Roll, Ki_Rate_Pitch, Ki_Rate_Yaw,
+               Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw);
+    udp.endPacket();
+  }
+}
+
+// 명령 하나를 처리한다. 비교 순서는 그대로 둔다(접두사가 겹친다: rcr/rc,
+// magcal/magc/mag, raw/rangeland). 나머지는 PID 게인 명령으로 넘긴다.
+static inline __attribute__((always_inline)) void udpDispatchCommand(char *buf) {
+  if (strncmp(buf, "rcr", 3) == 0 && (buf[3] == ' ' || buf[3] == '\t')) {
+    handleRcrCommand(buf);
+  }
+  else if (strncmp(buf, "rc", 2) == 0 && (buf[2] == ' ' || buf[2] == '\t')) {
+    handleRcCommand(buf);
+  }
+  else if (strcmp(buf, "start") == 0) {
+    udpCmdStart();
+  }
+  else if (strcmp(buf, "stop") == 0) {
+    udpCmdStop();
+  }
+  else if (strcmp(buf, "resume") == 0) {
+    udpCmdResume();
+  }
+  else if (strncmp(buf, "th", 2) == 0) {
+    udpCmdThrottle(buf);
+  }
+  else if (strncmp(buf, "yaw", 3) == 0) {
+    udpCmdYawHold(buf);
+  }
+  else if (strncmp(buf, "magcal", 6) == 0) {
+    udpCmdMagcal(buf);
+  }
+  else if (strncmp(buf, "magc", 4) == 0) {
+    udpCmdMagComp(buf);
+  }
+  else if (strncmp(buf, "mag", 3) == 0) {
+    udpCmdMag(buf);
+  }
+  else if (strncmp(buf, "raw", 3) == 0) {
+    udpCmdRaw(buf);
+  }
+  else if (strncmp(buf, "trim", 4) == 0 &&
+           (buf[4] == ' ' || buf[4] == '\t')) {
+    udpCmdTrim(buf);
+  }
+  else if (strncmp(buf, "poshold", 7) == 0) {
+    udpCmdPosHold(buf);
+  }
+  else if (strncmp(buf, "rangeland", 9) == 0 &&
+           (buf[9] == ' ' || buf[9] == '\t')) {
+    udpCmdRangeLand(buf);
+  }
+  else if (strncmp(buf, "althold", 7) == 0) {
+    udpCmdAltHold(buf);
+  }
+  else if (strncmp(buf, "flowcal", 7) == 0) {
+    udpCmdFlowCal(buf);
+  }
+  else if (strcmp(buf, "imucal") == 0) {
+    udpCmdImuCal();
+  }
+  else if (strncmp(buf, "hg", 2) == 0 && (buf[2] == ' ' || buf[2] == '\t')) {
+    handleHoldGainCommand(buf);
+  }
+  else if (strcmp(buf, "gains") == 0) {
+    udpCmdGains();
+  }
+  else {
+    handleGainCommand(buf);
+  }
+}
+
+// 받은 패킷 하나: 보낸 쪽을 텔레메트리 목적지로 등록하고 명령을 처리한다.
+static inline __attribute__((always_inline)) void udpReceivePacket() {
+  laptopIP = udp.remoteIP();
+  laptopPort = udp.remotePort();
+  connectionEstablished = true;
+
+  int len = udp.read(packetBuffer, sizeof(packetBuffer) - 1); // off-by-one 방지
+  if (len > 0) {
+    packetBuffer[len] = '\0';
+    char *buf = trimCommand(packetBuffer);
+
+    udpDispatchCommand(buf);
+  }
+}
+
+// 매 반복의 센서 폴링과 송신: 자기계 샘플, 3901-L0X 폴링, 보정 결과, raw IMU 배치·보정
+// 상수(한 반복에 하나), 20 Hz 텔레메트리. lastSend·lastRawCheck 는 udp_task 의 지역이다.
+static inline __attribute__((always_inline)) void udpPeriodicSends(uint32_t &lastSend,
+                                                                   uint32_t &lastRawCheck) {
+  uint32_t now = millis();
+  if (mag_enabled || mag_calibrating) sampleMagnetometer(now);
+  pollMspSensor(now);
+  reportFlowCalResult();
+  reportImuCalResult();
+  bool sentImuPacket = false;
+  if (now - lastRawCheck >= 10U) {
+    lastRawCheck = now;
+    bool sentRawPacket = false;
+    if (__atomic_load_n(&raw_stream_enabled, __ATOMIC_ACQUIRE)
+        && connectionEstablished) {
+      const uint32_t queued = imuRawRingCount(imuRawRing);
+      if (queued >= IMU_RAW_BATCH_MAX
+          || (queued > 0 && now - rawLastSendMs >= 50U)) {
+        sentImuPacket = sendImuRawBatch();
+        sentRawPacket = sentImuPacket;
+        if (sentImuPacket) rawLastSendMs = now;
+      }
+      // 한 udp_task 반복에서는 ZIMU 또는 ZCAL 중 최대 하나만 추가 전송한다.
+      if (!sentRawPacket && now - rawLastCalMs >= 1000U) {
+        sentImuPacket = sendImuCalibration();
+        if (sentImuPacket) rawLastCalMs = now;
+      }
+    }
+  }
+  // 새 바이너리 경로는 한 반복에 최대 한 데이터그램만 보낸다. 같은 시각의
+  // 기존 ASCII 텔레메트리는 다음 반복으로 미뤄 20Hz 주기를 유지한다.
+  if (!sentImuPacket && now - lastSend >= 50) {
+    lastSend = now;
+#if WIFI_LATENCY_DEBUG
+    uint32_t sendStartUs = micros();
+#endif
+    sendTelemetry();
+#if WIFI_LATENCY_DEBUG
+    uint32_t sendDurUs = micros() - sendStartUs;
+    if (sendDurUs > WIFI_LATENCY_UDP_THRESHOLD_US) {
+      recordLatEvent(udpLatRing, millis(), sendDurUs, LAT_UDP_SEND);
+    }
+#endif
+  }
+}
+
 void udp_task(void *pv) {
   uint32_t lastSend = 0;
   uint32_t lastRawCheck = 0;
@@ -487,327 +901,9 @@ void udp_task(void *pv) {
     }
 #endif
     if (packetSize) {
-      laptopIP = udp.remoteIP();
-      laptopPort = udp.remotePort();
-      connectionEstablished = true;
-
-      int len = udp.read(packetBuffer, sizeof(packetBuffer) - 1); // off-by-one 방지
-      if (len > 0) {
-        packetBuffer[len] = '\0';
-        char *buf = trimCommand(packetBuffer);
-
-        if (strncmp(buf, "rcr", 3) == 0 && (buf[3] == ' ' || buf[3] == '\t')) {
-          handleRcrCommand(buf);
-        }
-        else if (strncmp(buf, "rc", 2) == 0 && (buf[2] == ' ' || buf[2] == '\t')) {
-          handleRcCommand(buf);
-        }
-        else if (strcmp(buf, "start") == 0) {
-          bool overTilt = fabsf(angleX) > SAFETY_ANGLE || fabsf(angleY) > SAFETY_ANGLE;
-          bool noUsableImu = imu1_frozen_now && imu2_frozen_now;
-          if (fs_phase == FS_DESCENDING) {
-            Serial.println(">>> START REFUSED (auto-land descending)");
-          }
-          else if (!safety_lock || safety_arm_requested) {
-            // 이미 시동 상태. 지상국은 start를 여러 번 재전송하므로, 지연
-            // 도착한 중복 start가 비행 중 fault latch를 지우고 스로틀 창을
-            // 리셋하는 것을 막는다.
-            Serial.println(">>> START ignored (already armed)");
-          }
-          else if (flowcal_running) {
-            Serial.println(">>> START REFUSED (flowcal running)");
-          }
-          else if (imucal_running) {
-            Serial.println(">>> START REFUSED (imucal running)");
-          }
-          else if (!calibration_ok || overTilt || noUsableImu
-                   || imu_disagree_now || mag_calibrating) {
-            Serial.printf(">>> START REFUSED calib=%d tilt=%d imu=%d disagree=%d magcal=%d\n",
-                          (int)calibration_ok, (int)overTilt,
-                          (int)noUsableImu, (int)imu_disagree_now,
-                          (int)mag_calibrating);
-          } else {
-            // safety_lock=true인 동안 Core 0 소유 비행 상태를 초기화한다.
-            // hover tracker는 requestSafetyArm()이 Core 1 reset을 함께 요청한다.
-            fault_rc = false;
-            fault_imu1 = imu1_frozen_now;
-            fault_imu2 = imu2_frozen_now;
-            fault_disagree = false;
-            fault_attitude = false;
-            lastRcSeq = 0;
-            rcSeqValid = false;
-            lastRcMs = millis();
-            base_throttle = 1100; min_throttle = 1050; max_throttle = 1250;
-            targetAngleX = 0.0f;
-            targetAngleY = 0.0f;
-            targetAngleZ = 0.0f;
-            angleZ = 0.0f;
-            requestMagReferenceUpdate();
-            fs_probe_state = FS_PROBE_WAIT;
-            fs_probe_no_response = 0;
-            fs_probe_response_g = 0.0f;
-            requestSafetyArm();
-            Serial.println(">>> START");
-          }
-        }
-        else if (strcmp(buf, "stop") == 0) {
-          poshold_requested = false;
-          althold_requested = false;
-          requestSafetyDisarm();
-          base_throttle = 1000;
-          Serial.println(">>> STOP");
-        }
-        else if (strcmp(buf, "resume") == 0) {
-          const ResumeRefusalReason refusal = resumeRefusalReason(millis());
-          if (refusal != RESUME_ALLOWED) {
-            logResumeRefusal(refusal);
-          } else {
-            requestFailsafeResume();
-          }
-        }
-        else if (strncmp(buf, "th", 2) == 0) {
-          long parsed;
-          if (parseIntStrict(buf + 2, parsed)) {
-            int nb = constrain((int)parsed, 1000, 1900);
-            base_throttle = nb;
-            min_throttle = max(1050, nb - CTRL_MARGIN);
-            max_throttle = min(1900, nb + CTRL_MARGIN);
-          }
-        }
-        else if (strncmp(buf, "yaw", 3) == 0) {
-          long enabled;
-          if (parseIntStrict(buf + 3, enabled) && (enabled == 0 || enabled == 1)) {
-            if (enabled == 0) {
-              yaw_hold_override = false;
-              Serial.println(">>> Yaw hold OFF (auto)");
-            } else if (!safety_lock) {
-              // 비행 중 임의로 켜면 지상국 setpoint와 어긋난 채 최대 권한
-              // 슬램이 날 수 있다. 시동 해제 상태에서만 켤 수 있게 한다.
-              Serial.println(">>> Yaw hold refused (armed)");
-            } else {
-              targetAngleZ = angleZ;
-              yaw_hold_override = true;
-              Serial.println(">>> Yaw hold ON (override)");
-            }
-          }
-        }
-        else if (strncmp(buf, "magcal", 6) == 0) {
-          long enabled;
-          if (parseIntStrict(buf + 6, enabled) && (enabled == 0 || enabled == 1)) {
-            if (enabled == 0) {
-              stopMagCalibration();
-            } else if (!safety_lock) {
-              Serial.println(">>> Magcal refused (armed)");
-            } else if (initMagnetometer()) {
-              startMagCalibration();
-            }
-          }
-        }
-        else if (strncmp(buf, "magc", 4) == 0) {
-          char *save = nullptr;
-          char *token = strtok_r(buf, " \t", &save); // "magc"
-          (void)token;
-          char *arg[3] = {nullptr, nullptr, nullptr};
-          int count = 0;
-          while (count < 3 && (arg[count] = strtok_r(nullptr, " \t", &save)) != nullptr) count++;
-          if (count == 3 && strtok_r(nullptr, " \t", &save) == nullptr) {
-            float x, y, z;
-            if (parseFloatStrict(arg[0], x) && parseFloatStrict(arg[1], y) &&
-                parseFloatStrict(arg[2], z)) {
-              if (configChangeAllowed("Mag comp")) {
-                mag_comp_x = x;
-                mag_comp_y = y;
-                mag_comp_z = z;
-                Serial.printf(">>> mag comp = %.4f %.4f %.4f uT/us\n",
-                              (double)mag_comp_x, (double)mag_comp_y, (double)mag_comp_z);
-              }
-            }
-          }
-        }
-        else if (strncmp(buf, "mag", 3) == 0) {
-          long enabled;
-          if (parseIntStrict(buf + 3, enabled) && (enabled == 0 || enabled == 1)) {
-            if (enabled == 0) {
-              mag_enabled = false;
-              requestMagReferenceUpdate();
-              Serial.println(">>> Mag OFF");
-            } else if (mag_calibrating) {
-              Serial.println(">>> Mag refused (magcal active)");
-            } else if (!mag_ready && !safety_lock) {
-              // First-time init does blocking I2C/delay(100); only when disarmed.
-              Serial.println(">>> Mag refused (armed, not initialized)");
-            } else if (initMagnetometer()) {
-              requestMagReferenceUpdate();
-              mag_enabled = true;
-              Serial.println(">>> Mag ON");
-            }
-          }
-        }
-        else if (strncmp(buf, "raw", 3) == 0) {
-          long enabled;
-          if (parseIntStrict(buf + 3, enabled) && (enabled == 0 || enabled == 1)) {
-            const bool wasEnabled =
-                __atomic_load_n(&raw_stream_enabled, __ATOMIC_ACQUIRE);
-            if (enabled == 0) {
-              __atomic_store_n(&raw_stream_enabled, false, __ATOMIC_RELEASE);
-              Serial.println(">>> Raw IMU OFF");
-            } else {
-              if (!wasEnabled) {
-                const uint32_t head =
-                    __atomic_load_n(&imuRawRing.head, __ATOMIC_ACQUIRE);
-                __atomic_store_n(&imuRawRing.tail, head, __ATOMIC_RELEASE);
-                rawProducerTimeValid = false;
-                rawConsumerTimeValid = false;
-                rawLastSendMs = millis();
-                rawLastCalMs = rawLastSendMs - 1000U;
-                __atomic_store_n(
-                    &raw_stream_enabled, true, __ATOMIC_RELEASE);
-              }
-              Serial.println(">>> Raw IMU ON");
-            }
-          }
-        }
-        else if (strncmp(buf, "trim", 4) == 0 &&
-                 (buf[4] == ' ' || buf[4] == '\t')) {
-          char *save = nullptr;
-          (void)strtok_r(buf, " \t", &save);          // "trim"
-          char *arg0 = strtok_r(nullptr, " \t", &save);
-          char *arg1 = strtok_r(nullptr, " \t", &save);
-          if (arg0 != nullptr && arg1 != nullptr &&
-              strtok_r(nullptr, " \t", &save) == nullptr) {
-            float r, p;
-            if (parseFloatStrict(arg0, r) && parseFloatStrict(arg1, p)) {
-              if (configChangeAllowed("Trim")) {
-                trim_roll  = constrain(r, -TRIM_MAX_DEG, TRIM_MAX_DEG);
-                trim_pitch = constrain(p, -TRIM_MAX_DEG, TRIM_MAX_DEG);
-                Serial.printf(">>> Trim R:%.2f P:%.2f\n", trim_roll, trim_pitch);
-              }
-            }
-          }
-        }
-        else if (strncmp(buf, "poshold", 7) == 0) {
-          long enabled;
-          if (parseIntStrict(buf + 7, enabled) && (enabled == 0 || enabled == 1)) {
-            if (enabled == 0) {
-              poshold_requested = false;
-              Serial.println(">>> PosHold OFF");
-            } else if (!flowOdomCfg.calibrated) {
-              Serial.println(">>> PosHold refused (flow not calibrated)");
-            } else {
-              poshold_requested = true;
-              Serial.println(">>> PosHold ON");
-            }
-          }
-        }
-        else if (strncmp(buf, "rangeland", 9) == 0 &&
-                 (buf[9] == ' ' || buf[9] == '\t')) {
-          long enabled;
-          if (parseIntStrict(buf + 9, enabled) && (enabled == 0 || enabled == 1)) {
-            requestRangeLand((int8_t)enabled);   // 허용 판단은 Core 1 (시동 해제 때만)
-          }
-        }
-        else if (strncmp(buf, "althold", 7) == 0) {
-          long enabled;
-          if (parseIntStrict(buf + 7, enabled) && (enabled == 0 || enabled == 1)) {
-            althold_requested = (enabled == 1);
-            Serial.println(enabled ? ">>> AltHold ON" : ">>> AltHold OFF");
-          }
-        }
-        else if (strncmp(buf, "flowcal", 7) == 0) {
-          long enabled;
-          if (parseIntStrict(buf + 7, enabled) && (enabled == 0 || enabled == 1)) {
-            if (enabled == 0) {
-              if (flowcal_running) {
-                flowcal_running = false;
-                requestFlowCalCommand(FLOWCAL_CMD_STOP);
-                Serial.println(">>> FlowCal STOP (solving)");
-              }
-            } else if (!safety_lock || safety_arm_requested) {
-              Serial.println(">>> FlowCal refused (armed)");
-            } else if (imucal_running) {
-              Serial.println(">>> FlowCal refused (imucal running)");
-            } else {
-              flowcal_running = true;
-              requestFlowCalCommand(FLOWCAL_CMD_START);
-              Serial.println(">>> FlowCal START - shake roll, then pitch, 40~70cm");
-            }
-          }
-        }
-        else if (strcmp(buf, "imucal") == 0) {
-          // 바닥에 가만히 둔 상태에서만. 2 s 동안 Core 1 이 샘플을 모은다.
-          if (!safety_lock || safety_arm_requested) {
-            Serial.println(">>> IMUCAL refused (armed)");
-          } else if (flowcal_running) {
-            Serial.println(">>> IMUCAL refused (flowcal running)");
-          } else if (!imucal_running) {
-            imucal_running = true;
-            portENTER_CRITICAL(&flowRequestMux);
-            imucal_request = true;
-            portEXIT_CRITICAL(&flowRequestMux);
-            Serial.println(">>> IMUCAL START - keep the drone still on the floor (2 s)");
-          }
-        }
-        else if (strncmp(buf, "hg", 2) == 0 && (buf[2] == ' ' || buf[2] == '\t')) {
-          handleHoldGainCommand(buf);
-        }
-        else if (strcmp(buf, "gains") == 0) {
-          if (connectionEstablished) {
-            udp.beginPacket(laptopIP, laptopPort);
-            udp.printf("GAINS,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f",
-                       Kp_Angle_Roll, Kp_Angle_Pitch, Kp_Angle_Yaw,
-                       Kp_Rate_Roll, Kp_Rate_Pitch, Kp_Rate_Yaw,
-                       Ki_Rate_Roll, Ki_Rate_Pitch, Ki_Rate_Yaw,
-                       Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw);
-            udp.endPacket();
-          }
-        }
-        else {
-          handleGainCommand(buf);
-        }
-      }
+      udpReceivePacket();
     }
-
-    uint32_t now = millis();
-    if (mag_enabled || mag_calibrating) sampleMagnetometer(now);
-    pollMspSensor(now);
-    reportFlowCalResult();
-    reportImuCalResult();
-    bool sentImuPacket = false;
-    if (now - lastRawCheck >= 10U) {
-      lastRawCheck = now;
-      bool sentRawPacket = false;
-      if (__atomic_load_n(&raw_stream_enabled, __ATOMIC_ACQUIRE)
-          && connectionEstablished) {
-        const uint32_t queued = imuRawRingCount(imuRawRing);
-        if (queued >= IMU_RAW_BATCH_MAX
-            || (queued > 0 && now - rawLastSendMs >= 50U)) {
-          sentImuPacket = sendImuRawBatch();
-          sentRawPacket = sentImuPacket;
-          if (sentImuPacket) rawLastSendMs = now;
-        }
-        // 한 udp_task 반복에서는 ZIMU 또는 ZCAL 중 최대 하나만 추가 전송한다.
-        if (!sentRawPacket && now - rawLastCalMs >= 1000U) {
-          sentImuPacket = sendImuCalibration();
-          if (sentImuPacket) rawLastCalMs = now;
-        }
-      }
-    }
-    // 새 바이너리 경로는 한 반복에 최대 한 데이터그램만 보낸다. 같은 시각의
-    // 기존 ASCII 텔레메트리는 다음 반복으로 미뤄 20Hz 주기를 유지한다.
-    if (!sentImuPacket && now - lastSend >= 50) {
-      lastSend = now;
-#if WIFI_LATENCY_DEBUG
-      uint32_t sendStartUs = micros();
-#endif
-      sendTelemetry();
-#if WIFI_LATENCY_DEBUG
-      uint32_t sendDurUs = micros() - sendStartUs;
-      if (sendDurUs > WIFI_LATENCY_UDP_THRESHOLD_US) {
-        recordLatEvent(udpLatRing, millis(), sendDurUs, LAT_UDP_SEND);
-      }
-#endif
-    }
+    udpPeriodicSends(lastSend, lastRawCheck);
     vTaskDelay(1);
   }
 }
-
