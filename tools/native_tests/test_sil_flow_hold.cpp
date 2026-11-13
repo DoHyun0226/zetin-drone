@@ -531,8 +531,11 @@ struct LandCase {
     setTrueCalibration(0);
   }
 
-  void warmup(uint32_t ticks = 6000, bool pilot_althold = true) {
+  // 거리 기반 자동착륙은 기본 OFF 다. 이 시나리오들은 실제 지상국처럼 시동 전에 켠다.
+  void warmup(uint32_t ticks = 6000, bool pilot_althold = true, bool rangeland = true) {
+    if (rangeland) sendUdp("rangeland 1");
     run.arm(1340);
+    CHECK_MSG(rangeland_enabled == rangeland, "rangeland switch was not applied");
     if (pilot_althold) sendUdp("althold 1");
     sendUdp("poshold 1");
     run.runTicks(ticks);
@@ -615,6 +618,12 @@ void requestResume() { failsafe_resume_requested = true; }
 }  // namespace
 
 int main() {
+  // 하네스 리셋보다 먼저 본다 — 전역 초기값 자체가 OFF 여야 한다(Codex 재검토 P3).
+  if (rangeland_enabled || rangeland_request != -1) {
+    std::cout << "[FAIL] boot default: rangeland must start OFF with an empty request\n";
+    return 1;
+  }
+  std::cout << "[PASS] sil_rangeland_boot_default_is_off\n";
   runCase("sil_sensor_reports_landed_range", [] {
     // 실측(2026-11-03): 착륙장치로 바닥에 선 기체의 원값 18–37 mm, 품질 255.
     Run run;
@@ -1857,7 +1866,8 @@ int main() {
     };
     c.land();
     CHECK(c.w.end_phase == FS_CUT_LANDED);
-    CHECK_MSG(during.size() == 96, "fields=" + fmt(during.size()));
+    CHECK_MSG(during.size() == 97, "fields=" + fmt(during.size()));
+    CHECK(during[96] == "1");          // RangeLand_On
     CHECK(during[91] == "1");          // Land_Mode RANGE
     CHECK(during[92] == "2");          // Land_Stage APPROACH
     CHECK(std::stod(during[93]) > 0.0 && std::stod(during[93]) < 0.4);
@@ -1870,7 +1880,7 @@ int main() {
     std::stringstream ss(wifi_udp_fake::telemetry_output);
     std::string f;
     while (std::getline(ss, f, ',')) after.push_back(f);
-    CHECK(after.size() == 96);
+    CHECK(after.size() == 97);
     CHECK(after[94] == "1");           // Land_Cut_Reason CONTACT, kept after the cut
     // 요청·실제 collective 는 같은 스냅숏이다: 컷 뒤 둘 다 1000(차이 0).
     CHECK_MSG(std::fabs(std::stod(after[67]) - std::stod(after[95])) < 0.5,
@@ -1878,6 +1888,127 @@ int main() {
     // 하강 중에도 같은 tick 의 값이다(이 하강은 allocator 상승이 없다).
     CHECK_MSG(std::fabs(std::stod(during[67]) - std::stod(during[95])) < 0.5,
               "collective " + during[67] + " vs requested " + during[95]);
+  });
+
+  // ---- 거리 기반 자동착륙 스위치(기본 OFF, 시동 해제 때만 바뀜) ----
+  auto telemetryFields = [] {
+    wifi_udp_fake::reset();
+    connectionEstablished = true;
+    sendTelemetry();
+    std::vector<std::string> out;
+    std::stringstream ss(wifi_udp_fake::telemetry_output);
+    std::string f;
+    while (std::getline(ss, f, ',')) out.push_back(f);
+    return out;
+  };
+
+  runCase("sil_rangeland_is_off_after_reset", [&] {
+    resetFlowHoldForHarness();
+    CHECK(!rangeland_enabled);
+    const auto t = telemetryFields();
+    CHECK_MSG(t.size() == 97, "fields=" + fmt(t.size()));
+    CHECK(t[96] == "0");
+  });
+
+  runCase("sil_rangeland_off_rc_loss_with_fresh_range_is_timed", [&] {
+    // 거리가 신선하고 추적도 안정적이라 ON 이면 RANGE 로 들어갈 조건이다.
+    LandCase c(1.0);
+    c.warmup(6000, true, false);
+    c.land();
+    CHECK(c.w.entry_tick != 0);
+    CHECK(c.w.saw_timed);
+    CHECK(!c.w.saw_range);
+    CHECK(!c.w.saw_fallback);
+    CHECK_MSG(c.w.end_phase == FS_CUT_TIMEOUT, "phase=" + fmt(c.w.end_phase));
+    CHECK(c.w.cut_reason == RL_CUT_NONE);
+    const auto t = telemetryFields();
+    CHECK(t[91] == "2");               // Land_Mode TIMED
+    CHECK(t[96] == "0");               // RangeLand_On
+  });
+
+  runCase("sil_rangeland_toggles_only_while_disarmed", [&] {
+    Run run = hoverRun(0.5, 0.0, 0.0);
+    sendUdp("rangeland 1");
+    run.runTicks(1);
+    CHECK(rangeland_enabled);
+    CHECK(telemetryFields()[96] == "1");
+    run.arm(1340);
+    arduino_fake::serial_output.clear();
+    sendUdp("rangeland 0");
+    run.runTicks(1);
+    CHECK(rangeland_enabled);           // 무장 중 거부
+    CHECK(arduino_fake::serial_output.find(">>> RangeLand refused (armed)") !=
+          std::string::npos);
+    run.runTicks(5);
+    CHECK(rangeland_enabled);           // 거부된 요청이 나중에 적용되지 않는다
+    sendUdp("stop");
+    run.runTicks(2);
+    CHECK(safety_lock);
+    sendUdp("rangeland 0");
+    run.runTicks(1);
+    CHECK(!rangeland_enabled);
+    CHECK(telemetryFields()[96] == "0");
+  });
+
+  runCase("sil_rangeland_bad_arguments_change_nothing", [&] {
+    Run run = hoverRun(0.5, 0.0, 0.0);
+    for (const char *cmd : {"rangeland", "rangeland 2", "rangeland -1", "rangeland 1x",
+                            "rangeland1", "rangelandx 1"}) {
+      sendUdp(cmd);
+      run.runTicks(1);
+      CHECK_MSG(!rangeland_enabled, std::string("accepted: ") + cmd);
+    }
+  });
+
+  runCase("sil_rangeland_off_request_during_range_descent_is_refused", [&] {
+    LandCase c(1.0);
+    c.warmup();
+    bool sent = false;
+    c.extra = [&](uint32_t) {
+      if (!sent && fs_phase == FS_DESCENDING && rl_stage == RL_STAGE_DESCENT) {
+        sendUdp("rangeland 0");
+        sent = true;
+      }
+    };
+    c.land();
+    CHECK(sent);
+    CHECK(c.w.saw_range);
+    CHECK(!c.w.saw_timed);
+    CHECK_MSG(c.w.end_phase == FS_CUT_LANDED, "phase=" + fmt(c.w.end_phase));
+    CHECK(rangeland_enabled);
+  });
+
+  runCase("sil_rangeland_off_request_during_resume_handover_is_refused", [&] {
+    // RANGE 하강 → resume 하면 fs_phase 는 NONE 이지만 인계가 남는다. 그 사이 OFF 를
+    // 받아들이면 재진입이 range 전용 상한을 쓴 채 TIMED 가 된다(Codex P2).
+    LandCase c(1.0);
+    c.warmup();
+    bool resumed = false, sent = false;
+    bool sawHandover = false, refusedDuringHandover = false;
+    c.extra = [&](uint32_t tick) {
+      if (!resumed && fs_phase == FS_DESCENDING && rl_mode == RL_MODE_RANGE &&
+          tick > c.w.disconnect_tick + 600) {
+        restoreRc(c.run);
+        if (tick > c.w.disconnect_tick + 602) {
+          requestResume();
+          resumed = true;
+        }
+      }
+      if (resumed && !sent && fs_phase == FS_NONE && rl_resume_handover) {
+        sawHandover = true;
+        sendUdp("rangeland 0");
+        sent = true;
+      }
+      if (sent && !refusedDuringHandover && rl_resume_handover && rangeland_enabled) {
+        refusedDuringHandover = true;
+      }
+    };
+    c.land(3000);
+    CHECK(resumed);
+    CHECK(sawHandover);
+    CHECK(sent);
+    CHECK(refusedDuringHandover);
+    CHECK(rangeland_enabled);
   });
 
   runCase("sil_range_landing_across_the_micros_wrap", [] {

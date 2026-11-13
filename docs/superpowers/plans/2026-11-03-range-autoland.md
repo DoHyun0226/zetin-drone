@@ -230,6 +230,29 @@ runCase("sil_mode_switch_is_smooth", ...);
 - 텔레메트리 96 `Land_Req_US` 추가. 92–96 과 36 `Failsafe_Phase` 는 allocation 스냅숏에서 같은 tick 값으로 나간다.
 - 벤치: 거리 상실은 기체를 수평으로 1.9 m 넘게 들어 시험(센서를 기울이면 오버틸트), 정체 컷은 원값 61–99 mm.
 
+## main 머지 전 기본 OFF 스위치 (2026-11-13)
+
+사용자 결정(2026-11-13): 실기 검증(Task 7) 전에 main 에 머지하고 flow-hold 스케치를 유일한 주력으로
+삼는다. 대신 거리 기반 자동착륙은 **런타임 스위치 `rangeland`, 기본 OFF** 로 묶어 OFF 일 때 RC 상실
+동작이 main 의 시간 기반 하강과 같게 한다. 위 "이 결과 전체를 보고 사용자가 주력 머지를 판단한다"는 이
+결정으로 대체된다. Task 7 은 `rangeland 1` 을 켠 상태로 그대로 남는다.
+
+- 구현: `rangeland_enabled`(Core 1 만 씀, 부팅 false, 저장 안 함) + 요청 우편함 `rangeland_request`
+  (`flowRequestMux`). udp_task 는 `rangeland <0|1>`(구분자 필수, `parseIntStrict`)을 요청으로만 넣고,
+  pid_task 가 tick 맨 앞 `applyRangeLandRequest()` 에서 `safety_lock && fs_phase != DESCENDING &&
+  !rl_resume_handover` 일 때만 적용한다. RC 상실 진입의 거리 모드 조건 앞에 `rangeland_enabled &&`.
+  텔레메트리 97 `RangeLand_On`, 대시보드 위치 줄 `RangeLand ON/OFF`(필드 없으면 표시 안 함).
+- Codex 설계 검토(P1 0·P2 3): Core 0 에서 허용 검사 후 토글하면 그 사이 RC 상실 진입과 경합(P2) →
+  판단·적용을 Core 1 로. resume 인계 중엔 `fs_phase` 가 NONE 이라 OFF 가 허용돼 range 전용 상한이
+  남음(P2) → 시동 해제 때만 적용. `[STATUS]` 만으로는 대시보드에 안 보임(P2) → 위치 줄 상시 표시.
+  프레임 시각 처리 수정((i): 미래 프레임 다음 tick, 늦게 소비된 stale 프레임 배제)은 일반 추정기 수정으로
+  게이트 밖에 둔다는 판단에 Codex 동의.
+- 검증: SIL 6건 추가(리셋 기본 OFF, OFF 에서 신선한 거리 + RC 상실 → TIMED·`CUT_TIMEOUT`, 무장 중 거부,
+  잘못된 인수 무변경, 거리 하강 중 OFF 거부, resume 인계 중 OFF 거부). 뮤테이션 3종(게이트 제거, 무장 검사
+  약화, 적용 순서 뒤집기) 모두 검출. main(`0cedc49`) 대 OFF 차분: 같은 플랜트 하네스로 5 시나리오
+  7만 tick 의 모터 4개·base/min/max 스로틀·`fs_phase`·`safety_lock`·프로브 상태·`hover_est` 가 동일,
+  ON 으로 바꾸면 RC 상실 진입 tick 에서 갈라짐(비교의 민감도 확인).
+
 ## 자체 검토
 
 - 설계 대응: 4.1 → Task 4 진입, 4.2 → Task 1·2·4, 4.3 → Task 1·4, 4.4 → Task 1·4, 4.5 → Task 4, 5 → Task 5, 6 → Global Constraints, 7 → Task 1·3·4·7.

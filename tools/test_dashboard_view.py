@@ -42,6 +42,12 @@ def sample96(**overrides):
     return sample
 
 
+def sample97(**overrides):
+    sample = parse_telemetry_packet(packet(97))
+    sample.update(overrides)
+    return sample
+
+
 def snap(sample, **overrides):
     base = {
         "mode": "pad",
@@ -233,6 +239,22 @@ class RenderTest(unittest.TestCase):
                                            Land_Ref_M=0.0, Land_Cut_Reason=3)),
                              120, 30, NOW))
         self.assertIn("NEAR_GROUND_STUCK", cut)
+
+    def test_dashboard_shows_rangeland_switch_outside_failsafe(self):
+        # 평상시(Failsafe_Phase=0)에도, 좁은 화면에서도 보여야 시동 전에 확인할 수 있다.
+        # 위치 줄이 가장 길어지는 상태(SUSPENDED)로 본다.
+        for width in (60, 80, 120):
+            for raw, word in ((1, "RangeLand ON"), (0, "RangeLand OFF")):
+                with self.subTest(width=width, on=raw):
+                    t = flatten(render(snap(sample97(
+                        Failsafe_Phase=0, RangeLand_On=raw, PosHold_State=3,
+                        AltHold_State=3)), width, 30, NOW))
+                    self.assertIn(word, t)
+
+    def test_dashboard_without_switch_field_does_not_claim_off(self):
+        t = flatten(render(snap(sample96(Failsafe_Phase=0)), 120, 30, NOW))
+        self.assertNotIn("RangeLand OFF", t)
+        self.assertNotIn("RangeLand ON", t)
 
     def test_dashboard_without_land_fields_shows_no_land_row(self):
         for sample in (sample75(Failsafe_Phase=1), sample91(Failsafe_Phase=1)):

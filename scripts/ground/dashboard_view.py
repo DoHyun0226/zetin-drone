@@ -312,6 +312,11 @@ def render(snap, width, height, now):
     # flow-hold panel (flow firmware only)
     if data.get("PosHold_State") is not None:
         r = row("위치")
+        # 거리 기반 자동착륙 스위치. 좁은 화면에서도 잘리지 않게 맨 앞에 둔다. 필드가 없는
+        # 펌웨어는 OFF 로 단정하지 않는다.
+        rangeland = phase_number(data.get("RangeLand_On"))
+        if rangeland is not None:
+            r.kv("RangeLand", "ON" if rangeland else "OFF")
         r.kv("PosHold", _state_name(POSHOLD_STATE_NAMES, data.get("PosHold_State")))
         r.kv("AltHold", _state_name(ALTHOLD_STATE_NAMES, data.get("AltHold_State")))
         r.kv("Vel R/P", f"{_signed(data.get('Flow_Vel_R'), 2)}/"

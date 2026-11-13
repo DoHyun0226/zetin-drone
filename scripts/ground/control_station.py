@@ -1256,6 +1256,7 @@ def startup_help_lines():
         " Control: th <val>, yaw <0|1>, raw on|off, mag on|off, gains, start, stop, resume",
         "          trim <roll> <pitch>, magc <x> <y> <z>",
         " FlowHold: flowcal 1|0, poshold 1|0, althold 1|0, hg <name> <val>",
+        " RangeLand: rangeland 1|0 (disarmed only; default 0 = timed descent)",
         " IMU cal:  imucal (disarmed, drone still on the floor, 2 s; saved to NVS)",
         "======================================",
     ]

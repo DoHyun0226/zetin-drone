@@ -6,6 +6,8 @@
 // RC 상실 시 거리 기반 자동착륙(range_land.h): 거리가 신선하면 목표 고도를 낮추며
 // 위치 유지를 켠 채 내려오고, 접촉을 확인하면 컷한다. 거리를 못 믿으면 주력과 같은
 // 시간 기반 하강으로 폴백한다. 설계: docs/superpowers/specs/2026-11-03-range-autoland-design.md
+// 실기 검증 전이라 기본 OFF 다(`rangeland 1`, 시동 해제 때만). OFF 면 RC 상실은 늘
+// 시간 기반 하강이다.
 #include <Arduino.h>
 #include <SPI.h>
 #include <Wire.h>
@@ -855,6 +857,12 @@ int rl_base_ceiling = RL_NO_CAP;
 volatile bool rl_resume_handover = false;
 float rlHandoverBase = 0.0f;
 int rlHandoverSet = 0;
+// 거리 기반 자동착륙 스위치. 실기 검증 전이라 부팅 기본은 OFF(시간 기반 하강만)이고
+// 저장하지 않는다. Core 0 은 요청만 넣고, Core 1 이 시동 해제 상태에서만 적용한다 —
+// 허용 판단과 적용을 RC 상실 진입과 같은 코어·같은 tick 순서에 두어, 비행 중(하강·
+// resume 인계 포함)에는 값이 바뀌지 않는다(Codex 설계 검토 P2).
+volatile bool rangeland_enabled = false;            // Core 1 만 쓴다
+volatile int8_t rangeland_request = -1;             // Core 0 → Core 1 (flowRequestMux)
 
 static inline void rangeLandResetFirmware() {
   rangeLand = RangeLandState{};
@@ -929,6 +937,8 @@ static inline void resetFlowHoldForHarness() {
   rlRangeMs = 0;
   rl_requested_collective_us = 1000;
   rl_delivered_collective_us = 1000.0f;
+  rangeland_enabled = false;
+  rangeland_request = -1;
   publishFlowHoldTelemetry(FlowHoldTelemetry());
 }
 
@@ -951,6 +961,33 @@ static inline uint8_t takeFlowCalCommand() {
   flowcal_command = FLOWCAL_CMD_NONE;
   portEXIT_CRITICAL(&flowRequestMux);
   return cmd;
+}
+
+static inline void requestRangeLand(int8_t enabled) {
+  portENTER_CRITICAL(&flowRequestMux);
+  rangeland_request = enabled;
+  portEXIT_CRITICAL(&flowRequestMux);
+}
+
+static inline int8_t takeRangeLandRequest() {
+  portENTER_CRITICAL(&flowRequestMux);
+  const int8_t req = rangeland_request;
+  rangeland_request = -1;
+  portEXIT_CRITICAL(&flowRequestMux);
+  return req;
+}
+
+// Core 1, tick 맨 앞(무장 요청 적용 전). 시동 해제 상태에서만 바꾼다. 하강·resume
+// 인계는 무장 중에만 있지만 stop 직후 정리 전 tick 을 위해 같이 본다.
+static inline void applyRangeLandRequest() {
+  const int8_t req = takeRangeLandRequest();
+  if (req < 0) return;
+  if (!safety_lock || fs_phase == FS_DESCENDING || rl_resume_handover) {
+    Serial.println(">>> RangeLand refused (armed)");
+    return;
+  }
+  rangeland_enabled = (req == 1);
+  Serial.println(rangeland_enabled ? ">>> RangeLand ON" : ">>> RangeLand OFF");
 }
 
 static inline void requestFlowCalCommand(uint8_t cmd) {
@@ -1679,6 +1716,7 @@ void pid_task(void *pv) {
     bool checkProbeDelivery = false;
     int probeReferenceThrottle = 0;
     uint32_t probeElapsedMs = 0;
+    applyRangeLandRequest();
     applyPendingSafetyRequest();
     loopCount++;
     uint32_t loopElapsedMs = nowMs - loopMarkerMs;
@@ -2223,7 +2261,7 @@ void pid_task(void *pv) {
         rangeLandResetFirmware();
         rl_base_ceiling = ceiling;
         startTimedDescent();
-        if (heightFresh && rlRangeFresh && rlRangeMm > 0 &&
+        if (rangeland_enabled && heightFresh && rlRangeFresh && rlRangeMm > 0 &&
             rangeTrackStable(rlPreTrack, rlRangeMs)) {
           rl_mode = RL_MODE_RANGE;
           rangeLandStart(rangeLand, heightEst.h_m, rlRangeMm, nowMs);
@@ -2766,7 +2804,7 @@ static void sendTelemetry() {
   udp.beginPacket(laptopIP, laptopPort);
   udp.printf("%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f,%d,%d,%d,%lu,%lu,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%.2f,%d,%d,%d,%.3f,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%d,%ld,%d,%ld,%ld,%d,%d,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,"
              "%lu,%.1f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.2f,%.2f,%d,%.1f,%d,%lu,"
-             "%d,%d,%.2f,%d,%d",
+             "%d,%d,%.2f,%d,%d,%d",
              angleX, angleY, angleZ,
              gyroX, gyroY, gyroZ,
              accX, accY, accZ,
@@ -2806,7 +2844,7 @@ static void sendTelemetry() {
              flowT.althold_state, flowT.candidate_alt_us,
              flowT.flowcal_state, (unsigned long)flowT.flowcal_samples,
              (int)landModeSnapshot, (int)landStageSnapshot, landRefSnapshot,
-             (int)landCutSnapshot, landReqSnapshot);
+             (int)landCutSnapshot, landReqSnapshot, (int)rangeland_enabled);
   udp.endPacket();
 }
 
@@ -3257,6 +3295,13 @@ void udp_task(void *pv) {
             }
           }
         }
+        else if (strncmp(buf, "rangeland", 9) == 0 &&
+                 (buf[9] == ' ' || buf[9] == '\t')) {
+          long enabled;
+          if (parseIntStrict(buf + 9, enabled) && (enabled == 0 || enabled == 1)) {
+            requestRangeLand((int8_t)enabled);   // 허용 판단은 Core 1 (시동 해제 때만)
+          }
+        }
         else if (strncmp(buf, "althold", 7) == 0) {
           long enabled;
           if (parseIntStrict(buf + 7, enabled) && (enabled == 0 || enabled == 1)) {
@@ -3420,7 +3465,7 @@ void setup() {
   }
 
   BaseType_t pidTaskOk = xTaskCreatePinnedToCore(pid_task, "PID", 4096, NULL, 2, NULL, 1);
-  // 텔레메트리 printf 인자가 96개라 기존 4096 B 에서 늘린다.
+  // 텔레메트리 printf 인자가 97개라 기존 4096 B 에서 늘린다.
   BaseType_t udpTaskOk = xTaskCreatePinnedToCore(udp_task, "UDP", 6144, NULL, 1, NULL, 0);
   if (pidTaskOk != pdPASS || udpTaskOk != pdPASS) {
     safety_lock = true;

@@ -70,7 +70,10 @@ flow-hold only: ``Land_Mode`` 0=NONE, 1=RANGE, 2=TIMED, 3=TIMED_FALLBACK;
 2=NEAR_GROUND_LOSS, 3=NEAR_GROUND_STUCK, 4=BACKSTOP; ``Land_Req_US`` the
 collective requested from the allocator (``Mixer_Collective_US`` minus this is
 what the allocator added to keep attitude authority). ``Failsafe_Phase`` stays
-DESCENDING for both range and timed descents.
+DESCENDING for both range and timed descents. Field 97 (index 96)
+``RangeLand_On`` is the accepted ``rangeland`` switch (1=range-based descent
+allowed on RC loss, 0=time-based only; default 0, changed only while disarmed).
+Packets without it leave ``None``, which is not the same as OFF.
 """
 
 import math
@@ -173,6 +176,7 @@ TELEMETRY_FIELDS = (
     "Land_Ref_M",
     "Land_Cut_Reason",
     "Land_Req_US",
+    "RangeLand_On",
 )
 
 TELEMETRY_FIELD_TYPES = {
@@ -272,6 +276,7 @@ TELEMETRY_FIELD_TYPES = {
     "Land_Ref_M": float,
     "Land_Cut_Reason": int,
     "Land_Req_US": int,
+    "RangeLand_On": int,
 }
 
 GAIN_FIELDS = (
@@ -308,11 +313,11 @@ def _parse_integer(raw, name):
 
 
 def parse_telemetry_packet(line):
-    """Parse a legacy, main (75-field) or flow-hold (91/96-field) packet.
+    """Parse a legacy, main (75-field) or flow-hold (91/96/97-field) packet.
 
     Fields unavailable in shorter packets are returned as ``None`` so CSV
     files retain the full header without inventing healthy/fault values. Extra
-    future fields are ignored after the known 96 fields. The first
+    future fields are ignored after the known 97 fields. The first
     ``REQUIRED_FIELD_COUNT`` fields must be non-empty: consumers format and
     do arithmetic on them, so a blank there is a malformed packet, not a
     legacy one.

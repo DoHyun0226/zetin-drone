@@ -54,6 +54,7 @@ mag <0|1>                # 자기계 yaw 드리프트 보정 ON/OFF (기본 OFF)
 magcal <0|1>             # raw 캡처 시작/종료. 시작은 시동 해제 상태에서만
 magc <x> <y> <z>         # 모터 전류 간섭 보정 계수(µT/µs) 3축. "0 0 0" = 보정 off
 raw <0|1>                # 1kHz dual-IMU 원시 배치 스트림 ON/OFF (기본 ON)
+rangeland <0|1>          # flow-hold 전용. 거리 기반 자동착륙 허용 (기본 0, 시동 해제 때만 적용)
 gains                    # 현재 PID 게인 12개를 1회 응답
 
 # 안쪽 각속도 PID 게인
@@ -363,14 +364,14 @@ yaw 권한 상태(66~75)를 순서대로 append한다.
 500ms 연속 회복 뒤 NORMAL로 돌아간다. yaw 스틱 입력, failsafe, 잠금 또는 새
 무장은 상태와 타이머를 초기화한다.
 
-### flow-hold 스케치 전용 필드 (76~96)
+### flow-hold 스케치 전용 필드 (76~97)
 
 `firmware/flight/dual_imu_cascade_flow_hold`는 75필드 뒤에 필드를 더 붙인다.
 주력 펌웨어 패킷은 75필드에서 끝나므로 지상국은 이 필드들을 `None`(CSV 빈 셀)으로
 둔다. 76~91(광류·위치 유지·고도 유지·보정 상태)의 이름과 해석은
 `scripts/ground/telemetry_schema.py` 모듈 설명이 정본이다.
 
-92~96은 거리 기반 자동착륙(`range_land.h`) 상태다. 거리 기반·시간 기반 하강 모두
+92~96은 거리 기반 자동착륙(`range_land.h`) 상태, 97은 그 스위치다. 거리 기반·시간 기반 하강 모두
 `Failsafe_Phase=1`(DESCENDING)이므로 하강 방식은 이 필드로만 구분한다.
 
 | # | 이름 | 타입 | 의미 |
@@ -380,6 +381,14 @@ yaw 권한 상태(66~75)를 순서대로 append한다.
 | 94 | `Land_Ref_M` | float | 목표 고도(m) |
 | 95 | `Land_Cut_Reason` | int | 0=NONE, 1=CONTACT(`CUT_LANDED`), 2=NEAR_GROUND_LOSS, 3=NEAR_GROUND_STUCK, 4=BACKSTOP(2~4는 `CUT_TIMEOUT`) |
 | 96 | `Land_Req_US` | int | allocator에 넣은 요청 collective(µs). `Mixer_Collective_US`와의 차이가 자세 권한을 지키려 allocator가 더한 몫이다 |
+| 97 | `RangeLand_On` | int | 받아들여진 `rangeland` 값. 0=OFF(기본, RC 상실은 늘 시간 기반 하강), 1=ON. 시동 해제 때만 바뀐다. 이 필드가 없는 패킷은 지상국이 `None` 으로 두며 OFF 로 읽지 않는다 |
+
+`rangeland` 는 Core 0 이 요청만 받고 Core 1 이 tick 맨 앞(무장 요청 적용 전)에서 시동 해제일 때만
+적용한다. 무장 중·하강 중·resume 인계 중 요청은 시리얼에 `RangeLand refused (armed)` 를 남기고 버린다.
+결과는 97번으로 확인한다(비행 보드 시리얼은 비행 중 보이지 않는다). OFF 일 때 RC 상실 동작은
+main 의 시간 기반 하강과 같다 — 2026-11-13 같은 SIL 플랜트로 main(`0cedc49`)과 이 스케치(OFF)를
+5개 시나리오(위치·고도 유지, 수동, resume, 진입 때 거리 상실) 7만 tick 돌려 모터 출력·스로틀 창·
+failsafe 단계·프로브 상태가 tick 마다 같음을 확인했다.
 
 모드·단계는 다음 무장 때 0으로 돌아간다. 컷 뒤에도 마지막 모드·단계·사유를 유지해
 로그에서 어떤 경로로 끝났는지 볼 수 있다.
