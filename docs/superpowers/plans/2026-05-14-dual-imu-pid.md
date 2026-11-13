@@ -2,9 +2,9 @@
 
 > 과거 문서: 대체된 듀얼 IMU PID 반복 작업을 설명한다.
 > 현행 비행 제어 후보:
-> [`dual_imu_cascade_pwm`](../../firmware/flight/dual_imu_cascade_pwm/).
+> [`dual_imu_cascade_pwm`](../../../firmware/archive/legacy_flight/dual_imu_cascade_pwm/).
 > 보관된 결과물:
-> [`dual_imu_pid_pwm`](../../firmware/archive/legacy_flight/dual_imu_pid_pwm/).
+> [`dual_imu_pid_pwm`](../../../firmware/archive/legacy_flight/dual_imu_pid_pwm/).
 
 > **에이전트 작업자를 위한 안내:** 필수 서브 스킬: 이 계획을 태스크 단위로 구현하려면 superpowers:subagent-driven-development(권장) 또는 superpowers:executing-plans를 사용한다. 각 단계는 추적을 위해 체크박스(`- [ ]`) 구문을 사용한다.
 
@@ -14,7 +14,7 @@
 
 **기술 스택:** ESP32-S3 상의 Arduino 프레임워크, ICM42670P 라이브러리, FreeRTOS, WiFi/UDP, ledcAttach PWM.
 
-**사양:** [`2026-05-14-dual-imu-pid-design.md`](2026-05-14-dual-imu-pid-design.md)
+**사양:** [`2026-05-14-dual-imu-pid-design.md`](../specs/2026-05-14-dual-imu-pid-design.md)
 
 ## 펌웨어 테스트 전략
 

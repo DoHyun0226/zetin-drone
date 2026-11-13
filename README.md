@@ -41,6 +41,16 @@ USB 게임패드를 연결한 지상국과 WiFi SoftAP UDP로 통신한다.
 `logic/` 순수 로직)과 고치기 전 검증 방법은 [zetin_fc 안내](firmware/flight/zetin_fc/README.md)에 있다.
 진단·보관 코드까지 포함한 스케치의 용도와 실행 범위는 [펌웨어 카탈로그](docs/firmware_catalog.md)를 따른다.
 
+## 저장소 구성
+
+| 폴더 | 내용 |
+|---|---|
+| [`firmware/`](firmware/README.md) | `flight/zetin_fc` 비행 펌웨어, `diagnostics/` 진단 스케치, `archive/` 옛 펌웨어 |
+| [`scripts/`](scripts/README.md) | PC 지상국: 조종 대시보드, 카메라 녹화, 로그 분석 |
+| [`tools/`](tools/) | 호스트 시험(SIL·native), 펌웨어 동일성·차분 검증, 저장소 검사 |
+| [`logs/`](logs/README.md) | 비행·벤치 로그와 읽는 법 |
+| [`docs/`](docs/README.md) | 유지 문서(현재 상태·규격·절차), `superpowers/` 설계·계획 기록, `reports/` 점검 보고 |
+
 ## 빠른 확인
 
 저장소 루트에서 실행한다. 의존성은 [펌웨어 가이드](firmware/README.md)와

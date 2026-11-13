@@ -55,8 +55,8 @@
 - [마이그레이션 맵](migration_map.md)의 23개 원본 스케치는 당시 이동 대상이다.
   이후 추가된 flix 후보·`motor_id_single`·`esc_config_throttle`까지 포함한
   현재 전체 목록은 위 26개다.
-- [과거 PID 설계](history/2026-05-14-dual-imu-pid-design.md)와
-  [구현 계획](history/2026-05-14-dual-imu-pid-implementation-plan.md),
-  [정리 설계](design/2026-07-13-repository-cleanup-design.md)와
-  [정리 계획](plans/2026-07-13-repository-cleanup.md)은 당시의 요구·예상·명령을
+- [과거 PID 설계](superpowers/specs/2026-05-14-dual-imu-pid-design.md)와
+  [구현 계획](superpowers/plans/2026-05-14-dual-imu-pid.md),
+  [정리 설계](superpowers/specs/2026-07-13-repository-cleanup-design.md)와
+  [정리 계획](superpowers/plans/2026-07-13-repository-cleanup.md)은 당시의 요구·예상·명령을
   보존한다. 체크리스트나 예상 결과를 구현·실행 완료 증거로 사용하지 않는다.

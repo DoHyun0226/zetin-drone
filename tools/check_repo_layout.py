@@ -82,7 +82,7 @@ def check_sketch_names(repo):
     return errors
 
 
-def check_migration_map(repo, map_path, expected_rows=64):
+def check_migration_map(repo, map_path, expected_rows=62):
     errors = []
     rows = []
     for line_number, line in enumerate(

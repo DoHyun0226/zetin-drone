@@ -25,7 +25,7 @@ CI 컴파일 대상에는 들어 있지만, 이 문서에 기록된 플래시·�
 - **`gains` 응답 없음.** 게인 변경 명령 일부는 있지만 읽기 응답은 없다.
   주력의 `trim`, `mag`/`magcal`, `raw` 명령도 지원하지 않는다.
 - **텔레메트리는 22필드.** `Armed`에서 끝나며 주력의 현재 75필드와 다르다.
-  공유 [파서](../../../scripts/ground/telemetry_schema.py)는 빠진 필드를 `None`으로,
+  공유 [파서](../../../../scripts/ground/telemetry_schema.py)는 빠진 필드를 `None`으로,
   CSV에는 빈 셀로 남긴다. 이것은 파싱 호환이며 모터 출력·목표값·자기계·
   자동착륙·거리·광류 관측을 제공한다는 뜻은 아니다.
 - **가속도 x/y 매핑 검증 미완료.** 아래 부호 점검이 필요하다. 정지 시
@@ -33,7 +33,7 @@ CI 컴파일 대상에는 들어 있지만, 이 문서에 기록된 플래시·�
 
 정확한 명령 분기는 [스케치](dual_imu_flix_quat_pwm.ino)의 `udp_task`,
 `handleRcCommand`, `handleGainCommand`, 필드는 `sendTelemetry`를 기준으로
-본다. [주력 UDP 문서](../../../docs/udp_protocol.md)의 확장 기능을 이 후보에
+본다. [주력 UDP 문서](../../../../docs/udp_protocol.md)의 확장 기능을 이 후보에
 자동 적용하지 않는다.
 
 ## dual_imu_cascade_pwm과의 차이
