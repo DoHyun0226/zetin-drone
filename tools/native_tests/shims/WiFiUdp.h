@@ -16,6 +16,10 @@ inline std::string telemetry_output;
 inline std::string incoming_packet;
 inline IPAddress remote_ip;
 inline uint16_t remote_port = 0;
+// 보낸 데이터그램 전부를 순서대로(차분 하네스). 기본 null. 목적지는 last_dest_*.
+inline void (*on_send)(const std::string &) = nullptr;
+inline IPAddress last_dest_ip;
+inline uint16_t last_dest_port = 0;
 
 inline void reset() {
   telemetry_output.clear();
@@ -30,8 +34,10 @@ class WiFiUDP {
 public:
   uint8_t begin(uint16_t) { return 1; }
 
-  int beginPacket(const IPAddress &, uint16_t) {
+  int beginPacket(const IPAddress &ip, uint16_t port) {
     outgoing_packet_.clear();
+    wifi_udp_fake::last_dest_ip = ip;
+    wifi_udp_fake::last_dest_port = port;
     return 1;
   }
 
@@ -53,6 +59,7 @@ public:
 
   int endPacket() {
     wifi_udp_fake::telemetry_output = outgoing_packet_;
+    if (wifi_udp_fake::on_send) wifi_udp_fake::on_send(outgoing_packet_);
     return 1;
   }
 

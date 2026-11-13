@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Control-station entry point: DualSense flight (default), --keyboard, --listen.
+"""지상국 진입점: DualSense 비행(기본), --keyboard, --listen.
 
   drone_control.py [--keyboard | --listen] [--no-raw] [--no-mag] [--plain]
-  drone_control.py --listen --plot       live telemetry plot window + CSV
-  drone_control.py --pad-check [--live]  gamepad diagnosis, sends nothing
+  drone_control.py --listen --plot       실시간 텔레메트리 그래프 창 + CSV
+  drone_control.py --pad-check [--live]  게임패드 진단. 아무것도 보내지 않는다
 
-Only one tool may talk UDP to the drone at a time: the firmware sends
-telemetry to the last sender, and even --listen sends ``connect``.
+드론과 UDP로 통신하는 도구는 한 번에 하나만 둔다: 펌웨어는 마지막으로 보낸
+쪽에 텔레메트리를 보내고, --listen도 ``connect``를 보낸다.
 """
 
 import argparse

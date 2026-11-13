@@ -45,7 +45,7 @@ class Clock:
 
 
 def make_recording(folder: Path, captures=("0.000000", "0.100000", "0.200000")):
-    """A real .mjpeg/.csv pair written by ground.camera_record.record_chunks."""
+    """ground.camera_record.record_chunks 가 쓴 실제 .mjpeg/.csv 쌍."""
     mjpeg_path = folder / "camera_test.mjpeg"
     csv_path = folder / "camera_test.csv"
     jpegs = [jpeg(i) for i in range(len(captures))]
@@ -84,7 +84,7 @@ class ExtractTest(unittest.TestCase):
             tmp = Path(tmp)
             mjpeg_path, csv_path, jpegs = make_recording(tmp)
             data = mjpeg_path.read_bytes()
-            mjpeg_path.write_bytes(data[:-5])  # killed while writing the last frame
+            mjpeg_path.write_bytes(data[:-5])  # 마지막 프레임을 쓰던 중 종료됨
             frames, kept = extract_frames(mjpeg_path, load_index(csv_path), tmp / "frames")
             self.assertEqual([f.read_bytes() for f in frames], jpegs[:2])
             self.assertEqual([r["frame"] for r in kept], ["0", "1"])
@@ -122,7 +122,7 @@ class ConcatTest(unittest.TestCase):
             self.assertEqual(len(frames), 2)
             self.assertEqual(len(durations), 2)
             self.assertAlmostEqual(durations[0], 0.1, delta=1e-6)
-            self.assertAlmostEqual(durations[1], 0.1, delta=1e-6)  # last_s, not 9.9
+            self.assertAlmostEqual(durations[1], 0.1, delta=1e-6)  # 9.9 가 아니라 last_s
 
 
 class AlignedCsvTest(unittest.TestCase):

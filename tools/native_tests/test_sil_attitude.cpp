@@ -13,10 +13,10 @@
 
 #include "control_allocator.h"
 
-// Test-only allocator dispatch. The production allocator is still called
-// unchanged for normal SIL runs. The negative-control run selects an
-// independent legacy policy before the sketch is included, so the real PID
-// tick receives the same scale that produces motorOut and drives the plant.
+// 시험 전용 allocator 분기. 일반 SIL 실행에서는 실제 allocator 를 그대로
+// 호출한다. 음성 대조 실행은 스케치(zetin_fc)를 include 하기 전에 독립된
+// 옛 정책을 고른다. 그래서 실제 PID tick 은 motorOut 을 만들고 플랜트를
+// 움직이는 것과 같은 스케일을 받는다.
 static bool silUseUniformAllocator = false;
 static ControlAllocation silLastDispatchedAllocation = {
     {1000, 1000, 1000, 1000}, 1000.0f, 1.0f, 1.0f, false};
@@ -24,9 +24,9 @@ static ControlAllocation silLastDispatchedAllocation = {
 static ControlAllocation silUniformAllocation(float roll, float pitch,
                                                float yaw, int throttle,
                                                int minMotor, int maxMotor) {
-  // Independent legacy policy: compose all three axes first, then apply one
-  // span scale to every axis. This does not call or reproduce the production
-  // RP-first priority solver.
+  // 독립된 옛 정책: 세 축을 먼저 합성한 뒤 모든 축에 span 스케일 하나를
+  // 적용한다. 실제 코드의 RP 우선 우선순위 솔버를 호출하거나 재현하지
+  // 않는다.
   minMotor = std::max(1000, std::min(2000, minMotor));
   maxMotor = std::max(minMotor, std::min(2000, maxMotor));
   const double rollValue = std::isfinite(roll) ? roll : 0.0;
@@ -77,7 +77,7 @@ static ControlAllocation silDispatchAllocateControl(
 }
 
 #define allocateControl silDispatchAllocateControl
-#include "dual_imu_cascade_pwm.ino"
+#include "zetin_fc.ino"
 #undef allocateControl
 
 namespace {
@@ -259,7 +259,7 @@ struct RunConfig {
   std::function<Disturbance(uint32_t)> disturbance_for_interval;
   std::function<int(uint32_t)> throttle_for_tick;
   std::function<void(uint32_t, PlantState &)> state_for_tick;
-  // Test-only negative-control policy. This never enters flight firmware.
+  // 시험 전용 음성 대조 정책. 비행 펌웨어에는 들어가지 않는다.
   bool uniform_allocator_oracle = false;
 };
 
@@ -385,11 +385,11 @@ bool injectImuFromPlantImpl(const PlantState &state, uint32_t tick,
   const double r_dps = state.r * kRadToDeg;
 
   inv_imu_sensor_event_t e1 = {};
-  // Physics source: invert the validated accel sensor->body rotation for the
-  // roll/pitch gyro too. Do not derive these signs from the firmware gyro map.
+  // 물리 기준: 검증된 accel sensor->body 회전의 역을 roll/pitch 자이로에도
+  // 적용한다. 이 부호를 펌웨어 자이로 맵에서 끌어오지 않는다.
   e1.gyro[0] = roundedRaw(-q_dps / GYRO_SCALE, saturated);
   e1.gyro[1] = roundedRaw(p_dps / GYRO_SCALE, saturated);
-  // Yaw keeps its separately bench-verified convention.
+  // yaw 는 벤치에서 따로 검증한 규약을 유지한다.
   e1.gyro[2] = roundedRaw(-r_dps / GYRO_SCALE, saturated);
 
   const double gbx = -std::sin(state.theta);
@@ -477,6 +477,11 @@ void resetFirmwareState(const PlantState &initial) {
   hover_valid = false;
   calibration_ok = true;
 
+  // zetin_fc 는 기체 트림(-2.2/-1.8°)과 광류 상태를 갖고 시작한다. 이 시험은 트림 없고
+  // 3901-L0X 없는 기체를 모델로 하므로 둘 다 깨끗하게 시작한다.
+  trim_roll = 0.0f;
+  trim_pitch = 0.0f;
+  resetFlowHoldForHarness();
   targetAngleX = 0.0f;
   targetAngleY = 0.0f;
   targetAngleZ = 0.0f;
@@ -1587,21 +1592,30 @@ int main() {
         ",0,-1,0,0,-1,0"
         ",1.000,1.000,1000.00,0.00,0.00,0.00"
         ",0.00,0.00,0.00,0";
-    detail << "actual field_count=" << field_count
-           << ", packet_suffix="
-           << packet.substr(
-                  packet.size() > expected_suffix.size()
-                      ? packet.size() - expected_suffix.size()
-                      : 0U)
-           << "; expected field_count=75 and suffix " << expected_suffix;
-    CHECK_MSG(field_count == 75U, detail.str());
-    CHECK_MSG(
-        packet.size() >= expected_suffix.size() &&
-            packet.compare(
-                packet.size() - expected_suffix.size(),
-                expected_suffix.size(),
-                expected_suffix) == 0,
-        detail.str());
+    // zetin_fc 는 이 75필드 뒤에 76~97번을 덧붙인다. 38~75번(인덱스 38~74)은 자리와
+    // 내용이 그대로여야 하므로 그 구간을 제자리에서 비교한다.
+    std::vector<std::string> fields;
+    {
+      std::stringstream ss(packet);
+      std::string f;
+      while (std::getline(ss, f, ',')) fields.push_back(f);
+    }
+    std::string slice;
+    for (std::size_t i = 38; i < 75 && i < fields.size(); i++) slice += "," + fields[i];
+    detail << "actual field_count=" << field_count << ", fields 38-74=" << slice
+           << "; expected field_count=97 and fields 38-74 " << expected_suffix;
+    CHECK_MSG(field_count == 97U, detail.str());
+    CHECK_MSG(slice == expected_suffix, detail.str());
+    // 하네스 리셋 직후, pid_task 가 한 번도 게시하기 전의 광류·자동착륙 필드(75~96):
+    // 리셋 스냅숏(높이 0 — tick 이 무효일 때 쓰는 -1 이 아니다), 유지 꺼짐, 보정 대기,
+    // 착지 없음, 자동착륙 스위치 꺼짐.
+    const std::string expected_flow =
+        ",0,0.0,0,0.000,0.000,0.000,0.000,0.000,0.000,0,0.00,0.00,0,0.0,0,0"
+        ",0,0,0.00,0,1000,0";
+    std::string flow;
+    for (std::size_t i = 75; i < fields.size(); i++) flow += "," + fields[i];
+    CHECK_MSG(flow == expected_flow,
+              "fields 75-96=" + flow + "; expected " + expected_flow);
   });
 
   runCase("vertical: 1g specific force preserves legacy IMU raw bytes", [] {

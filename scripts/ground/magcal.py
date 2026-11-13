@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Fit BMM350 hard/soft-iron calibration from a telemetry CSV capture.
+"""텔레메트리 CSV 캡처로 BMM350 hard/soft-iron 보정값을 맞춘다.
 
-The firmware exposes uncalibrated ``Mag_X/Y/Z`` while
-``Mag_Cal_Active == 1``. This tool selects that interval, fits a constrained
-Li & Griffiths ellipsoid, removes radial outliers with three MAD clipping
-passes, validates directional coverage, and prints constants ready for the
-flight sketch.
+펌웨어는 ``Mag_Cal_Active == 1``인 동안 보정 전 ``Mag_X/Y/Z``를 보낸다.
+이 도구는 그 구간을 골라 제약을 건 Li & Griffiths 타원체를 맞추고, MAD 클리핑
+3회로 반지름 이상치를 지우고, 방향 분포를 검증한 뒤, 비행 펌웨어 스케치에
+바로 붙일 상수를 출력한다.
 """
 
 from __future__ import annotations
@@ -32,20 +31,20 @@ EXISTING_MAG_COMP = np.array([0.007497, -0.001218, -0.000640])
 
 
 class CalibrationError(ValueError):
-    """Base class for calibration input or result failures."""
+    """보정 입력이나 결과 실패의 기본 클래스."""
 
 
 class CoverageError(CalibrationError):
-    """Raised when sample directions cannot constrain a 3-D ellipsoid."""
+    """샘플 방향으로 3-D 타원체를 구속할 수 없을 때 낸다."""
 
 
 class FitError(CalibrationError):
-    """Raised when the data cannot produce a physical ellipsoid."""
+    """데이터로 물리적인 타원체를 만들 수 없을 때 낸다."""
 
 
 @dataclass(frozen=True)
 class CalibrationResult:
-    """Validated hard/soft-iron calibration in raw BMM350 µT units."""
+    """검증된 hard/soft-iron 보정값. 단위는 raw BMM350 µT."""
 
     hard_iron: np.ndarray
     soft_iron: np.ndarray
@@ -138,8 +137,8 @@ def _design_matrix(values: np.ndarray) -> np.ndarray:
 
 
 def _constraint_matrix() -> np.ndarray:
-    # beta[:6] = A, B, C, D, E, F for
-    # Ax²+By²+Cz²+2Dxy+2Exz+2Fyz. This is 4J-I²=1.
+    # beta[:6] = Ax²+By²+Cz²+2Dxy+2Exz+2Fyz의
+    # A, B, C, D, E, F. 이것이 4J-I²=1이다.
     return np.array(
         (
             (-1.0, 1.0, 1.0, 0.0, 0.0, 0.0),
@@ -155,12 +154,11 @@ def _constraint_matrix() -> np.ndarray:
 def _positive_generalized_eigenvector(
     scatter: np.ndarray, constraint: np.ndarray
 ) -> np.ndarray:
-    """Solve scatter*v=lambda*constraint*v with symmetric ``eigh``.
+    """scatter*v=lambda*constraint*v를 대칭 ``eigh``로 푼다.
 
-    The constraint has one positive and five negative directions, so it cannot
-    be passed as the positive-definite metric required by common generalized
-    ``eigh`` APIs. Whitening the positive scatter matrix instead gives the
-    symmetric problem ``L^-1 C L^-T y = (1/lambda)y``.
+    constraint는 양의 방향이 하나, 음의 방향이 다섯이라 흔한 일반화 ``eigh`` API가
+    요구하는 positive-definite metric으로 넘길 수 없다. 대신 양의 scatter 행렬을
+    whitening하면 대칭 문제 ``L^-1 C L^-T y = (1/lambda)y``가 된다.
     """
 
     scatter = 0.5 * (scatter + scatter.T)
@@ -278,7 +276,7 @@ def _spread_pct(lengths: np.ndarray) -> float:
 
 
 def fit_calibration(samples: Iterable[Iterable[float]]) -> CalibrationResult:
-    """Fit and validate hard/soft-iron calibration for raw XYZ samples."""
+    """raw XYZ 샘플로 hard/soft-iron 보정값을 맞추고 검증한다."""
 
     values = _as_samples(samples)
     _coverage(values)
@@ -342,7 +340,7 @@ def fit_calibration(samples: Iterable[Iterable[float]]) -> CalibrationResult:
 def apply_calibration(
     samples: Iterable[Iterable[float]], result: CalibrationResult
 ) -> np.ndarray:
-    """Apply ``soft_iron @ (raw - hard_iron)`` to one or more samples."""
+    """샘플 하나 이상에 ``soft_iron @ (raw - hard_iron)``을 적용한다."""
 
     values = np.asarray(samples, dtype=float)
     if values.ndim == 1:
@@ -355,7 +353,7 @@ def apply_calibration(
 
 
 def load_calibration_csv(path: str | Path, use_all: bool = False) -> np.ndarray:
-    """Load finite raw XYZ rows, selecting ``Mag_Cal_Active == 1`` by default."""
+    """유한한 raw XYZ 행을 읽는다. 기본으로 ``Mag_Cal_Active == 1``인 행만 고른다."""
 
     csv_path = Path(path)
     try:
@@ -407,7 +405,7 @@ def load_calibration_csv(path: str | Path, use_all: bool = False) -> np.ndarray:
 
 
 def format_firmware_constants(result: CalibrationResult) -> str:
-    """Return paste-ready flight-sketch hard/soft-iron constant definitions."""
+    """비행 펌웨어 스케치에 바로 붙일 hard/soft-iron 상수 정의를 돌려준다."""
 
     hard = result.hard_iron
     soft = result.soft_iron
@@ -429,7 +427,7 @@ def recalibrate_mag_comp(
     soft_iron: Iterable[Iterable[float]],
     coefficients: Iterable[float] = EXISTING_MAG_COMP,
 ) -> np.ndarray:
-    """Transform post-calibration throttle coefficients as ``W @ old``."""
+    """보정 뒤 스로틀 계수를 ``W @ old``로 변환한다."""
 
     matrix = np.asarray(soft_iron, dtype=float)
     vector = np.asarray(coefficients, dtype=float)
@@ -442,7 +440,7 @@ def recalibrate_mag_comp(
 
 
 def format_report(result: CalibrationResult) -> str:
-    """Return a concise calibration quality report."""
+    """짧은 보정 품질 보고를 돌려준다."""
 
     radial_residual_95_pct = (
         100.0 * result.radial_residual_95_ut / result.target_radius_ut

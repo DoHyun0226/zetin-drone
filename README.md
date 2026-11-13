@@ -2,7 +2,7 @@
 
 센서 읽기·자세 추정·PID·모터 제어·안전장치와 PC 지상국을 직접 만드는
 쿼드콥터 프로젝트다. 목표는 실내에서 안정적으로 조종되는 기체다.
-주력 구성은 **ESP32-S3 + 듀얼 ICM42670 IMU + BMM350 자기계 + PWM ESC**이며,
+구성은 **ESP32-S3 + 듀얼 ICM42670 IMU + BMM350 자기계 + 3901-L0X 광류·거리 + PWM ESC**이며,
 USB 게임패드를 연결한 지상국과 WiFi SoftAP UDP로 통신한다.
 
 [노션: 프로젝트 현황·작업 흐름](https://app.notion.com/p/3142d27b08d3804eb85ced1ca13d8998) ·
@@ -11,22 +11,20 @@ USB 게임패드를 연결한 지상국과 WiFi SoftAP UDP로 통신한다.
 
 ## 현재 상태
 
-**2026-10-15 대조 기준. 저스로틀 yaw 개선은 2026-10-14 `main`에 통합됐다(`1dc8582`).**
+**2026-11-13 대조 기준.** 비행 펌웨어는 [`zetin_fc`](firmware/flight/zetin_fc/README.md) 하나다.
 
 | 항목 | 확인된 상태 | 다음 확인 |
 |---|---|---|
-| 자세 제어 | 캐스케이드 PID·yaw 자동 잠금·자기계 보정 구현. 8월 1일 실비행 기록 | 시험 구성과 실제 사용 게인을 기록하고 반복 검증 |
-| 최근 시험 | 8월 19일 테더 이륙·수동 호버·착륙 5회 기록 | 통합 코드의 무장 거부·확인 시간 초과·failsafe 경로 실기 검증 |
-| RC 상실 대응 | 조건에 따라 즉시 컷 또는 시간 기반 하강. 착지 감지는 미구현 | 호버 추정의 지상 오염과 접지 후 동작 확인 |
-| 거리·광류 | 3901-L0X 수신·기록 코드 구현. 최근 시험의 신선한 값 미확보 | 배선·프레임·품질·지연부터 측정 |
-| 자동 고도·위치 유지 | 미구현. 최근 테더 시험의 호버는 조종자가 유지 | 유효한 센서 관측 확보 후 설계 |
+| 자세 제어 | 캐스케이드 PID·yaw 자동 잠금·자기계 보정·축 우선순위 배분. 8월 1일 실비행, 8월 19일 테더 이륙·호버·착륙 5회(옛 주력) | 실패 경로(무장 거부·failsafe) 실기 검증 |
+| 광류 위치 유지 | 광류 보정과 테더 위치 유지 5회(2026-10-30, 튜닝 중) | 게인 정리와 반복 기록 |
+| 고도 유지 | 거리계 고도 유지 구현·SIL | 벤치·테더 미시험 |
+| RC 상실 대응 | 조건에 따라 즉시 컷 또는 시간 기반 하강. 거리 기반 하강은 구현·SIL, **기본 OFF** | 거리 기반 벤치(Stage F) 미실시 |
+| 카메라 | ESP32-CAM MJPEG 스트리밍 실험(USB 전원 벤치) | BEC 전원·무장 상태 벤치 |
 
-8월 1일의 **176.2초는 연속 무장 시간**이며, 전체 체공 시간으로 해석하지
-않는다. 같은 날의 자동착륙 시험은 별도 기록이다. 8월 19일 결과는 테더와
-조종자가 포함된 구성의 기록이다. 그때 비행한 roll/pitch 우선·잔여 범위 yaw 배분과
-펌웨어 무장 확인 절차는 2026-10-14 기본 코드에 통합됐고, 통합 펌웨어는 비행한
-코드와 주석만 다르다. 무장 거부·확인 시간 초과와 failsafe 경로는 실기 검증이 남아 있다.
-커밋·시험 조건·남은 작업의 완료 기준은 [현재 상태](docs/current_status.md)에 정리했다.
+8월 1일의 **176.2초는 연속 무장 시간**이며, 전체 체공 시간으로 해석하지 않는다. 8월 결과는
+옛 주력(`dual_imu_cascade_pwm`, 지금은 archive)으로 테더와 조종자가 포함된 구성의 기록이다.
+`zetin_fc` 와 옛 주력의 차이(Ki·트림 기본값, 부팅 IMU 보정 방식)와 남은 작업의 완료 기준은
+[현재 상태](docs/current_status.md)에 정리했다.
 
 ## 여기서 시작
 
@@ -39,10 +37,9 @@ USB 게임패드를 연결한 지상국과 WiFi SoftAP UDP로 통신한다.
 | 명령·필드·바이너리 규격 변경 | [UDP 프로토콜](docs/udp_protocol.md) |
 | 다음 실험과 착지 감지 연구 | [현재 상태](docs/current_status.md) → [착지 감지 연구](docs/failsafe_land_research.md) |
 
-주력 소스는 [`dual_imu_cascade_pwm`](firmware/flight/dual_imu_cascade_pwm/)다.
-[`dual_imu_flix_quat_pwm`](firmware/flight/dual_imu_flix_quat_pwm/)는 보류 후보이며
-주력 지상국의 `rcr` 조종을 지원하지 않는다. 진단·보관 코드까지 포함한
-26개 스케치의 용도와 실행 범위는 [펌웨어 카탈로그](docs/firmware_catalog.md)를 따른다.
+비행 펌웨어 소스는 [`zetin_fc`](firmware/flight/zetin_fc/)다. 파일 구성(`fc/` 펌웨어 모듈,
+`logic/` 순수 로직)과 고치기 전 검증 방법은 [zetin_fc 안내](firmware/flight/zetin_fc/README.md)에 있다.
+진단·보관 코드까지 포함한 스케치의 용도와 실행 범위는 [펌웨어 카탈로그](docs/firmware_catalog.md)를 따른다.
 
 ## 빠른 확인
 
@@ -55,7 +52,7 @@ python -m py_compile scripts/*.py
 python tools/check_repo_layout.py
 python -m unittest discover -s tools -p 'test_*.py' -v
 
-# 주력·보류 후보·진단 스케치 9개. 실패하면 이 빌드 묶음을 중단한다.
+# 비행 1개·진단 8개 스케치. 실패하면 이 빌드 묶음을 중단한다.
 (
   set -e
   for sketch in firmware/flight/*/ firmware/diagnostics/*/; do
@@ -65,9 +62,8 @@ python -m unittest discover -s tools -p 'test_*.py' -v
 )
 ```
 
-2026-10-14 기준 로컬 `unittest` **200개가 skip 없이 통과**했고, `main`
-CI(ESP32 코어 3.3.10)에서 **스케치 9개 컴파일**도 통과했다.
-이전 검사 범위와 실기에서 남은 확인은 [2026-09-07 정합성 점검 기록](docs/reports/2026-09-07-documentation-audit.md)에 있다.
+2026-11-13 기준 로컬 `unittest` **484개가 skip 없이 통과**했고, `zetin_fc` 는 ESP32 코어 3.3.10 으로
+컴파일된다. 이전 검사 범위와 실기에서 남은 확인은 [2026-09-07 정합성 점검 기록](docs/reports/2026-09-07-documentation-audit.md)에 있다.
 
 ## 안전
 

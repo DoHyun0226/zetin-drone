@@ -7,7 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_TEST_DIR = REPO_ROOT / "tools" / "native_tests"
-SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "dual_imu_cascade_flow_hold"
+SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 EXECUTION_TIMEOUT_S = 600
 
 # 헤더 단위 시험 4개와, 새 스케치를 통째로 넣은 폐루프 SIL 하나.
@@ -21,7 +21,7 @@ NATIVE_TESTS = (
 
 
 class FlowHoldNativeTest(unittest.TestCase):
-    """Compile and run the flow-hold native tests at -m32."""
+    """flow-hold native 시험을 -m32 로 컴파일해 실행한다."""
 
     @classmethod
     def setUpClass(cls):
@@ -52,6 +52,7 @@ class FlowHoldNativeTest(unittest.TestCase):
             self.compiler, "-std=c++17", "-O1", "-g", "-Wall", "-m32",
             "-I", str(NATIVE_TEST_DIR / "shims"),
             "-I", str(SKETCH_DIR),
+            "-I", str(SKETCH_DIR / "logic"),
             "-x", "c++", str(NATIVE_TEST_DIR / f"{name}.cpp"),
             "-o", str(executable),
         ]

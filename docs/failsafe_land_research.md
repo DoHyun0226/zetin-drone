@@ -3,8 +3,8 @@
 ## 현재 상태와 기록 해석
 
 현재 운용 절차는 [전원 인가 벤치 Stage E](power_on_bench_procedure.md#stage-e--자동착륙-현재-시간-기반-하강)다.
-코드 근거는 [주력 펌웨어](../firmware/flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)의
-`pid_task`·`FS_MAX_MS`, [프로브 헬퍼](../firmware/flight/dual_imu_cascade_pwm/failsafe_land.h)의
+코드 근거는 비행 펌웨어의 [`pid_task`](../firmware/flight/zetin_fc/fc/pid_task.h)·
+[`FS_MAX_MS`](../firmware/flight/zetin_fc/fc/config.h), [프로브 헬퍼](../firmware/flight/zetin_fc/logic/failsafe_land.h)의
 `updateLandDetector`다. 아래 내용은 저장된 코드·문서·로그 해석의 정리이며 새로운 실기 시험 결과가 아니다.
 
 - **현재는 시간 기반 하강**이다. `landed=false`로 프로브 반환값을 컷 판정에서
@@ -415,13 +415,18 @@ R1 출력의 `airborne_false_landings=0/100`은 해당 모델에서 접지 전
 
 필요한 것: **접지가 없는 하강 로그.** 현재는 접지 로그만 있다.
 
-### D. 거리·광류 관측을 제어로 연결하기 (미구현)
+### D. 거리·광류 관측을 제어로 연결하기 (일부 구현)
 
-현재 주력 펌웨어에는 Matek 3901-L0X의 MSP 거리·광류를 UART로 받아
+**2026-11-13 정정:** 이 절을 쓸 때는 미구현이었다. 지금 `zetin_fc` 는 거리·광류를 광류 위치
+유지(테더 비행 5회, 2026-10-30), 고도 유지(구현·SIL), 거리 기반 자동착륙(구현·SIL, **기본 OFF**,
+[설계](superpowers/specs/2026-11-03-range-autoland-design.md))에 쓴다. 거리 기반 자동착륙은 접촉을
+거리·수직속도·기준 스로틀 감소로 판정하며 벤치·비행 검증 전이다. 아래 문단은 그 이전 상태의 기록이다.
+
+비행 펌웨어에는 Matek 3901-L0X의 MSP 거리·광류를 UART로 받아
 텔레메트리에 기록하는 **수신 코드가 구현돼 있다.**
-[`msp_sensor.h`](../firmware/flight/dual_imu_cascade_pwm/msp_sensor.h)의
+[`msp_sensor.h`](../firmware/flight/zetin_fc/logic/msp_sensor.h)의
 `MspSensorParser`가 `range.distance_mm`·`range.quality`와
-`flow.motion_x`·`flow.motion_y`·`flow.quality`를 채운다. 주력 펌웨어의 `pollMspSensor`가
+`flow.motion_x`·`flow.motion_y`·`flow.quality`를 채운다. `pollMspSensor`가
 이를 `msp_range_mm`·`msp_range_quality`·`msp_flow_x`·`msp_flow_y`·`msp_flow_quality`로
 옮겨 기록하며, 신선한 프레임이 없으면 품질을 −1로 보고한다.
 

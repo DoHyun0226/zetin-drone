@@ -1,13 +1,13 @@
-"""Record the drone camera's MJPEG stream on the laptop, with a live preview.
+"""드론 카메라의 MJPEG 스트림을 노트북에 녹화하고 실시간 미리보기를 띄운다.
 
-Run it in its own terminal next to ``drone_control.py``; it never touches
-the flight UDP link. Output goes to ``logs/``:
+``drone_control.py`` 옆의 별도 터미널에서 실행한다. 비행 UDP 링크는 건드리지
+않는다. 출력은 ``logs/``에 간다:
 
-  camera_<YYYY-MM-DD_HHMMSS>.mjpeg  the received JPEGs back to back (no re-encode)
-  camera_<YYYY-MM-DD_HHMMSS>.csv    one row per frame (see camera_stream.INDEX_FIELDS)
+  camera_<YYYY-MM-DD_HHMMSS>.mjpeg  받은 JPEG를 이어 붙인 것(재인코딩 없음)
+  camera_<YYYY-MM-DD_HHMMSS>.csv    프레임당 한 행(camera_stream.INDEX_FIELDS 참고)
 
-``ground/camera_mp4.py`` turns the pair into a flight-log-aligned CSV and an mp4.
-The stream comes from ``firmware/camera/esp32cam_stream``.
+``ground/camera_mp4.py``가 이 두 파일을 비행 로그에 맞춘 CSV와 mp4로 바꾼다.
+스트림은 ``firmware/camera/esp32cam_stream``이 보낸다.
 """
 
 from __future__ import annotations
@@ -42,15 +42,15 @@ READ_BYTES = 4096
 
 
 class OutputError(Exception):
-    """Writing the recording failed (disk full, permissions, name clash).
+    """녹화 파일 쓰기가 실패했다(디스크 가득 참, 권한, 이름 충돌).
 
-    Deliberately not an OSError: those mean "the link dropped, reconnect",
-    while this must stop the recorder and fail the run.
+    일부러 OSError가 아니다: OSError는 "링크가 끊겼으니 다시 연결"을 뜻하고,
+    이 예외는 녹화기를 멈추고 실행을 실패로 끝내야 한다.
     """
 
 
 class LatestFrame:
-    """Newest received JPEG, handed from the recorder thread to the preview."""
+    """가장 최근에 받은 JPEG. 녹화 스레드가 미리보기로 넘긴다."""
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -69,8 +69,8 @@ class LatestFrame:
 
 @dataclass
 class RecordState:
-    # Lives across reconnects so frame numbers stay continuous even when a
-    # connection ends in an exception.
+    # 재연결 사이에도 유지한다. 연결이 예외로 끝나도 프레임 번호가
+    # 이어지게 하기 위해서다.
     next_frame: int = 0
 
 
@@ -83,11 +83,11 @@ class OpenedStream:
 
 
 class ActiveConnection:
-    """The socket the recorder thread is reading, so another thread can wake it.
+    """녹화 스레드가 읽고 있는 소켓. 다른 스레드가 깨울 수 있게 둔다.
 
-    Only ``shutdown`` is called from outside: closing a response from another
-    thread does not wake a blocked ``read1()`` and can block on the same buffer
-    lock. The recorder thread closes its own connection in ``finally``.
+    밖에서는 ``shutdown``만 부른다: 다른 스레드에서 response를 닫으면 막혀 있는
+    ``read1()``이 깨지 않고 같은 버퍼 잠금에서 막힐 수 있다. 녹화 스레드는
+    자기 연결을 ``finally``에서 닫는다.
     """
 
     def __init__(self):
@@ -96,8 +96,8 @@ class ActiveConnection:
         self._interrupted = False
 
     def set(self, sock) -> None:
-        # A socket registered after interrupt() (stop arrived while connecting)
-        # is shut down at once, so its first read cannot block.
+        # interrupt() 뒤에 등록된 소켓(연결 중에 stop이 옴)은 바로 shutdown해서
+        # 첫 read가 막히지 않게 한다.
         with self._lock:
             self._sock = sock
             interrupted = self._interrupted
@@ -174,8 +174,8 @@ def record_chunks(
     now_mono=time.monotonic,
     csv_file: TextIO | None = None,
 ) -> None:
-    """Record parts from ``chunks``. At a clean end of stream the last held part
-    is written too; on an exception or stop the caller finishes the parser."""
+    """``chunks``에서 part를 녹화한다. 스트림이 정상으로 끝나면 남아 있던 마지막
+    part도 쓴다. 예외나 stop이면 호출한 쪽이 parser를 마무리한다."""
     for chunk in chunks:
         if stop.is_set():
             return
@@ -190,8 +190,8 @@ def record_chunks(
 
 
 def iter_response(resp: http.client.HTTPResponse) -> Iterator[bytes]:
-    # read1, not read(n): the camera uses chunked transfer, and when the link
-    # drops read(n) hides already-complete bytes inside IncompleteRead.partial.
+    # read(n)이 아니라 read1: 카메라는 chunked 전송을 쓰고, 링크가 끊기면
+    # read(n)은 이미 다 받은 바이트를 IncompleteRead.partial 안에 숨긴다.
     while True:
         try:
             data = resp.read1(READ_BYTES)
@@ -241,17 +241,17 @@ def record_loop(
     opener=open_stream,
     errors: list | None = None,
 ) -> None:
-    """Recorder thread body. This thread owns both output files.
+    """녹화 스레드 본체. 두 출력 파일은 이 스레드만 다룬다.
 
-    Output failures end the thread: they are appended to ``errors`` and
-    ``stop`` is set so the main thread exits and reports a failure.
+    출력이 실패하면 스레드를 끝낸다: 오류를 ``errors``에 넣고 ``stop``을 세워
+    메인 스레드가 빠져나가 실패를 보고하게 한다.
     """
     try:
         _record_loop(url, mjpeg_path, csv_path, latest, stop, active, timeout_s, retry_s, opener)
     except (OutputError, OSError) as error:
         message = str(error) if isinstance(error, OutputError) else f"cannot write the recording: {error}"
         _fail(message, errors, stop)
-    except Exception as error:  # a bug must not end the run looking like success
+    except Exception as error:  # 버그가 성공처럼 보이며 실행을 끝내면 안 된다
         _fail(f"recorder crashed: {type(error).__name__}: {error}", errors, stop)
 
 
@@ -265,7 +265,7 @@ def _fail(message: str, errors: list | None, stop: threading.Event) -> None:
 def _record_loop(url, mjpeg_path, csv_path, latest, stop, active, timeout_s, retry_s, opener) -> None:
     state = RecordState()
     segment = -1
-    # "x": never overwrite an existing recording
+    # "x": 기존 녹화를 절대 덮어쓰지 않는다
     with mjpeg_path.open("xb") as mjpeg_file, csv_path.open("x", newline="", encoding="utf-8") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=INDEX_FIELDS)
         writer.writeheader()
@@ -282,7 +282,7 @@ def _record_loop(url, mjpeg_path, csv_path, latest, stop, active, timeout_s, ret
             active.set(opened.sock)
             print(f"[CAM] connected (segment {segment})")
             try:
-                if stop.is_set():  # stop arrived while connecting: do not start reading
+                if stop.is_set():  # 연결 중에 stop이 옴: 읽기를 시작하지 않는다
                     continue
                 record_chunks(
                     opened.chunks, parser, mjpeg_file, writer, segment, state, latest, stop,
@@ -297,7 +297,7 @@ def _record_loop(url, mjpeg_path, csv_path, latest, stop, active, timeout_s, ret
                     opened.close()
                 except OSError:
                     pass
-            remaining, truncated = parser.finish()  # after an exception or stop
+            remaining, truncated = parser.finish()  # 예외나 stop 뒤
             write_parts(remaining, mjpeg_file, writer, segment, state, latest, csv_file)
             if truncated and not stop.is_set():
                 print("[WARN] dropped an incomplete frame at the end of the connection")
@@ -306,7 +306,7 @@ def _record_loop(url, mjpeg_path, csv_path, latest, stop, active, timeout_s, ret
 
 
 def preview_loop(latest: LatestFrame, stop: threading.Event) -> None:
-    """OpenCV preview. Runs on the main thread (Linux GUI backends want that)."""
+    """OpenCV 미리보기. 메인 스레드에서 돈다(Linux GUI backend가 그것을 요구한다)."""
     try:
         import cv2
         import numpy as np
@@ -396,7 +396,7 @@ def run(
 
 
 def _new_recording_paths(out_dir: Path, stamp: str) -> tuple[Path, Path]:
-    """camera_<stamp>.{mjpeg,csv}, or camera_<stamp>_<n> if either name is taken."""
+    """camera_<stamp>.{mjpeg,csv}. 둘 중 하나라도 이름이 있으면 camera_<stamp>_<n>."""
     base = f"camera_{stamp}"
     n = 1
     while True:

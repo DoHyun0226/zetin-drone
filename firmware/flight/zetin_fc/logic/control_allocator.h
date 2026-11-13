@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-// Hardware-independent motor allocation result. Motor order is FL, RR, FR, RL.
+// 하드웨어와 무관한 모터 배분 결과. 모터 순서는 FL, RR, FR, RL.
 struct ControlAllocation {
   int motor[4];
   float collective_us;
@@ -53,9 +53,9 @@ static inline ControlAllocation allocateControl(float roll, float pitch, float y
     if (legacyDiff[index] > legacyMax) legacyMax = legacyDiff[index];
   }
 
-  // Keep the exact legacy float composition and lroundf behavior whenever RP
-  // and the complete mix both fit. Saturated inputs continue to the priority
-  // solver below, which uses double intermediates to keep finite extremes safe.
+  // RP 와 전체 혼합이 모두 범위 안이면 예전과 똑같은 float 계산과 lroundf 동작을 유지한다.
+  // 포화된 입력은 아래 우선순위 풀이로 넘어가며, 그쪽은 유한한 극단값에서도 안전하도록
+  // double 중간값을 쓴다.
   const float rpFloatSpan = rpFloatMax - rpFloatMin;
   const float legacySpan = legacyMax - legacyMin;
   if (std::isfinite(rpFloatSpan) && std::isfinite(legacySpan) &&
@@ -104,8 +104,8 @@ static inline ControlAllocation allocateControl(float roll, float pitch, float y
   if (rpSpan > available && rpSpan > 0.0) rpScale = available / rpSpan;
   for (int index = 0; index < 4; ++index) rp[index] *= rpScale;
 
-  // λ is the largest yaw fraction for which every motor-pair span remains
-  // inside the residual range after roll/pitch has claimed its priority.
+  // λ 는 roll/pitch 가 먼저 몫을 가져간 뒤에도 모든 모터 쌍의 폭이 남은 범위 안에 머무는
+  // 가장 큰 yaw 비율이다.
   double yawScale = 1.0;
   for (int first = 0; first < 4; ++first) {
     for (int second = first + 1; second < 4; ++second) {

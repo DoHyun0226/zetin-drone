@@ -1,4 +1,4 @@
-"""Tests for the dashboard view model (snapshot -> styled screen lines)."""
+"""dashboard view model(snapshot -> 스타일을 입힌 화면 줄) 시험."""
 
 import sys
 import unittest
@@ -266,14 +266,14 @@ class RenderTest(unittest.TestCase):
         render(sn, 100, 30, NOW)
         self.assertEqual(before, repr(sn))
 
-    # --- final review: firmware armed state vs local control state ---
+    # --- 최종 검토: 펌웨어 armed 상태 대 로컬 조종 상태 ---
 
     MODES = ("pad", "keyboard", "listen")
     SAMPLES = (("75", sample75), ("91", sample91))
 
     @staticmethod
     def _local(mode, armed):
-        # --keyboard·--listen never arm locally; pad may be either.
+        # --keyboard·--listen 은 로컬에서 arm 하지 않는다. pad 는 둘 다 가능.
         if armed:
             return {"is_armed": True, "arm_state": "armed", "armed_since": NOW - 5.0}
         return {"is_armed": False, "arm_state": "idle", "armed_since": None}

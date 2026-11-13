@@ -1,4 +1,4 @@
-"""Formatting helpers for failsafe telemetry consumers."""
+"""failsafe 텔레메트리를 쓰는 쪽을 위한 서식 도우미."""
 
 import math
 
@@ -45,7 +45,7 @@ FAILSAFE_PROBE_STATE_NAMES = {
 
 
 def phase_number(value):
-    """Return an integer phase, or ``None`` for absent/malformed values."""
+    """정수 phase를 돌려준다. 값이 없거나 잘못되면 ``None``."""
 
     if value is None:
         return None
@@ -59,7 +59,7 @@ def phase_number(value):
 
 
 def format_failsafe_phase(value):
-    """Return a human-readable enum label while retaining the wire value."""
+    """사람이 읽는 enum 이름을 돌려준다. 전송 값도 함께 남긴다."""
 
     phase = phase_number(value)
     if phase is None:
@@ -68,7 +68,7 @@ def format_failsafe_phase(value):
 
 
 def format_failsafe_probe_state(value):
-    """Return a human-readable probe-state label while retaining the wire value."""
+    """사람이 읽는 probe 상태 이름을 돌려준다. 전송 값도 함께 남긴다."""
 
     state = phase_number(value)
     if state is None:
@@ -148,7 +148,7 @@ def _format_land_status(sample):
 
 
 def format_monitor_status(sample):
-    """Return status text and whether the monitor must use alert styling."""
+    """상태 문구와, 모니터가 경고 스타일을 써야 하는지를 돌려준다."""
 
     phase = phase_number(sample.get("Failsafe_Phase"))
     probe_state = phase_number(sample.get("Failsafe_Probe_State"))
@@ -166,7 +166,7 @@ def format_monitor_status(sample):
 
 
 def render_monitor_title(axis, system_summary, sample):
-    """Render the monitor title and apply an alert box for nonzero phases."""
+    """모니터 제목을 그리고, phase가 0이 아니면 경고 상자를 씌운다."""
 
     failsafe_text, alert = format_monitor_status(sample)
     title = axis.set_title(f"{system_summary}\n{failsafe_text}")

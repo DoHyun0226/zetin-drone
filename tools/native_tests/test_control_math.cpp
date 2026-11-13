@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "dual_imu_cascade_pwm.ino"
+#include "zetin_fc.ino"
 
 namespace {
 
@@ -140,6 +140,10 @@ void resetRcState() {
   lastRcMs = 6;
   arduino_fake::millis_value = 100;
   targetYawRate = 0.0f;
+  // zetin_fc 는 기체 트림(-2.2/-1.8°)을 기본값으로 갖고 RC 목표에 더한다.
+  // 이 시험들은 RC 파싱·시퀀스만 보므로 트림 없이 돈다.
+  trim_roll = 0.0f;
+  trim_pitch = 0.0f;
 }
 
 struct GainSlot {
@@ -420,10 +424,10 @@ int main() {
   runCase("mix: applied collective reports a lower-bound shift exactly", [] {
     MotorMix mix = mixAndDesaturate(-50, 50, 50, 1240, 1090, 1430);
 
-    // descent=1280us, dip=40us, attitude diff minimum=-150us. The probe-only
-    // widened lower bound preserves the full dip. Without that extra 40us of
-    // lower window this same reachable attitude state delivered 0us while
-    // scaled remained false.
+    // descent=1280us, dip=40us, 자세 diff 최솟값=-150us. 프로브 전용으로
+    // 넓힌 하한이 dip 전체를 지킨다. 하한 창을 40us 더 넓히지 않으면
+    // 도달 가능한 이 같은 자세 상태에서 dip 이 0us 로 나가면서도
+    // scaled 는 false 로 남았다.
     checkMotors(mix, 1090, 1290, 1290, 1290);
     CHECK_NEAR(mix.collective_us, 1240.0f, 1e-6f);
     CHECK_NEAR(1280.0f - mix.collective_us, 40.0f, 1e-6f);
@@ -1541,9 +1545,9 @@ int main() {
     Ki_Rate_Yaw = saved_ki_yaw;
     Kd_Rate_Yaw = saved_kd_yaw;
 
-    // diff minimum is exactly -150us. Without widening the probe-only lower
-    // window by 40us, the mixer silently shifted collective back to 1280us,
-    // delivered no dip, and still reported scaled=false.
+    // diff 최솟값은 정확히 -150us 다. 프로브 전용 하한 창을 40us 넓히지
+    // 않으면 믹서가 collective 를 조용히 1280us 로 되돌려
+    // dip 이 나가지 않았는데도 scaled=false 로 보고했다.
     CHECK_EQ((int)observed_probe_state, (int)FS_PROBE_DIP);
     CHECK_EQ(observed_base, descent_throttle - probe_dip_us);
     CHECK_EQ(
@@ -2001,7 +2005,7 @@ int main() {
   });
 
   runCase("mag enable refused while armed before init", [] {
-    safety_lock = false;  // armed
+    safety_lock = false;  // 시동 걸림
     mag_enabled = false;
     mag_ready = false;
     bmm.begin_result = 0;
@@ -2571,19 +2575,22 @@ int main() {
     limited.scaled = true;
     publishAllocationTelemetry(
         limited, 11.0f, 12.0f, 13.0f, 1.0f, 2.0f, 3.0f,
-        YAW_AUTH_LIMITED);
+        YAW_AUTH_LIMITED, 1205);
 
-    // Deliberately disagree with the published tick. Field 19 must come from
-    // the same protected record as fields 66 and 67, not this live global.
+    // 발행된 tick 과 일부러 다르게 둔다. 필드 19 는 이 live 전역 변수가 아니라
+    // 필드 66·67 과 같은 보호된 레코드에서 와야 한다.
     mixer_scaled = false;
     sendTelemetry();
 
     const std::vector<std::string> fields =
         splitCsv(wifi_udp_fake::telemetry_output);
-    CHECK_EQ(fields.size(), 75U);
+    // zetin_fc 는 97필드를 보낸다(75 + 광류 16 + 거리 기반 자동착륙 5 + 스위치).
+    CHECK_EQ(fields.size(), 97U);
     CHECK_EQ(fields[18], "1");
     CHECK_EQ(fields[65], "0.800");
     CHECK_EQ(fields[66], "0.400");
+    // 96번 Land_Req_US 는 68번과 같은 스냅숏에서 나온다.
+    CHECK_EQ(fields[95], "1205");
   });
 
   runCase("default allocation reset clears legacy and axis diagnostics", [] {
@@ -2595,9 +2602,9 @@ int main() {
     mixer_scaled = true;
     publishAllocationTelemetry(
         limited, 10.0f, 20.0f, 30.0f, 1.0f, 2.0f, 3.0f,
-        YAW_AUTH_LIMITED);
+        YAW_AUTH_LIMITED, 1195);
 
-    // The post-mix lock path relies only on this common reset helper.
+    // 믹스 뒤 잠금 경로는 이 공통 리셋 헬퍼에만 기댄다.
     resetAllocationTelemetry();
     const AllocationTelemetrySample sample =
         readAllocationTelemetrySnapshot();

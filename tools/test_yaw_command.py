@@ -8,11 +8,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_TEST_DIR = REPO_ROOT / "tools" / "native_tests"
-SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "dual_imu_cascade_pwm"
+SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 
 
 class YawCommandTest(unittest.TestCase):
-    """Compile and run the yaw-command unit test at -m32."""
+    """yaw-command 단위 시험을 -m32 로 컴파일해 실행한다."""
 
     def test_yaw_command(self):
         compiler = shutil.which("g++")
@@ -54,6 +54,7 @@ class YawCommandTest(unittest.TestCase):
                 compiler, "-std=c++17", "-O0", "-g", "-Wall", "-m32",
                 "-I", str(NATIVE_TEST_DIR / "shims"),
                 "-I", str(SKETCH_DIR),
+                "-I", str(SKETCH_DIR / "logic"),
                 "-x", "c++",
                 str(NATIVE_TEST_DIR / "test_yaw_command.cpp"),
                 "-o", str(executable),

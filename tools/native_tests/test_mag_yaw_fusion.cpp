@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "dual_imu_cascade_pwm.ino"
+#include "zetin_fc.ino"
 
 namespace {
 
@@ -137,6 +137,11 @@ void resetCommonFirmwareState(float roll_deg, float pitch_deg, float yaw_deg) {
   tgtRate[1] = 0.0f;
   tgtRate[2] = 0.0f;
   pidLoopHz = 0;
+  // zetin_fc 는 기체 트림(-2.2/-1.8°)과 광류 상태를 갖고 시작한다. 이 시험은 트림 없고
+  // 3901-L0X 없는 기체를 모델로 하므로 둘 다 깨끗하게 시작한다.
+  trim_roll = 0.0f;
+  trim_pitch = 0.0f;
+  resetFlowHoldForHarness();
   mag_comp_x = 0.0f;
   mag_comp_y = 0.0f;
   mag_comp_z = 0.0f;
@@ -186,7 +191,7 @@ void injectImu(float roll_deg, float pitch_deg, float body_gz_dps,
   event1.accel[1] = rawValue(body_ax / ACCEL_SCALE);
   event1.accel[2] = rawValue(body_az / ACCEL_SCALE);
 
-  // Keep the freeze monitor live without adding a mean gyro bias.
+  // 평균 자이로 바이어스를 더하지 않고 freeze 모니터를 살려 둔다.
   const int dither = (tick & 1U) ? -1 : 1;
   event1.gyro[0] = static_cast<int16_t>(dither);
   event1.accel[2] = static_cast<int16_t>(event1.accel[2] + 2 * dither);
@@ -255,8 +260,8 @@ BodyMag syntheticBodyMag(float roll_deg, float pitch_deg,
   const float sh = std::sin(heading);
   const float ch = std::cos(heading);
 
-  // Inverse of Rz(heading) * Ry(pitch) * Rx(roll), for a horizontal
-  // navigation-frame magnetic vector [1, 0, 0].
+  // Rz(heading) * Ry(pitch) * Rx(roll) 의 역변환. 항법 좌표계의
+  // 수평 자기 벡터 [1, 0, 0] 에 대한 것이다.
   return {
       cp * ch,
       sr * sp * ch - cr * sh,
@@ -413,7 +418,7 @@ int runFusionTests() {
     startMagCalibration();
 
     std::vector<std::string> fields = sendTelemetryFields();
-    CHECK(fields.size() == 75U);
+    CHECK(fields.size() == 97U);  // zetin_fc: 75 + 광류·자동착륙 22
     CHECK_NEAR(std::stof(fields.at(31)), 1.25f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(32)), -2.50f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(33)), 3.75f, 0.01f);
@@ -464,7 +469,7 @@ int runFusionTests() {
     stopMagCalibration();
 
     const std::vector<std::string> fields = sendTelemetryFields();
-    CHECK(fields.size() == 75U);
+    CHECK(fields.size() == 97U);  // zetin_fc: 75 + 광류·자동착륙 22
     CHECK_NEAR(std::stof(fields.at(31)), 1.25f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(32)), -2.50f, 0.01f);
     CHECK_NEAR(std::stof(fields.at(33)), 3.75f, 0.01f);

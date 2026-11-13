@@ -1,25 +1,23 @@
 # 펌웨어 수명주기 카탈로그
 
-이 표는 Git에서 추적하는 **29개 스케치**를 빠짐없이 연결한다: 주력 1개,
-보류 후보 1개, 진단 8개, 실험 2개(flow-hold 비행 스케치, 카메라 보드), 보관 17개다. `현행`은 유지되는
-경로를 뜻하며 모든 실기 검증이 끝났다는 표시는 아니다. CI는 주력·보류 후보·flow-hold 실험·진단을
-ESP32-S3로, 카메라 스케치를 ESP32-CAM(`esp32:esp32:esp32cam`)으로 컴파일하고,
-보관된 스케치는 원형 보존하며 빌드하지 않는다.
+이 표는 Git에서 추적하는 **29개 스케치**를 빠짐없이 연결한다: 비행 펌웨어 1개, 진단 8개,
+실험 1개(카메라 보드), 보관 19개다. `현행`은 유지되는 경로를 뜻하며 모든 실기 검증이 끝났다는
+표시는 아니다. CI는 비행 펌웨어와 진단을 ESP32-S3로, 카메라 스케치를 ESP32-CAM
+(`esp32:esp32:esp32cam`)으로 컴파일하고, 보관된 스케치는 원형 보존하며 빌드하지 않는다.
 의존성과 빌드 방법은 [펌웨어 안내](../firmware/README.md)를 따른다.
 모터 제어 스케치를 실행하기 전에는 프로펠러를 제거한다.
 
-주력 스케치는 단일 `.ino`가 아니라 같은 디렉터리의 헤더와 함께 빌드된다:
-`failsafe_land.h`(자동착륙 상태·호버 추정·프로브), `mag_yaw_fusion.h`(BMM350
-융합 수학), `yaw_command.h`(yaw 각속도 명령·heading 자동 잠금),
-`msp_sensor.h`(3901-L0X INAV MSPv2 파서). 이 헤더들은
-[`tools/native_tests/`](../tools/native_tests/)에서 호스트 단위검사와 SIL로
-검증한다. 호스트 SIL 결과는 실제 센서·PWM·비행 검증과 구분한다.
+비행 펌웨어 `zetin_fc` 는 `.ino` 하나가 아니라 `fc/`(펌웨어 모듈)와 `logic/`(순수 로직) 헤더로
+나뉜 단일 번역 단위다. `logic/` 헤더는 [`tools/native_tests/`](../tools/native_tests/)에서 호스트
+단위검사로, 스케치 전체는 SIL 과 차분 하네스로 검증한다. 파일 지도는
+[zetin_fc 안내](../firmware/flight/zetin_fc/README.md). 호스트 SIL 결과는 실제 센서·PWM·비행
+검증과 구분한다.
 
 | 수명주기 | 대상 MCU | 센서 | 모터 프로토콜 | 안전/빌드 메모 | 링크 |
 |---|---|---|---|---|---|
-| 현행·**주력** | ESP32-S3 | 듀얼 ICM42670 + BMM350 + 3901-L0X | PWM | 75필드 텔레메트리·RC 감시·자동착륙 상태기계 포함. BMM350 yaw 융합은 기본 OFF, 3901-L0X는 기록 전용. 실비행 기록과 자동착륙 한계는 아래 근거 참조 | [`dual_imu_cascade_pwm`](../firmware/flight/dual_imu_cascade_pwm/) |
-| 실험 | ESP32-S3 | 듀얼 ICM42670 + BMM350 + 3901-L0X | PWM | 주력 복사본 + 광류 보정·위치 유지·고도 유지 + 거리 기반 자동착륙(RC 상실 시 거리로 내려와 접촉 확인 뒤 컷, 거리 상실 시 시간 기반 폴백, [설계](superpowers/specs/2026-11-03-range-autoland-design.md), **기본 OFF — `rangeland 1` 로 시동 해제 때만 켬**). 97필드 텔레메트리. 호스트·SIL 검증, 위치 유지는 테더 비행 5회(2026-10-30, [기록](superpowers/plans/2026-10-29-flow-position-hold.md)), 고도 유지·거리 기반 자동착륙은 실기 미확인. 공유 헤더는 주력과 동일 강제 | [`dual_imu_cascade_flow_hold`](../firmware/flight/dual_imu_cascade_flow_hold/) |
-| **보류** | ESP32-S3 | 듀얼 ICM42670 | PWM | flix 기반 쿼터니언 후보. 컴파일 대상이지만 실기 검증 미완료. 22필드, `rcr`·`gains`·자동착륙 미지원, 게인 단위·yaw 부호 차이 → README 참조 | [`dual_imu_flix_quat_pwm`](../firmware/flight/dual_imu_flix_quat_pwm/) |
+| 현행·**비행** | ESP32-S3 | 듀얼 ICM42670 + BMM350 + 3901-L0X | PWM | 유일한 비행 펌웨어. 캐스케이드 PID·축 우선순위 배분·자기계 yaw 융합(기본 OFF) + 광류 보정·위치 유지·고도 유지 + RC 상실 자동착륙(시간 기반, 거리 기반은 **기본 OFF — `rangeland 1` 로 시동 해제 때만 켬**, [설계](superpowers/specs/2026-11-03-range-autoland-design.md)). 97필드 텔레메트리. 부팅 때 IMU 정지 보정 대신 NVS 저장값(`imucal`). 위치 유지는 테더 비행 5회(2026-10-30, [기록](superpowers/plans/2026-10-29-flow-position-hold.md)), 고도 유지·거리 기반 자동착륙은 실기 미확인 | [`zetin_fc`](../firmware/flight/zetin_fc/) |
+| 보관 | ESP32-S3 | 듀얼 ICM42670 + BMM350 + 3901-L0X | PWM | 2026-11-13 까지 주력. 75필드 텔레메트리·RC 감시·자동착륙 상태기계. 8월 1일·19일 비행 기록의 펌웨어. 기능은 `zetin_fc` 에 모두 있다 | [`dual_imu_cascade_pwm`](../firmware/archive/legacy_flight/dual_imu_cascade_pwm/) |
+| 보관 | ESP32-S3 | 듀얼 ICM42670 | PWM | flix 기반 쿼터니언 후보(2026-11-13 보관). 실기 검증 미완료. 22필드, `rcr`·`gains`·자동착륙 미지원, 게인 단위·yaw 부호 차이 → README 참조 | [`dual_imu_flix_quat_pwm`](../firmware/archive/legacy_flight/dual_imu_flix_quat_pwm/) |
 | 현행 | ESP32-S3 | 없음 | PWM | ESP32Servo 50Hz. **부팅 7초 후 네 모터 자동 램프(최대 1300µs), 시리얼 정지 명령 없음** | [`motor_pwm_bench`](../firmware/diagnostics/motor_pwm_bench/) |
 | 현행 | ESP32-S3 | 없음 | PWM | 수동 단일 모터 식별, 상한 1250µs, 자동 시작 없음. 벤치 Stage A. **비행 펌웨어와 같은 LEDC 400Hz** 사용. 이 기체에서 기록된 ESP32Servo 채널 묶임 문제를 피하는 경로 | [`motor_id_single`](../firmware/diagnostics/motor_id_single/) |
 | 현행 | ESP32-S3 | 없음 | PWM | ESC 설정용 LEDC 50Hz, 기본 GPIO7. **전류 제한 전원·ESC/모터 하나만 연결. `h`는 최대 2000µs를 계속 출력** | [`esc_config_throttle`](../firmware/diagnostics/esc_config_throttle/) |

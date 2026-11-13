@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-// Header placement keeps Arduino's generated .ino prototypes type-complete.
+// 헤더에 두어 Arduino 가 만드는 .ino 함수 원형의 타입이 완전하도록 한다.
 struct MagSnapshot {
   float x;
   float y;

@@ -2,6 +2,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,14 +11,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_TEST_DIR = REPO_ROOT / "tools" / "native_tests"
 SKETCH_DIR = (
-    REPO_ROOT / "firmware" / "flight" / "dual_imu_cascade_pwm"
+    REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 )
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from ground import firmware_source  # noqa: E402
 
 
 class NativeControlMathTest(unittest.TestCase):
-    """Compile the real cascade sketch with host shims and run the C++ control-math
-    assertions. unittest-style so it is collected by the repo's `unittest discover`
-    CI; skips (does not fail) when the g++/-m32 toolchain is unavailable."""
+    """실제 비행 펌웨어(`zetin_fc`)를 host shim 과 함께 컴파일해 C++ control-math
+    assertion 을 실행한다. 저장소의 `unittest discover` CI 가 수집하도록 unittest 형식으로
+    둔다. g++/-m32 툴체인이 없으면 실패하지 않고 skip 한다."""
 
     def test_native_control_math(self):
         compiler = shutil.which("g++")
@@ -56,6 +59,7 @@ class NativeControlMathTest(unittest.TestCase):
                 compiler, "-std=c++17", "-O0", "-g", "-m32",
                 "-I", str(NATIVE_TEST_DIR / "shims"),
                 "-I", str(SKETCH_DIR),
+                "-I", str(SKETCH_DIR / "logic"),
                 "-x", "c++", str(NATIVE_TEST_DIR / "test_control_math.cpp"),
                 "-o", str(executable),
             ]
@@ -85,8 +89,8 @@ class NativeControlMathTest(unittest.TestCase):
                     "native firmware logic tests timed out after 10 seconds\n"
                     f"stdout:\n{error.stdout or ''}\nstderr:\n{error.stderr or ''}"
                 )
-            # Some sandboxes block the 32-bit binary's syscalls with SIGSYS; retry
-            # under qemu-i386 when present, otherwise skip rather than false-fail.
+            # 일부 샌드박스는 32비트 바이너리의 syscall 을 SIGSYS 로 막는다. qemu-i386 이 있으면
+            # 그 위에서 다시 돌리고, 없으면 거짓 실패 대신 skip 한다.
             if completed.returncode == -signal.SIGSYS:
                 qemu_i386 = shutil.which("qemu-i386-static")
                 if qemu_i386 is None:
@@ -135,24 +139,22 @@ class NativeControlMathTest(unittest.TestCase):
                     f"stdout:\n{probe.stdout}\nstderr:\n{probe.stderr}"
                 )
 
-            mutated_sketch = tmp_path / "dual_imu_cascade_pwm"
+            mutated_sketch = tmp_path / "zetin_fc"
             shutil.copytree(SKETCH_DIR, mutated_sketch)
-            sketch_path = mutated_sketch / "dual_imu_cascade_pwm.ino"
-            source = sketch_path.read_text(encoding="utf-8")
-            source, replacements = re.subn(
+            sketch_path = mutated_sketch / "zetin_fc.ino"
+            # 상수는 스케치의 어느 파일에 있어도 된다. 정확히 한 번 나와야 한다.
+            firmware_source.subn_unique(
+                mutated_sketch,
                 r"(const int\s+FS_DESCENT_DELTA_US\s*=\s*)60;",
                 r"\g<1>150;",
-                source,
-                count=1,
             )
-            self.assertEqual(replacements, 1, "failed to create invalid delta fixture")
-            sketch_path.write_text(source, encoding="utf-8")
 
             object_path = tmp_path / "invalid_delta.o"
             compile_command = [
                 compiler, "-std=c++17", "-O0", "-g", "-m32",
                 "-I", str(NATIVE_TEST_DIR / "shims"),
                 "-I", str(mutated_sketch),
+                "-I", str(mutated_sketch / "logic"),
                 "-x", "c++", "-c", str(sketch_path), "-o", str(object_path),
             ]
             compiled = subprocess.run(

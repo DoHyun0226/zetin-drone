@@ -1,4 +1,4 @@
-"""Tests for scripts/ground/monitor_plot.py (the --listen --plot window)."""
+"""scripts/ground/monitor_plot.py(--listen --plot 창) 시험."""
 
 import contextlib
 import csv
@@ -80,8 +80,8 @@ class MonitorPlotTest(unittest.TestCase):
             self.assertEqual(monitor.bad_packet_count, 0)
             with open(Path(tmp) / "log.csv", encoding="utf-8") as f:
                 rows = list(csv.reader(f))
-            self.assertEqual(len(rows), 2)  # header + 1 sample
-            # connect keepalive goes out, and only connect
+            self.assertEqual(len(rows), 2)  # 헤더 + 샘플 1개
+            # connect keepalive 가 나가고, connect 만 나간다
             self.assertEqual([d for d, _ in sock.sent], [b"connect"])
 
     def test_update_counts_bad_packets_and_skips_gains(self):
@@ -94,8 +94,8 @@ class MonitorPlotTest(unittest.TestCase):
             self.assertEqual(monitor.packet_count, 1)
 
     def test_raw_imu_datagrams_are_skipped_not_counted_as_bad(self):
-        # 2026-11-03 bench: with the drone's raw IMU stream on, every ZIMU/ZCAL
-        # datagram printed "잘못된 텔레메트리" and was counted as a bad packet.
+        # 2026-11-03 벤치: 드론의 raw IMU 스트림을 켜면 ZIMU/ZCAL datagram 마다
+        # "잘못된 텔레메트리" 가 찍히고 bad packet 으로 집계됐다.
         packets = [b"ZIMU\x01\x00\x9f\xe0" + bytes(40), b"ZCAL\x01" + bytes(30), GOOD_PACKET]
         with tempfile.TemporaryDirectory() as tmp:
             monitor, _sock, _f = self._monitor(packets, tmp)
