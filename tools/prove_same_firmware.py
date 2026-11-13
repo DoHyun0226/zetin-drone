@@ -58,8 +58,9 @@ def export_baseline(rev, base_path, dest_parent, name):
 
 
 def build(sketch, build_dir, debug, jobs):
-    cmd = ["arduino-cli", "compile", "--fqbn", FQBN, "--build-path", str(build_dir),
-           "--jobs", str(jobs)]
+    cmd = ["arduino-cli", "compile", "--fqbn", FQBN, "--build-path", str(build_dir)]
+    if jobs:
+        cmd += ["--jobs", str(jobs)]
     if debug is not None:
         cmd += ["--build-property",
                 f"compiler.cpp.extra_flags=-DWIFI_LATENCY_DEBUG={debug}"]
@@ -93,8 +94,8 @@ def main():
     ap.add_argument("--sketch", required=True, help="working-tree sketch directory")
     ap.add_argument("--debug", nargs="*", default=["0", "1"],
                     help="WIFI_LATENCY_DEBUG values to build (default: 0 1)")
-    ap.add_argument("--jobs", type=int, default=2,
-                    help="parallel compile jobs (default 2, kept low for laptop battery)")
+    ap.add_argument("--jobs", type=int, default=0,
+                    help="parallel compile jobs (default: arduino-cli's own default)")
     ap.add_argument("--keep", type=Path,
                     help="keep sources and builds here; an existing baseline build "
                          "for the same revision is reused instead of rebuilt")
