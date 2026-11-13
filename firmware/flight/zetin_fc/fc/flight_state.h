@@ -1,4 +1,4 @@
-// zetin_fc/fc/state_attitude.h — 호버 추정, 목표·추정 자세, 자기계, 적분, fault, allocation 텔레메트리 상태.
+// zetin_fc/fc/flight_state.h — 호버 추정, 목표·추정 자세, 모터 출력, 적분, IMU 보정값, fault, RC 수신 카운터, allocation 텔레메트리.
 // zetin_fc.ino 가 정해진 순서로 한 번만 include 한다(단일 번역 단위). 앞 헤더들에 정의된
 // 것을 그대로 쓰므로 단독으로 include 하지 않는다. 순서와 모듈 지도는 zetin_fc/README.md.
 #pragma once
@@ -25,26 +25,6 @@ portMUX_TYPE imuSampleMux = portMUX_INITIALIZER_UNLOCKED;
 volatile int   motorOut[4] = {1000,1000,1000,1000};
 volatile float tgtRate[3]  = {0,0,0}; // roll,pitch,yaw dps
 volatile int   pidLoopHz   = 0;
-
-// Core 0 writer -> Core 1 reader. 짝수 seq만 완성된 벡터다.
-volatile bool  mag_enabled = false;
-volatile bool  mag_ready = false;
-volatile bool  mag_calibrating = false;
-volatile float magFieldX = 0.0f, magFieldY = 0.0f, magFieldZ = 0.0f;
-volatile float magHeading = 0.0f;
-volatile float magTelemX = 0.0f, magTelemY = 0.0f, magTelemZ = 0.0f;
-volatile bool magTelemCalActive = false;
-volatile uint32_t magSampleMs = 0;
-volatile bool magSampleValid = false;
-volatile bool mag_reference_pending = true;
-
-portMUX_TYPE magSnapshotMux = portMUX_INITIALIZER_UNLOCKED;
-float magYawReferenceOffset = 0.0f;
-
-float magCalMin[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
-float magCalMax[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
-uint32_t magCalSampleCount = 0;
-uint32_t lastMagReadMs = 0;
 
 float iTermRoll = 0.0f, iTermPitch = 0.0f, iTermYaw = 0.0f;  // 적분 기여 (모터 µs)
 

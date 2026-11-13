@@ -1,7 +1,89 @@
-// zetin_fc/fc/magnetometer.h — BMM350 초기화·보정·샘플링.
+// zetin_fc/fc/magnetometer.h — BMM350 자기계: 공유 상태, 샘플·텔레메트리 스냅숏과 기준 갱신 요청, 초기화·보정·샘플링.
 // zetin_fc.ino 가 정해진 순서로 한 번만 include 한다(단일 번역 단위). 앞 헤더들에 정의된
 // 것을 그대로 쓰므로 단독으로 include 하지 않는다. 순서와 모듈 지도는 zetin_fc/README.md.
 #pragma once
+// Core 0 writer -> Core 1 reader. 짝수 seq만 완성된 벡터다.
+volatile bool  mag_enabled = false;
+volatile bool  mag_ready = false;
+volatile bool  mag_calibrating = false;
+volatile float magFieldX = 0.0f, magFieldY = 0.0f, magFieldZ = 0.0f;
+volatile float magHeading = 0.0f;
+volatile float magTelemX = 0.0f, magTelemY = 0.0f, magTelemZ = 0.0f;
+volatile bool magTelemCalActive = false;
+volatile uint32_t magSampleMs = 0;
+volatile bool magSampleValid = false;
+volatile bool mag_reference_pending = true;
+
+portMUX_TYPE magSnapshotMux = portMUX_INITIALIZER_UNLOCKED;
+float magYawReferenceOffset = 0.0f;
+
+float magCalMin[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+float magCalMax[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+uint32_t magCalSampleCount = 0;
+uint32_t lastMagReadMs = 0;
+
+static inline void publishMagSample(
+    float x, float y, float z, uint32_t sample_ms) {
+  // I2C read happens before this lock. The critical section only publishes
+  // four words, so pid_task never waits on the blocking transaction.
+  portENTER_CRITICAL(&magSnapshotMux);
+  magFieldX = x;
+  magFieldY = y;
+  magFieldZ = z;
+  magSampleMs = sample_ms;
+  magSampleValid = true;
+  portEXIT_CRITICAL(&magSnapshotMux);
+}
+
+static inline bool readMagSnapshot(MagSnapshot &snapshot) {
+  portENTER_CRITICAL(&magSnapshotMux);
+  bool valid = magSampleValid;
+  snapshot.x = magFieldX;
+  snapshot.y = magFieldY;
+  snapshot.z = magFieldZ;
+  snapshot.sample_ms = magSampleMs;
+  portEXIT_CRITICAL(&magSnapshotMux);
+  return valid;
+}
+
+static inline void publishMagTelemetry(
+    float x, float y, float z, bool calibration_raw) {
+  portENTER_CRITICAL(&magSnapshotMux);
+  // Core 1 may already have entered its normal-domain block when Core 0
+  // starts calibration. Do not let that late writer overwrite a raw snapshot.
+  if (calibration_raw || !mag_calibrating) {
+    magTelemX = x;
+    magTelemY = y;
+    magTelemZ = z;
+    magTelemCalActive = calibration_raw;
+  }
+  portEXIT_CRITICAL(&magSnapshotMux);
+}
+
+static inline void readMagTelemetry(
+    float &x, float &y, float &z, bool &calibration_raw) {
+  portENTER_CRITICAL(&magSnapshotMux);
+  x = magTelemX;
+  y = magTelemY;
+  z = magTelemZ;
+  calibration_raw = magTelemCalActive;
+  portEXIT_CRITICAL(&magSnapshotMux);
+}
+
+static inline void requestMagReferenceUpdate() {
+  portENTER_CRITICAL(&magSnapshotMux);
+  mag_reference_pending = true;
+  portEXIT_CRITICAL(&magSnapshotMux);
+}
+
+static inline bool takeMagReferenceRequest() {
+  portENTER_CRITICAL(&magSnapshotMux);
+  const bool requested = mag_reference_pending;
+  mag_reference_pending = false;
+  portEXIT_CRITICAL(&magSnapshotMux);
+  return requested;
+}
+
 static bool initMagnetometer() {
   if (mag_ready) return true;
 

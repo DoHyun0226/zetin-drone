@@ -1,4 +1,4 @@
-// zetin_fc/fc/attitude_alpha.h — 7. 자세 추정용 적응 alpha, allocation 텔레메트리 게시.
+// zetin_fc/fc/control_support.h — 자세 추정 적응 alpha, 잠금 진입, allocation 텔레메트리 게시·읽기.
 // zetin_fc.ino 가 정해진 순서로 한 번만 include 한다(단일 번역 단위). 앞 헤더들에 정의된
 // 것을 그대로 쓰므로 단독으로 include 하지 않는다. 순서와 모듈 지도는 zetin_fc/README.md.
 #pragma once

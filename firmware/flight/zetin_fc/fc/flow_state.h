@@ -1,7 +1,17 @@
-// zetin_fc/fc/state_flow.h — 광류 위치·고도 유지 상태.
+// zetin_fc/fc/flow_state.h — 3901-L0X(MSP) 수신 상태, 광류 스냅숏, 위치·고도 유지·광류 보정·IMU 보정 요청, 광류 추정기 객체.
 // zetin_fc.ino 가 정해진 순서로 한 번만 include 한다(단일 번역 단위). 앞 헤더들에 정의된
 // 것을 그대로 쓰므로 단독으로 include 하지 않는다. 순서와 모듈 지도는 zetin_fc/README.md.
 #pragma once
+// 3901-L0X 상태. udp_task 만 쓰고 sendTelemetry 가 읽는다(같은 코어).
+MspSensorParser mspSensor;
+volatile int32_t msp_range_mm = 0;
+volatile int     msp_range_quality = -1;   // -1 = 신선한 프레임 없음
+volatile int32_t msp_flow_x = 0, msp_flow_y = 0;
+volatile int     msp_flow_quality = -1;
+uint32_t msp_last_range_ms = 0;
+uint32_t msp_last_flow_ms = 0;
+uint16_t msp_reported_unknown = 0;         // 같은 ID 를 반복해 찍지 않기 위해
+
 // ---- 광류 위치·고도 유지 ----
 FlowSensorSnapshot flowSensorSnapshot = {};
 portMUX_TYPE flowSensorMux = portMUX_INITIALIZER_UNLOCKED;
