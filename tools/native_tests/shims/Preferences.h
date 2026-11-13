@@ -12,6 +12,8 @@
 namespace preferences_fake {
 inline std::map<std::string, std::vector<uint8_t>> store;
 inline void reset() { store.clear(); }
+// 모든 putBytes 를 순서대로(차분 하네스): 키, 바이트. 기본 null.
+inline void (*on_put)(const std::string &, const std::vector<uint8_t> &) = nullptr;
 }  // namespace preferences_fake
 
 class Preferences {
@@ -39,6 +41,7 @@ public:
     if (!open_ || read_only_) return 0;
     const uint8_t *p = static_cast<const uint8_t *>(value);
     preferences_fake::store[full(key)] = std::vector<uint8_t>(p, p + len);
+    if (preferences_fake::on_put) preferences_fake::on_put(full(key), preferences_fake::store[full(key)]);
     return len;
   }
 

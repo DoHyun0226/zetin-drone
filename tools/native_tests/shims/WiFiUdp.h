@@ -16,6 +16,8 @@ inline std::string telemetry_output;
 inline std::string incoming_packet;
 inline IPAddress remote_ip;
 inline uint16_t remote_port = 0;
+// 보낸 데이터그램 전부를 순서대로(차분 하네스). 기본 null.
+inline void (*on_send)(const std::string &) = nullptr;
 
 inline void reset() {
   telemetry_output.clear();
@@ -53,6 +55,7 @@ public:
 
   int endPacket() {
     wifi_udp_fake::telemetry_output = outgoing_packet_;
+    if (wifi_udp_fake::on_send) wifi_udp_fake::on_send(outgoing_packet_);
     return 1;
   }
 
