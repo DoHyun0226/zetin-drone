@@ -610,7 +610,7 @@ static inline __attribute__((always_inline)) void udpCmdMag(char *buf) {
     } else if (mag_calibrating) {
       Serial.println(">>> Mag refused (magcal active)");
     } else if (!mag_ready && !safety_lock) {
-      // First-time init does blocking I2C/delay(100); only when disarmed.
+      // 첫 초기화는 막히는 I2C 와 delay(100) 을 쓴다. 시동 해제 때만 한다.
       Serial.println(">>> Mag refused (armed, not initialized)");
     } else if (initMagnetometer()) {
       requestMagReferenceUpdate();

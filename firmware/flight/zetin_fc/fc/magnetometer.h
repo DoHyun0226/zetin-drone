@@ -24,8 +24,8 @@ uint32_t lastMagReadMs = 0;
 
 static inline void publishMagSample(
     float x, float y, float z, uint32_t sample_ms) {
-  // I2C read happens before this lock. The critical section only publishes
-  // four words, so pid_task never waits on the blocking transaction.
+  // I2C 읽기는 이 잠금 전에 끝난다. 임계구역은 네 워드만 게시하므로 pid_task 가
+  // 막히는 I2C 전송을 기다리는 일은 없다.
   portENTER_CRITICAL(&magSnapshotMux);
   magFieldX = x;
   magFieldY = y;
@@ -49,8 +49,8 @@ static inline bool readMagSnapshot(MagSnapshot &snapshot) {
 static inline void publishMagTelemetry(
     float x, float y, float z, bool calibration_raw) {
   portENTER_CRITICAL(&magSnapshotMux);
-  // Core 1 may already have entered its normal-domain block when Core 0
-  // starts calibration. Do not let that late writer overwrite a raw snapshot.
+  // Core 0 이 보정을 시작할 때 Core 1 이 이미 보정값 영역 블록에 들어가 있을 수 있다.
+  // 그 늦은 쓰기가 raw 스냅숏을 덮어쓰지 못하게 한다.
   if (calibration_raw || !mag_calibrating) {
     magTelemX = x;
     magTelemY = y;
@@ -185,7 +185,7 @@ static void sampleMagnetometer(uint32_t now_ms) {
   if (!mag_ready || now_ms - lastMagReadMs < MAG_SAMPLE_PERIOD_MS) return;
   lastMagReadMs = now_ms;
 
-  // Blocking I2C read: caller is udp_task on core 0, never pid_task.
+  // 막히는 I2C 읽기다. 부르는 쪽은 Core 0 의 udp_task 이고 pid_task 는 부르지 않는다.
   sBmm350MagData_t data = bmm.getGeomagneticData();
   const float raw[3] = {data.float_x, data.float_y, data.float_z};
   if (!isfinite(raw[0]) || !isfinite(raw[1]) || !isfinite(raw[2])) return;

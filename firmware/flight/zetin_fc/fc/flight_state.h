@@ -36,8 +36,8 @@ float accel_scale2 = 1.0f;
 
 volatile uint32_t lastRcMs        = 0;
 volatile bool     fault_rc        = false;
-volatile bool     fault_imu1      = false;   // IMU1 freeze
-volatile bool     fault_imu2      = false;   // IMU2 freeze
+volatile bool     fault_imu1      = false;   // IMU1 값 멈춤(freeze)
+volatile bool     fault_imu2      = false;   // IMU2 값 멈춤(freeze)
 volatile bool     fault_disagree  = false;   // 두 IMU 불일치 (중재 불가)
 volatile bool     fault_attitude  = false;   // 과도 기울기
 volatile int      active_imus     = 2;       // 현재 사용 중인 IMU 수 (telemetry)

@@ -15,8 +15,8 @@ void stopMotors() {
   writeMotor(pinM3, 1000); writeMotor(pinM4, 1000);
 }
 
-// Pure allocator keeps this compatibility entrypoint for sketch callers and native
-// integration tests. It assigns roll/pitch first, then fits yaw in the residual span.
+// 순수 allocator 를 스케치와 native 통합 시험이 부르던 이름으로 그대로 부르는 입구다.
+// roll/pitch 를 먼저 배분하고, 남은 범위에 yaw 를 맞춘다.
 static MotorMix mixAndDesaturate(float roll, float pitch, float yaw,
                                  int throttle, int minMotor, int maxMotor) {
   return allocateControl(roll, pitch, yaw, throttle, minMotor, maxMotor);

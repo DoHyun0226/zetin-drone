@@ -108,7 +108,7 @@ const float YAW_RATE_DEADZONE   = 3.0f;    // 명령 각속도 절댓값이 이 
 const float YAW_HOLD_SETTLE_DPS = 10.0f;   // bodyGz 절댓값이 이 값 미만이면 새 잠금 진입 가능
 // 250Hz outer loop에서 K=0.001 -> tau ≈ 0.004/K = 4s.
 const float K_MAG = 0.001f;
-const uint32_t MAG_SAMPLE_PERIOD_MS = 20;    // BMM350 read = 50Hz, core 0 only
+const uint32_t MAG_SAMPLE_PERIOD_MS = 20;    // BMM350 읽기 50 Hz, Core 0 에서만
 const uint32_t MAG_STALE_MS = 100;
 
 // scripts/drone_logs.py magcal 출력값을 아래 두 상수에 붙여 넣는다.
@@ -300,7 +300,7 @@ const uint32_t IMU_CAL_MAX_TICKS   = 2 * BIAS_CALIB_SAMPLES; // 읽기 실패가
 const float    IMU_CAL_MAX_BIAS_DPS = 10.0f;   // NVS 값 타당성. 넘으면 버린다
 const uint32_t IMU_CAL_MAGIC       = 0x5A494331u;   // "ZIC1"
 
-const int OUTER_DIV = 4;                      // outer loop = 1kHz / 4 = 250Hz
+const int OUTER_DIV = 4;                      // 바깥 루프 = 1 kHz / 4 = 250 Hz
 
 // --- 필터/적분 상한 ---
 const float GYRO_SW_LPF_HZ = 80.0f;  // 하드웨어 LPF(121Hz)에 겹치는 소프트웨어 LPF

@@ -293,9 +293,9 @@ static inline __attribute__((always_inline)) PidTickFlow pidReadImus(PidLoopStat
     return PID_TICK_ENDED;
   }
 
-  // Roll/pitch gyro now matches the validated accel transform; the inverted
-  // signs caused estimator lag and rate-loop anti-damping.
-  // bodyGz stays unchanged pending separate bench yaw re-verification.
+  // roll/pitch 자이로는 검증한 가속도 변환과 부호를 맞췄다. 뒤집힌 부호가 추정 지연과
+  // 각속도 루프의 역감쇠를 일으켰었다.
+  // bodyGz 는 벤치에서 yaw 를 따로 다시 확인할 때까지 그대로 둔다.
   bodyGx =  fg[1];
   bodyGy = -fg[0];
   bodyGz = -fg[2];
@@ -367,8 +367,8 @@ static inline __attribute__((always_inline)) void pidEstimateAttitude(PidLoopSta
         magHeading = heading;
         const bool update_reference = takeMagReferenceRequest();
         if (update_reference) {
-          // Relative heading: enabling mag or resetting angleZ must not
-          // command a turn toward magnetic north.
+          // 상대 heading 이다. 자기계를 켜거나 angleZ 를 리셋해도 자북 쪽으로
+          // 도는 명령이 나가면 안 된다.
           magYawReferenceOffset = wrapDeg(angleZ - heading);
         }
         float referencedHeading =

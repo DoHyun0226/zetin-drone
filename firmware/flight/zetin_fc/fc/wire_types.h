@@ -48,8 +48,8 @@ struct __attribute__((packed)) ImuCalDatagram {
   float imu2_sign[3];
 };
 
-// Arduino's generated function prototypes are inserted before later global
-// declarations, so snapshot return types must be declared in this top block.
+// Arduino 는 .ino 함수의 원형을 뒤쪽 전역 선언보다 앞에 끼워 넣으므로, 스냅숏 반환 타입은
+// 이 앞 블록에 선언해야 했다(모듈로 나눈 뒤 .ino 에는 함수가 없지만 순서는 그대로 둔다).
 struct AllocationTelemetrySample {
   bool scaled;
   float rp_scale;
