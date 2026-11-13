@@ -1,10 +1,10 @@
-// dual_imu_cascade_flow_hold — dual_imu_cascade_pwm 의 복사본에 3901-L0X 광류
-// 보정·위치 유지·고도 유지를 더한 스케치다. 공유 헤더 6개는 기존 스케치와
-// 바이트 동일해야 한다(tools/test_flow_hold_sketch.py). 이 파일의 기존 부분을
-// 고칠 때는 dual_imu_cascade_pwm 에도 같은 수정이 필요한지 먼저 본다.
-// 설계: docs/superpowers/plans/2026-10-29-flow-position-hold.md
+// zetin_fc — ZETIN 드론의 유일한 비행 펌웨어(ESP32-S3, 듀얼 ICM42670, BMM350,
+// 3901-L0X, PWM ESC). 캐스케이드 PID 자세 제어에 3901-L0X 광류 보정·위치 유지·
+// 고도 유지를 더했다. 2026-11-13 옛 주력 dual_imu_cascade_pwm 의 기능을 모두
+// 포함하므로 그것은 firmware/archive/legacy_flight 로 보냈다.
+// 광류 설계: docs/superpowers/plans/2026-10-29-flow-position-hold.md
 // RC 상실 시 거리 기반 자동착륙(range_land.h): 거리가 신선하면 목표 고도를 낮추며
-// 위치 유지를 켠 채 내려오고, 접촉을 확인하면 컷한다. 거리를 못 믿으면 주력과 같은
+// 위치 유지를 켠 채 내려오고, 접촉을 확인하면 컷한다. 거리를 못 믿으면 기존과 같은
 // 시간 기반 하강으로 폴백한다. 설계: docs/superpowers/specs/2026-11-03-range-autoland-design.md
 // 실기 검증 전이라 기본 OFF 다(`rangeland 1`, 시동 해제 때만). OFF 면 RC 상실은 늘
 // 시간 기반 하강이다.
