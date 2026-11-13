@@ -10,11 +10,11 @@
 |---|---|---|
 | 전원·모터·부호 검증 | 0·준비 → Stage A → B → C → D | 프롭 OFF 관문 후 제한된 물리 검증 |
 | RC 단절·복구 검증 | [Stage E](#stage-e--자동착륙-현재-시간-기반-하강) | 현재 시간 기반 하강, 중단·resume·실제 접촉 시각 |
-| flow-hold 거리 기반 자동착륙 | [Stage F](#stage-f--flow-hold-스케치-거리-기반-자동착륙) | 거리 기반 하강·폴백·정체 컷, 프롭 제거 → 테더 |
+| 거리 기반 자동착륙(기본 OFF) | [Stage F](#stage-f--거리-기반-자동착륙-기본-off) | 거리 기반 하강·폴백·정체 컷, 프롭 제거 → 테더 |
 | 왜 착지 검출기를 쓰지 않는가 | [착지 감지 연구의 현재 상태](failsafe_land_research.md#현재-상태와-기록-해석) | 공중 컷 오라벨 철회, 지면 미검출 관측, 검증 공백 |
 | 이전 시험에서 무엇을 보았는가 | [과거 통과 기록](#과거-통과-기록-체크리스트) 및 날짜별 실측 기록 | 당시 펌웨어·기체·조건에 한정된 결과 |
 
-**주력 펌웨어의 현재 자동착륙은 `landed=false`, `FS_MAX_MS=3000`이다**(flow-hold 스케치는 Stage F). 프로브는 실제
+**비행 펌웨어(`zetin_fc`)의 기본 자동착륙은 `landed=false`, `FS_MAX_MS=3000`이다**(`rangeland 1` 로 켠 거리 기반 하강은 Stage F). 프로브는 실제
 스로틀 딥과 기록을 계속하지만 착지 컷을 결정하지 않는다. 정상 시간 종료는
 `Phase` 0→1→3이며, `Phase=2`는 현재 빌드에서 예상하지 않는다. 아래 날짜
 기록의 5초·`Phase=2` 성공·0.06 임계·2회 확정은 당시 설정이다.
@@ -190,8 +190,9 @@ PWM에서도 아밍되는지 먼저 확인(부팅 시 `stopMotors`로 정지 신
 
 ### B-1. 부팅/상태
 - 시리얼에 `[CALIB] OK`. 텔레메트리 흐름 정상, `Armed=0`.
-- `gains` 명령의 값을 주력 펌웨어 선언값과 비교한다. 현재
-  **Ki_Rate_Roll/Pitch = 0.0500**이며, 실행 중 덮어쓴 이득이 있으면 함께 기록한다.
+- `gains` 명령의 값을 비행 펌웨어 선언값([`fc/config.h`](../firmware/flight/zetin_fc/fc/config.h))과 비교한다.
+  현재 **Ki_Rate_Roll/Pitch = 0.2000**이며(2026-10-30 광류 튜닝에서 0.05 에서 올림), 실행 중 덮어쓴
+  이득이 있으면 함께 기록한다.
 
 ### B-2. 킬·페일세이프 경로 검증 (프롭 OFF)
 
@@ -355,8 +356,9 @@ Stage B에서 부호가 **숫자로** 확인됐으므로, 이제 프롭을 달�
 컷한다.** 그 전에 중단 조건이면 `Phase=4`, 명시적 `resume`이 수락되면
 `Phase=0`으로 복귀한다. `Phase=2`는 현재 코드에서 예상하지 않는다.
 
-코드 정본은 [주력 펌웨어](../firmware/flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)의
-`pid_task`·`resumeRefusalReason`과 [failsafe_land.h](../firmware/flight/dual_imu_cascade_pwm/failsafe_land.h)다.
+코드 정본은 비행 펌웨어의 [`pid_task`](../firmware/flight/zetin_fc/fc/pid_task.h)(`pidHoverAndFailsafe`),
+[`resumeRefusalReason`](../firmware/flight/zetin_fc/fc/safety_requests.h)과
+[failsafe_land.h](../firmware/flight/zetin_fc/logic/failsafe_land.h)다.
 상수 변경 이력은 아래 날짜 기록, 현재 프로토콜은 [udp_protocol.md](udp_protocol.md)를 본다.
 
 ### 관측 도구와 raw 기록
@@ -511,9 +513,9 @@ E-0~E-3의 프롭 OFF 검사와 선행 물리 검증을 마친 뒤, 제한된 �
 - [ ] E-4/5: 실제 접촉 시각 ___, 컷 시각 ___, 접지 전 컷 여부 ___,
       접촉 후 모터 지속 ___, 다음 조건은 검토 전
 
-## Stage F — flow-hold 스케치: 거리 기반 자동착륙
+## Stage F — 거리 기반 자동착륙 (기본 OFF)
 
-`dual_imu_cascade_flow_hold` 에만 있다. **기본은 꺼져 있다**(부팅 때 `RangeLand_On=0`, 저장 안 함).
+`zetin_fc` 의 기능이며 **기본은 꺼져 있다**(부팅 때 `RangeLand_On=0`, 저장 안 함).
 꺼져 있으면 RC 상실은 늘 Stage E 의 시간 기반 하강이다. Stage F 의 모든 단계는 **시동 해제 상태에서
 stdin `rangeland 1` 을 보내고 대시보드 위치 줄에 `RangeLand ON` 이 뜬 것을 본 뒤** 무장한다. 무장 중에는
 켜고 끄는 요청을 거부한다(`RangeLand` 표시가 바뀌지 않는다). 켠 상태에서 RC 가 끊기는 순간 거리 추정이 신선하고 **그 직전 0.5 s
@@ -521,7 +523,7 @@ stdin `rangeland 1` 을 보내고 대시보드 위치 줄에 `RangeLand ON` 이 
 하강(`Land_Mode=2`)이다. 패드를 분리하기 전 0.5 s 넘게 높이를 고정해 든다 — 들어 올리거나 내리는 중
 (0.6 m/s 넘게)이거나 센서 앞에 무언가 갑자기 들어왔으면 `Land_Mode=2` 가 정상이다.
 둘 다 `Phase=1` 이므로 모드는 대시보드 `Land` 줄(텔레메트리 92~96, [udp_protocol.md](udp_protocol.md))로
-본다. 상수·판정 규칙의 정본은 [range_land.h](../firmware/flight/dual_imu_cascade_flow_hold/range_land.h),
+본다. 상수·판정 규칙의 정본은 [range_land.h](../firmware/flight/zetin_fc/logic/range_land.h),
 설계는 [스펙](superpowers/specs/2026-11-03-range-autoland-design.md)이다.
 
 **센서를 손으로 가리지 않는다.** 가까운 손은 착지 대역(10~60 mm)으로 읽힌다. 지금

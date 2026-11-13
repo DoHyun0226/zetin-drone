@@ -10,24 +10,26 @@
 
 ## 지원 범위와 성숙도
 
-현행 하드웨어·제어 조합은 **ESP32-S3 + 듀얼 ICM42670 + PWM ESC**다.
+현행 하드웨어·제어 조합은 **ESP32-S3 + 듀얼 ICM42670 + BMM350 + 3901-L0X + PWM ESC**이고, 비행 펌웨어는
+[`zetin_fc`](../firmware/flight/zetin_fc/README.md) 하나다.
 
 | 기능 | 상태 | 시작점 |
 |---|---|---|
 | 4채널 ESC PWM | 벤치 검증됨 | [`motor_pwm_bench`](../firmware/diagnostics/motor_pwm_bench/) |
 | 단일·듀얼 ICM42670 raw 읽기 | 벤치 검증됨 | [`firmware/diagnostics/`](../firmware/diagnostics/) |
-| 듀얼 IMU 캐스케이드 제어 | **실비행 검증됨** (2026-08-01, 176초 무장·고장 0건) | [`dual_imu_cascade_pwm`](../firmware/archive/legacy_flight/dual_imu_cascade_pwm/) |
+| 듀얼 IMU 캐스케이드 제어 | **실비행 검증됨** (2026-08-01, 176초 무장·고장 0건, 옛 주력 `dual_imu_cascade_pwm`) | [`zetin_fc`](../firmware/flight/zetin_fc/) |
 | BMM350 yaw 융합 | 벤치 4단계 + 실비행 heading-hold 검증됨 | [`bmm350_yaw_bench_test.md`](bmm350_yaw_bench_test.md) |
 | RC 두절 자동착륙 | 실비행 4회 수행. 착지 감지는 **미해결**(시간 기반 하강) | [`failsafe_land_research.md`](failsafe_land_research.md) |
-| 3901-L0X 광류·거리계 | 텔레메트리 기록만. **제어에 쓰지 않음** | [`msp_sensor.h`](../firmware/archive/legacy_flight/dual_imu_cascade_pwm/msp_sensor.h) |
+| 3901-L0X 광류·거리계 | 광류 보정(`flowcal`)·위치 유지·고도 유지·거리 기반 자동착륙에 쓴다 | [`msp_sensor.h`](../firmware/flight/zetin_fc/logic/msp_sensor.h), [`flow_hold.h`](../firmware/flight/zetin_fc/logic/flow_hold.h) |
 | 테더 이륙·수동 호버·착륙 반복 | 별도 실험 구성에서 2026-08-19 5회 기록 | [현재 상태와 적용 범위](current_status.md) |
-| 자동 고도·위치 유지 | 미구현 | 거리·광류 피드백을 제어에 연결하지 않음 |
+| 자동 고도·위치 유지 | 위치 유지는 테더 비행 5회(2026-10-30, 튜닝 중), 고도 유지는 구현·SIL 만 | [광류 계획](superpowers/plans/2026-10-29-flow-position-hold.md) |
+| RC 두절 거리 기반 자동착륙 | 구현·SIL, **기본 OFF**(`rangeland 1`), 벤치·비행 미실시 | [설계](superpowers/specs/2026-11-03-range-autoland-design.md) |
 
 로그 한 번이 반복 가능한 비행을 보장하지 않는다. 2026-08-01 비행은 자세
 제어와 안전 경로가 공중에서 동작한다는 증거이지, 실내 자유 비행이 가능하다는
-뜻이 아니다. **고도와 위치를 측정하는 센서가 폐루프에 들어가 있지 않아, 조종
-스틱을 중립에 두면 기체는 계속 흘러간다**(2026-08-18~19 테더 시험 기록에서
-조종자가 호버 내내 역방향 조향을 했다고 설명했다). 보관 코드의 과거 성공 기록은 현행 지원
+뜻이 아니다. 8월 비행 때는 고도·위치를 재는 센서가 폐루프에 없어 조종 스틱을 중립에 두면
+기체가 흘러갔다(2026-08-18~19 테더 시험 기록에서 조종자가 호버 내내 역방향 조향을 했다고
+설명했다). 광류 위치 유지는 2026-10-30 테더 시험에서 제동 방향으로 동작함을 확인했고 튜닝 중이다. 보관 코드의 과거 성공 기록은 현행 지원
 근거로 사용하지 않는다.
 
 ## 저장소 구조
@@ -49,12 +51,12 @@ tools/                    repository and telemetry checks
 [`firmware/archive/platformio_skeleton/README.md`](../firmware/archive/platformio_skeleton/README.md)에서
 역사 자료로만 확인한다.
 
-## 현행 비행 제어 후보
+## 비행 펌웨어
 
-대표 소스는
-[`dual_imu_cascade_pwm.ino`](../firmware/archive/legacy_flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)다.
-ESP32-S3의 FreeRTOS 태스크에서 듀얼 IMU를 읽고, 자세 바깥 루프와 각속도
-안쪽 루프를 거쳐 4개 ESC PWM을 계산한다. 통신은 ESP32 SoftAP와 UDP
+소스는 [`zetin_fc`](../firmware/flight/zetin_fc/README.md)다. ESP32-S3의 FreeRTOS 태스크 두 개로
+돈다. Core 1 의 `pid_task`(1 kHz)가 듀얼 IMU를 읽고, 자세 바깥 루프와 각속도 안쪽 루프를 거쳐 4개
+ESC PWM을 계산한다. Core 0 의 `udp_task` 가 명령을 받고 텔레메트리를 보내며 3901-L0X·BMM350 을
+읽는다. 파일 구성은 그 안내의 파일 지도를 본다. 통신은 ESP32 SoftAP와 UDP
 4210을 쓴다. 자세한 문자열 명령과 필드 순서는
 [`udp_protocol.md`](udp_protocol.md)를 따른다.
 
@@ -162,14 +164,14 @@ yaw 권한 상태(66~75)가 붙는다. PC 수신기는 맨 앞에 수신
 
 ## 빌드와 실행
 
-저장소 루트에서 현행 비행 후보를 다음처럼 빌드한다. Arduino 빌드 파일은
+저장소 루트에서 비행 펌웨어를 다음처럼 빌드한다. Arduino 빌드 파일은
 저장소가 아닌 `/tmp`에 둔다.
 
 ```bash
 arduino-cli compile --warnings all \
   --fqbn esp32:esp32:esp32s3 \
   --build-path /tmp/zetin-flight-build \
-  firmware/archive/legacy_flight/dual_imu_cascade_pwm
+  firmware/flight/zetin_fc
 ```
 
 PC를 펌웨어의 `Drone_Tuning` SoftAP에 연결한 뒤 필요한 도구를 실행한다.
@@ -205,6 +207,6 @@ PC를 펌웨어의 `Drone_Tuning` SoftAP에 연결한 뒤 필요한 도구를 �
    두 IMU 부호를 확인한다.
 4. [`icm42670_dual_loop_debug`](../firmware/diagnostics/icm42670_dual_loop_debug/)로
    추정각·루프 주기를 확인한다. 이 진단은 PID·믹서가 없으므로 보정 방향은
-   주력 비행 펌웨어의 프롭 OFF 벤치 단계에서 확인한다.
+   비행 펌웨어의 프롭 OFF 벤치 단계에서 확인한다.
 5. 전원 극성, 비상 정지, RC timeout 자동착륙, 과도 기울기 정지를 확인한
    뒤에만 제한된 테스트 리그에서 비행 후보를 평가한다.

@@ -14,17 +14,16 @@
 ```
 
 펌웨어는 SSID `Drone_Tuning`으로 SoftAP를 운영한다. 주소와 포트는
-[`dual_imu_cascade_pwm.ino`](../firmware/archive/legacy_flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)에
-정의돼 있다.
+[`zetin_fc/fc/config.h`](../firmware/flight/zetin_fc/fc/config.h)에 정의돼 있다.
 RC 송신 목표는 `drone_control.py`의 20Hz, ASCII 텔레메트리는 약 20Hz,
 raw IMU 생산은 명목 1kHz다. 서로 다른 주기이므로 혼동하지 않는다.
 텔레메트리 수신과 `connect` 응답 목적지 등록은 시동·RC 수락 ACK가 아니다.
 펌웨어는 마지막 UDP 발신자의 IP/포트 하나로 회신하므로 제어·수신 도구를
 동시에 실행하지 않는다.
-보류 트랙인
+보관된 flix 후보
 [`dual_imu_flix_quat_pwm`](../firmware/archive/legacy_flight/dual_imu_flix_quat_pwm/)은 같은
 엔드포인트와 일부 `rc` 절대각 명령을 공유하지만 `rcr`은 지원하지 않는다.
-RC 두절 시 자동착륙 없이 즉시 컷하며 **주력 지상국으로 조종할 수 없다.**
+RC 두절 시 자동착륙 없이 즉시 컷하며 **현행 지상국으로 조종할 수 없다.**
 게인 명령의 단위가 SI(rad 기반)이고 yaw 각도 부호가 반대(CCW+)다.
 `gains`·`mag`·`magcal`을 구현하지 않고 텔레메트리도 `Armed`까지 22필드만
 보낸다. [해당 README](../firmware/archive/legacy_flight/dual_imu_flix_quat_pwm/README.md)를
@@ -54,7 +53,7 @@ mag <0|1>                # 자기계 yaw 드리프트 보정 ON/OFF (기본 OFF)
 magcal <0|1>             # raw 캡처 시작/종료. 시작은 시동 해제 상태에서만
 magc <x> <y> <z>         # 모터 전류 간섭 보정 계수(µT/µs) 3축. "0 0 0" = 보정 off
 raw <0|1>                # 1kHz dual-IMU 원시 배치 스트림 ON/OFF (기본 ON)
-rangeland <0|1>          # flow-hold 전용. 거리 기반 자동착륙 허용 (기본 0, 시동 해제 때만 적용)
+rangeland <0|1>          # 거리 기반 자동착륙 허용 (기본 0, 시동 해제 때만 적용)
 gains                    # 현재 PID 게인 12개를 1회 응답
 
 # 안쪽 각속도 PID 게인
@@ -364,11 +363,11 @@ yaw 권한 상태(66~75)를 순서대로 append한다.
 500ms 연속 회복 뒤 NORMAL로 돌아간다. yaw 스틱 입력, failsafe, 잠금 또는 새
 무장은 상태와 타이머를 초기화한다.
 
-### flow-hold 스케치 전용 필드 (76~97)
+### 광류·자동착륙 필드 (76~97)
 
 `firmware/flight/zetin_fc`는 75필드 뒤에 필드를 더 붙인다.
-주력 펌웨어 패킷은 75필드에서 끝나므로 지상국은 이 필드들을 `None`(CSV 빈 셀)으로
-둔다. 76~91(광류·위치 유지·고도 유지·보정 상태)의 이름과 해석은
+옛 주력(`dual_imu_cascade_pwm`, 2026-11-13 archive) 패킷은 75필드에서 끝나므로 지상국은 그 로그의
+이 필드들을 `None`(CSV 빈 셀)으로 둔다. 76~91(광류·위치 유지·고도 유지·보정 상태)의 이름과 해석은
 `scripts/ground/telemetry_schema.py` 모듈 설명이 정본이다.
 
 92~96은 거리 기반 자동착륙(`range_land.h`) 상태, 97은 그 스위치다. 거리 기반·시간 기반 하강 모두
@@ -398,8 +397,8 @@ failsafe 단계·프로브 상태가 tick 마다 같음을 확인했다.
 `Range_MM`은 모듈이 보낸 값 그대로다. **작동 범위가 80~2000mm 이고 그 밖이면
 음수**인데, iNav 구조체 주석이 `Negative value for out of range` 하나뿐이라
 **너무 가까울 때와 너무 멀 때가 같은 음수**다. 부호만으로 위/아래를 구분할 수
-없다. 주력 펌웨어에서 이 센서는 기록 전용이며 접지 판정을 수행하지 않는다(flow-hold
-스케치는 거리 기반 자동착륙에 쓴다 — 위 절). 향후 판별식을
+없다. `zetin_fc` 는 이 값을 높이 추정·고도 유지와 거리 기반 자동착륙(기본 OFF, 위 절)에
+쓴다. 시간 기반 자동착륙은 이 값으로 접지를 판정하지 않는다. 향후 판별식을
 설계하려면 직전 유효 거리·품질·신선도와 독립 접지 근거를 함께 검증해야 한다.
 
 `*_Quality`가 **−1이면 신선한 프레임이 없다**는 뜻이다(펌웨어
@@ -470,7 +469,7 @@ Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw
 
 `telemetry_schema.py`는 과거 패킷도 받아들인다. 아래 길이는 역사적 확장
 경계이며 허용 길이의 화이트리스트가 아니다. 실제 파서는 **10필드 이상**이면
-알고 있는 앞쪽 96필드(주력 75 + flow-hold 21)를 읽고 더 뒤의 미래 필드는 무시한다. 첫 10필드는
+알고 있는 앞쪽 97필드(옛 주력 75 + 광류·자동착륙 22)를 읽고 더 뒤의 미래 필드는 무시한다. 첫 10필드는
 빈 값 없이 유한수여야 하고 정수 필드는 정수값이어야 한다. 이후 빈 값·없는
 필드는 `None`으로 유지한다. 따라서 파싱 성공만으로 정확한 펌웨어 버전을
 식별할 수 없다.
@@ -491,10 +490,11 @@ Kd_Rate_Roll, Kd_Rate_Pitch, Kd_Rate_Yaw
 - 59필드 패킷은 `Mag_Enabled`에서 끝난다 (3901-L0X 텔레메트리 도입 이전 펌웨어).
 - 64필드 패킷은 `Flow_Quality`에서 끝난다 (`Mag_Cal_Active` 도입 이전 펌웨어).
 - 65필드 패킷은 `Mag_Cal_Active`에서 끝난다 (allocator 진단 도입 이전 펌웨어).
-- 91필드 패킷은 `FlowCal_Samples`에서 끝난다 (flow-hold, 거리 기반 자동착륙 도입 이전).
+- 91필드 패킷은 `FlowCal_Samples`에서 끝난다 (거리 기반 자동착륙 도입 이전).
+- 96필드 패킷은 `Land_Req_US`에서 끝난다 (`rangeland` 스위치 도입 이전).
 - 과거 패킷에 없는 값은 정규화된 CSV에서 빈 셀이 된다.
 - `Timestamp`는 드론이 보내지 않는다. 지상 도구가 CSV의 첫 열로 추가하므로
-  현행 CSV는 97개 열이 된다(주력 펌웨어 로그는 77~97열이 빈 셀).
+  현행 CSV는 98개 열이 된다(옛 주력 75필드 로그는 77~98열이 빈 셀).
 
 공유 구현은
 [`telemetry_schema.py`](../scripts/ground/telemetry_schema.py)에 있다.
