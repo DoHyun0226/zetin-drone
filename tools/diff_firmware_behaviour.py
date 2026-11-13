@@ -46,6 +46,8 @@ SENSITIVITY = [
     ("NVS key", 'prefs.putBytes("cal",', 'prefs.putBytes("caL",'),
     ("serial text", '">>> Trim R:%.2f P:%.2f\\n"', '">>> Trim R:%.2f  P:%.2f\\n"'),
     ("ZIMU header version", "IMU_RAW_VERSION = 2;", "IMU_RAW_VERSION = 3;"),
+    ("UDP destination", "laptopPort = udp.remotePort();", "laptopPort = udp.remotePort() + 1;"),
+    ("hover estimator", "HOVER_LPF_TAU_S        = 3.0f;", "HOVER_LPF_TAU_S        = 3.01f;"),
 ]
 
 
@@ -99,7 +101,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--base-rev", required=True)
     ap.add_argument("--base-path", required=True)
-    ap.add_argument("--sketch", required=True)
+    ap.add_argument("--sketch", required=True,
+                    help="후보 스케치 경로(작업 트리, 또는 --cand-rev 의 그 리비전 안 경로)")
+    ap.add_argument("--cand-rev", help="작업 트리 대신 이 리비전의 스케치를 후보로 쓴다")
     ap.add_argument("--sensitivity", action="store_true")
     ap.add_argument("--keep", type=Path, help="keep builds and logs here")
     args = ap.parse_args()
@@ -116,8 +120,12 @@ def main():
     failed = False
     try:
         base = export_baseline(args.base_rev, args.base_path, tmp, cand_src.name)
-        cand = tmp / "cand" / cand_src.name
-        shutil.copytree(cand_src, cand)
+        if args.cand_rev:
+            (tmp / "candrev").mkdir()
+            cand = export_baseline(args.cand_rev, args.sketch, tmp / "candrev", cand_src.name)
+        else:
+            cand = tmp / "cand" / cand_src.name
+            shutil.copytree(cand_src, cand)
         for debug in ("0", "1"):
             bins = {}
             for label, sketch in (("base", base), ("cand", cand)):

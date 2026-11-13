@@ -7,8 +7,11 @@
 //   delay·vTaskDelay·vTaskDelayUntil 안에서 기다렸다가 돌아오는 방식으로만 넘긴다
 //   (shim 의 lockstep 훅). 같은 시각이면 PID → UDP → LOOP 순서. 코드 실행에는 시간이
 //   걸리지 않는다. 예외(TaskDelayExit)는 시나리오가 끝날 때만, 각 스레드 안에서.
-// - 기록: PID tick 마다 상태 한 줄, 모든 ledcWrite, 모든 UDP 송신, 시리얼 출력, NVS 쓰기,
-//   끝 상태(raw 링, NVS 전체). float 은 비트(16진)로.
+// - 기록(모두 일어난 순서대로): 모든 ledcWrite, 모든 UDP 송신(목적지 포함), 시리얼 출력(쓴
+//   순간), NVS 쓰기, PID tick 마다 상태 두 줄(T: 출력·단계, X: 추정기·유지·착지 내부), 50 tick
+//   마다 보정 누산기(Y), 끝 상태(raw 링의 남은 샘플 바이트, NVS 전체). float 은 비트(16진)로.
+// - 플랜트는 PID 실행 횟수가 아니라 가상 경과 시간으로 1 ms 씩 진행한다. 시나리오가 PID 를
+//   늦게 깨워(지연 주입) 재동기화·짧은 catch-up tick 경로를 탄다.
 // - 도달 단정: 시나리오가 의도한 분기에 실제로 갔는지. 못 갔으면 종료 코드 3.
 //
 // 사용: diff_harness <scenario> <log>    (diff_harness --list 로 시나리오 목록)
@@ -69,14 +72,9 @@ void logLine(const char *kind, const std::string &text) {
   std::fprintf(g_log, "%s %" PRIu64 " %s\n", kind, g_now_us, text.c_str());
 }
 
-std::size_t g_serial_seen = 0;
-void flushSerial() {
-  const std::string &all = arduino_fake::serial_output;
-  if (all.size() > g_serial_seen) {
-    logLine("S", escape(all.substr(g_serial_seen)));
-    g_serial_seen = all.size();
-  }
-}
+uint64_t g_plant_us = 0;          // 플랜트가 진행된 가상 시각
+uint64_t g_pid_stall_us = 0;      // 다음 PID 깨움을 이만큼 늦춘다(한 번)
+uint64_t g_last_pid_us = 0;
 
 // ---------------- lockstep 스케줄러 ----------------
 enum Who { CTRL = 0, PID = 1, UDP = 2, LOOP = 3, NWHO = 4 };
@@ -125,13 +123,17 @@ void lsSleepUntilTick(TickType_t tick) {
   // 32비트 tick 을 지금 근처의 64비트 ms 로 펼친다.
   const uint64_t nowMs = g_now_us / 1000U;
   const int32_t delta = (int32_t)(tick - (TickType_t)nowMs);
-  const uint64_t targetUs = (uint64_t)((int64_t)nowMs + delta) * 1000U;
-  if (targetUs <= g_now_us) return;   // FreeRTOS: 이미 지난 시각이면 곧바로 돌아온다
+  uint64_t targetUs = (uint64_t)((int64_t)nowMs + delta) * 1000U;
   if (t_self == CTRL) {
-    setClock(targetUs);
+    if (targetUs > g_now_us) setClock(targetUs);
     return;
   }
-  g_task[t_self].wake_us = targetUs;
+  if (t_self == PID && g_pid_stall_us) {   // 지연 주입: 이번 깨움을 늦춘다
+    targetUs += g_pid_stall_us;
+    g_pid_stall_us = 0;
+  }
+  // 이미 지난 시각이면 기다리지 않지만 차례는 넘긴다(FreeRTOS 도 여기서 양보한다).
+  g_task[t_self].wake_us = targetUs > g_now_us ? targetUs : g_now_us;
   yieldToController();
 }
 
@@ -201,6 +203,9 @@ struct Scenario {
   inv_imu_sensor_event_t imu1_frozen = {}, imu2_frozen = {};
   int imu2_gyro_offset = 0;
   bool imu1_read_error = false;
+  bool imu_offsets = false;         // IMU 마다 다른 gyro bias·accel scale(원값)
+  uint32_t rc_off_at_tick = 0;      // 이 플랜트 tick 에 RC 를 끊는다(0 = 없음)
+  uint32_t resume_at_tick = 0;      // 이 플랜트 tick 에 resume 을 보낸다(0 = 없음)
   bool mag_inject = false;
   // 관찰
   uint32_t plant_tick = 0;
@@ -241,11 +246,60 @@ void recordTick(Scenario &sc) {
                 bits(iTermYaw), (int)yaw_authority_state, (int)active_imus, (int)fault_rc,
                 (int)fault_imu1, (int)fault_imu2, (int)fault_disagree, (int)fault_attitude);
   logLine("T", line);
-  (void)sc;
+  std::string x;
+  char b[96];
+  auto f = [&](const char *k, float v) { std::snprintf(b, sizeof b, " %s=%08x", k, bits(v)); x += b; };
+  auto i = [&](const char *k, long v) { std::snprintf(b, sizeof b, " %s=%ld", k, v); x += b; };
+  i("fz", (int)imu1_frozen_now * 4 + (int)imu2_frozen_now * 2 + (int)imu_disagree_now);
+  f("tax", targetAngleX); f("tay", targetAngleY); f("taz", targetAngleZ); f("tyr", targetYawRate);
+  f("tr0", tgtRate[0]); f("tr1", tgtRate[1]); f("tr2", tgtRate[2]);
+  f("gx", gyroX); f("gy", gyroY); f("gz", gyroZ); f("ax", accX); f("ay", accY); f("az", accZ);
+  i("msc", mixer_scaled); f("mys", mixer_yaw_scale); f("prc", pilotRollCmd); f("ppc", pilotPitchCmd);
+  i("rc", (long)lastRcMs); i("rcs", (long)lastRcSeq); i("rct", (long)rcTotalPkts); i("rcd", (long)rcDroppedPkts);
+  i("rlq", rl_requested_collective_us); f("rld", rl_delivered_collective_us); i("rlb", rl_base_ceiling);
+  i("rlc", rl_collective_cap); i("rlh", rl_resume_handover); f("rhb", rlHandoverBase); i("rhs", rlHandoverSet);
+  f("rlr", rl_h_ref); i("rlen", rangeland_enabled); i("phq", poshold_requested); i("ahq", althold_requested);
+  i("fse", (long)fs_first_enter_ms); i("fsv", fs_first_enter_valid); i("fcs", flowcal_state);
+  f("mh", magHeading); f("myo", magYawReferenceOffset); i("me", mag_enabled);
+  f("ht", hoverTracker.estimate_us); i("hti", hoverTracker.initialized * 2 + hoverTracker.timing_initialized);
+  i("htu", (long)hoverTracker.last_update_ms); i("hte", (long)hoverTracker.eligible_ms);
+  i("hv", heightEst.valid); f("hd", heightEst.d_m); f("hh", heightEst.h_m); f("hvz", heightEst.vz_ms);
+  i("ht_us", (long)heightEst.last_t_us);
+  i("ps", posHold.state * 4 + posHold.started * 2 + posHold.prev_enabled);
+  f("pp0", posHold.p[0]); f("pp1", posHold.p[1]); f("pr0", posHold.p_ref[0]); f("pr1", posHold.p_ref[1]);
+  f("pi0", posHold.i[0]); f("pi1", posHold.i[1]); f("po0", posHold.out[0]); f("po1", posHold.out[1]);
+  f("pyr", posHold.yaw_ref_deg); f("psm", posHold.since_meas_s);
+  i("as", altHold.state); i("art", altHold.ref_throttle); f("ahr", altHold.h_ref); f("ai", altHold.i);
+  f("ao", altHold.out); i("ras", rlAltHold.state); f("rai", rlAltHold.i); f("rao", rlAltHold.out);
+  i("rls", rangeLand.stage); f("rlhr", rangeLand.h_ref); i("rlrm", rangeLand.ref_mm);
+  i("rlan", rangeLand.anchor_mm); i("rlrj", rangeLand.rejecting); i("rlrc", rangeLand.reject_count);
+  f("rldu", rangeLand.drop_us); f("rlhs", rangeLand.hold_scale);
+  i("tk", rlPreTrack.have); i("tkr", rlPreTrack.ref_mm); i("tka", rlPreTrack.anchor_mm);
+  i("tkj", rlPreTrack.rejecting); i("tks", (long)rlPreTrack.stable_since_ms);
+  i("fa", flowAccel.valid); f("fax", flowAccel.ax_ms2); f("fay", flowAccel.ay_ms2); i("fau", flowAccelUsable);
+  i("fo", flowOdomState.have_prev); i("fseq", (long)flowSeqSeen); i("rseq", (long)rangeSeqSeen);
+  logLine("X", x.substr(1));
+  if (sc.plant_tick % 50 == 0) {
+    std::string y;
+    auto d = [&](double v) { uint64_t u; std::memcpy(&u, &v, 8); std::snprintf(b, sizeof b, " %016llx", (unsigned long long)u); y += b; };
+    std::snprintf(b, sizeof b, "ic=%d,%u,%u", (int)imuCalAcc.active, (unsigned)imuCalAcc.n, (unsigned)imuCalAcc.ticks); y += b;
+    for (int k = 0; k < 3; k++) { d(imuCalAcc.sum1[k]); d(imuCalAcc.sq1[k]); d(imuCalAcc.sum2[k]); d(imuCalAcc.sq2[k]); }
+    d(imuCalAcc.amag1); d(imuCalAcc.amag2);
+    for (int c = 0; c < FLOW_CAL_DELAY_CANDIDATES; c++) {
+      const FlowCalAccum &a = flowCalibrator.acc[c];
+      std::snprintf(b, sizeof b, " fc%d=%u", c, (unsigned)a.n); y += b;
+      d(a.sgg_xx); d(a.sgg_xy); d(a.sgg_yy); d(a.sfg[0][0]); d(a.sfg[0][1]); d(a.sfg[1][0]);
+      d(a.sfg[1][1]); d(a.sff[0]); d(a.sff[1]);
+    }
+    x.clear();   // f() 는 x 에 덧붙인다. 여기부터는 Y 줄용.
+    for (int k = 0; k < 3; k++) { f("gb1", gyro_bias1[k]); f("gb2", gyro_bias2[k]); }
+    f("as1", accel_scale1); f("as2", accel_scale2);
+    logLine("Y", y + x);
+  }
 }
 
-// PID 가 돌기 직전: 플랜트를 지금 시각까지 진행하고 센서 입력을 만든다.
-void plantStep(Scenario &sc) {
+// 플랜트 1 ms 한 걸음: 적분, 센서 모델, IMU 입력과 고장 주입.
+void plantStepOnce(Scenario &sc) {
   const uint32_t tick = sc.plant_tick++;
   std::array<double, 3> acc = {0, 0, 0};   // 정지(손에 든 상태): 1 g 로 읽힌다
   if (sc.kinematic) {
@@ -261,6 +315,15 @@ void plantStep(Scenario &sc) {
   if (sc.imu2_freeze) IMU2.next_event = sc.imu2_frozen;
   else sc.imu2_frozen = IMU2.next_event;
   IMU2.next_event.gyro[0] = (int16_t)(IMU2.next_event.gyro[0] + sc.imu2_gyro_offset);
+  if (sc.imu_offsets) {   // IMU 마다 다른 원값 bias·scale(보정이 센서별로 적용되는지 본다)
+    const int16_t o1[3] = {30, -20, 12}, o2[3] = {-16, 26, -6};
+    for (int k = 0; k < 3; k++) {
+      IMU1.next_event.gyro[k] = (int16_t)(IMU1.next_event.gyro[k] + o1[k]);
+      IMU2.next_event.gyro[k] = (int16_t)(IMU2.next_event.gyro[k] + o2[k]);
+      IMU1.next_event.accel[k] = (int16_t)lround(IMU1.next_event.accel[k] * 1.03);
+      IMU2.next_event.accel[k] = (int16_t)lround(IMU2.next_event.accel[k] * 0.96);
+    }
+  }
   IMU1.read_status = sc.imu1_read_error ? -1 : 0;
   IMU1.keep_event_on_error = true;
   if (sc.mag_inject) {
@@ -270,6 +333,14 @@ void plantStep(Scenario &sc) {
     bmm.next_data.float_x = (float)(MAG_HARD_IRON[0] + fieldN * c);
     bmm.next_data.float_y = (float)(MAG_HARD_IRON[1] - fieldN * sn);
     bmm.next_data.float_z = (float)(MAG_HARD_IRON[2] + fieldD);
+  }
+}
+
+// PID 가 돌기 직전: 플랜트를 지금 가상 시각까지 1 ms 씩 진행한다.
+void plantAdvance(Scenario &sc) {
+  while (g_plant_us + 1000U <= g_now_us) {
+    plantStepOnce(sc);
+    g_plant_us += 1000U;
   }
 }
 
@@ -284,8 +355,11 @@ int run(Scenario &sc, const char *logPath) {
     std::snprintf(b, sizeof b, "%d %u", pin, (unsigned)duty);
     logLine("L", b);
   };
+  arduino_fake::on_serial = [](const std::string &t) { logLine("S", escape(t)); };
   wifi_udp_fake::on_send = [](const std::string &p) {
-    logLine("U", escape(p));
+    std::ostringstream dest;
+    dest << wifi_udp_fake::last_dest_ip << ':' << wifi_udp_fake::last_dest_port << ' ';
+    logLine("U", dest.str() + escape(p));
     g_udp_text += p;
     g_udp_text += '\n';
   };
@@ -301,7 +375,6 @@ int run(Scenario &sc, const char *logPath) {
 
   setClock(sc.start_us);
   setup();
-  flushSerial();
   // 하네스 기체는 이상적인 IMU 와 트림 없는 기체다(SIL 과 같다). 같은 조정을 양쪽에 한다.
   for (int k = 0; k < 3; k++) { gyro_bias1[k] = gyro_bias2[k] = 0.0f; }
   accel_scale1 = accel_scale2 = 1.0f;
@@ -309,6 +382,8 @@ int run(Scenario &sc, const char *logPath) {
   setTrueFlowCalibration();
 
   const uint64_t t0 = g_now_us;
+  g_plant_us = t0;
+  g_last_pid_us = t0;
   const uint64_t end = t0 + 1000ULL * sc.duration_ms;
   g_task[LOOP].exists = true;
   for (int w = PID; w < NWHO; w++) {
@@ -345,7 +420,11 @@ int run(Scenario &sc, const char *logPath) {
     }
     if (who == PID) {
       if (sc.held && !safety_lock) sc.held = false;   // 시동이 걸리면 손을 놓는다
-      plantStep(sc);
+      plantAdvance(sc);
+      const uint64_t gap = g_now_us - g_last_pid_us;
+      if (gap > 10000U) sc.mark("pid_gap_long");
+      if (gap > 0 && gap < 200U) sc.mark("pid_gap_short");
+      g_last_pid_us = g_now_us;
     }
     if (who == UDP && wifi_udp_fake::incoming_packet.empty() && !sc.inbox.empty()) {
       wifi_udp_fake::incoming_packet = sc.inbox.front();
@@ -353,7 +432,6 @@ int run(Scenario &sc, const char *logPath) {
       sc.inbox.pop_front();
     }
     grant(who);
-    flushSerial();
     if (who == PID) {
       recordTick(sc);
       if (sc.per_tick) sc.per_tick(sc);
@@ -368,12 +446,20 @@ int run(Scenario &sc, const char *logPath) {
     if (!g_task[w].done) grant(w);
     g_task[w].th.join();
   }
-  flushSerial();
   char b[160];
-  std::snprintf(b, sizeof b, "raw head=%u tail=%u dropped=%u seq=%u",
+  std::snprintf(b, sizeof b, "raw head=%u tail=%u dropped=%u seq=%u first=%u",
                 (unsigned)imuRawRing.head, (unsigned)imuRawRing.tail,
-                (unsigned)imuRawRing.dropped, (unsigned)rawBatchSeq);
+                (unsigned)imuRawRing.dropped, (unsigned)rawBatchSeq,
+                (unsigned)imuRawRing.first_t_us);
   logLine("E", b);
+  for (uint32_t k = imuRawRing.tail; k != imuRawRing.head; k++) {   // 보내지 못한 샘플 내용
+    const ImuRawSample &smp = imuRawRing.samples[k & IMU_RAW_RING_MASK];
+    const uint8_t *raw = reinterpret_cast<const uint8_t *>(&smp);
+    std::string hex;
+    char h[4];
+    for (size_t j = 0; j < sizeof smp; j++) { std::snprintf(h, sizeof h, "%02x", raw[j]); hex += h; }
+    logLine("E", "rawpending " + hex);
+  }
   for (const auto &kv : preferences_fake::store) {
     std::string hex;
     char h[4];
@@ -402,6 +488,14 @@ void flyUp(Scenario &sc, bool holds, uint32_t at_ms = 200) {
   }
 }
 
+// PID 의 다음 깨움을 늦춘다: 15 ms(재동기화·rawDt > 10 ms), 1.95 ms(곧바로 다음 tick →
+// realDt < 0.2 ms 치환), 1.6 ms(짧은 tick).
+void stalls(Scenario &sc, uint32_t at_ms) {
+  sc.at(at_ms, [](Scenario &) { g_pid_stall_us = 15000; });
+  sc.at(at_ms + 300, [](Scenario &) { g_pid_stall_us = 1950; });
+  sc.at(at_ms + 600, [](Scenario &) { g_pid_stall_us = 1600; });
+}
+
 void observeCommon(Scenario &sc) {
   if (fs_phase == FS_DESCENDING) sc.mark("descending");
   if (fs_phase == FS_CUT_TIMEOUT) sc.mark("cut_timeout");
@@ -418,6 +512,11 @@ void observeCommon(Scenario &sc) {
   if (fault_attitude) sc.mark("overtilt");
   if (rl_stage >= RL_STAGE_NEAR_GROUND) sc.mark("near_ground");
   if (mag_enabled && !safety_lock) sc.mark("mag_fusing_armed");
+  if (rl_resume_handover) sc.mark("handover");
+  if (sc.saw("handover") && fs_phase == FS_DESCENDING && !rl_resume_handover) sc.mark("after_handover_descending");
+  if (sc.saw("near_ground") && fs_phase == FS_DESCENDING && rl_mode == RL_MODE_RANGE &&
+      rl_stage < RL_STAGE_NEAR_GROUND) sc.mark("revoked");
+  if (sc.saw("no_imu") && !safety_lock) sc.mark("rearmed_after_imu_loss");
 }
 
 std::string need(const Scenario &sc, std::initializer_list<const char *> keys) {
@@ -462,11 +561,91 @@ std::map<std::string, std::function<void(Scenario &)>> scenarios() {
   m["hold_rcloss_timed"] = [](Scenario &sc) {
     sc.s.h = 1.0;
     flyUp(sc, true);
+    stalls(sc, 3000);
     sc.at(6500, [](Scenario &s) { s.rc_on = false; });
+    stalls(sc, 7200);
     sc.duration_ms = 11000;
     sc.reach = [](Scenario &s) {
-      return need(s, {"armed", "hover_valid", "descending", "timed_descent", "cut_timeout"});
+      return need(s, {"armed", "hover_valid", "descending", "timed_descent", "cut_timeout",
+                      "pid_gap_long", "pid_gap_short"});
     };
+  };
+
+  m["no_hover_cut"] = [](Scenario &sc) {
+    sc.s.h = 0.5;
+    flyUp(sc, false);
+    sc.at(1200, [](Scenario &s) { s.rc_on = false; });   // 호버 추정이 유효해지기 전
+    sc.duration_ms = 3000;
+    sc.reach = [](Scenario &s) { return needSerial(s, {"CUT (NO HOVER EST)"}); };
+  };
+
+  m["ground_cut"] = [](Scenario &sc) {
+    sc.s.h = 0.5;
+    flyUp(sc, false);
+    sc.send(4000, "th 1120");                            // 호버 유효 뒤 지상 스로틀
+    sc.at(5500, [](Scenario &s) { s.rc_on = false; });
+    sc.duration_ms = 7000;
+    sc.reach = [](Scenario &s) {
+      return join(need(s, {"hover_valid"}), needSerial(s, {"GROUND CUT"}));
+    };
+  };
+
+  m["range_resume_handover"] = [](Scenario &sc) {
+    sc.s.h = 1.5;
+    landSensor(sc);
+    sc.send(150, "rangeland 1");
+    flyUp(sc, true);
+    sc.at(6500, [](Scenario &s) { s.rc_on = false; });
+    // 바닥 근접(기준 스로틀이 호버보다 내려간 뒤)에서 링크를 살리고 resume 한다. 인계는
+    // 그 collective 에서 호버까지 천천히 오르며, 그 도중에 다시 끊긴다.
+    sc.per_tick = [](Scenario &s) {
+      observeCommon(s);
+      if (s.saw("near_ground") && !s.saw("rc_back")) {
+        s.mark("rc_back");
+        s.rc_on = true;
+        s.resume_at_tick = s.plant_tick + 100;   // RC 패킷이 몇 개 들어온 뒤
+      }
+      if (s.resume_at_tick && s.plant_tick >= s.resume_at_tick) {
+        s.resume_at_tick = 0;
+        s.inbox.push_back("resume");
+      }
+      if (s.saw("handover") && !s.saw("reloss_sent")) {
+        s.mark("reloss_sent");
+        s.rc_off_at_tick = s.plant_tick + 150;
+      }
+      if (s.rc_off_at_tick && s.plant_tick >= s.rc_off_at_tick) {
+        s.rc_on = false;
+        s.rc_off_at_tick = 0;
+      }
+    };
+    sc.duration_ms = 24000;
+    sc.reach = [](Scenario &s) {
+      return join(need(s, {"range_descent", "handover", "after_handover_descending"}),
+                  needSerial(s, {">>> RESUME"}));
+    };
+  };
+
+  m["rangeland_near_ground_revoke"] = [](Scenario &sc) {
+    sc.s.h = 0.8;
+    landSensor(sc);
+    sc.send(150, "rangeland 1");
+    flyUp(sc, true);
+    sc.at(6500, [](Scenario &s) { s.rc_on = false; });
+    // 바닥 근접에 들어가면 0.8 s 동안 위로 밀어 올린다 → 단계 철회.
+    sc.per_tick = [](Scenario &s) {
+      observeCommon(s);
+      if (s.saw("near_ground") && !s.disturbance) {
+        const uint32_t from = s.plant_tick;
+        const double up = s.P.mass * kG * 0.6;
+        s.disturbance = [from, up](uint32_t tick) {
+          Disturbance d;
+          if (tick >= from && tick < from + 800) d.force_up = up;
+          return d;
+        };
+      }
+    };
+    sc.duration_ms = 22000;
+    sc.reach = [](Scenario &s) { return need(s, {"range_descent", "near_ground", "revoked"}); };
   };
 
   m["manual_rcloss"] = [](Scenario &sc) {
@@ -514,6 +693,7 @@ std::map<std::string, std::function<void(Scenario &)>> scenarios() {
     sc.send(150, "rangeland 1");
     flyUp(sc, true);
     sc.at(6500, [](Scenario &s) { s.rc_on = false; });
+    stalls(sc, 7500);
     sc.duration_ms = 20000;
     sc.reach = [](Scenario &s) { return need(s, {"range_descent", "near_ground", "cut_landed"}); };
   };
@@ -580,8 +760,12 @@ std::map<std::string, std::function<void(Scenario &)>> scenarios() {
     flyUp(sc, true);
     sc.at(4000, [](Scenario &s) { s.imu1_freeze = true; });
     sc.at(6000, [](Scenario &s) { s.imu2_freeze = true; });
-    sc.duration_ms = 8000;
-    sc.reach = [](Scenario &s) { return need(s, {"one_imu", "no_imu"}); };
+    sc.at(7000, [](Scenario &s) { s.imu1_freeze = false; s.imu2_freeze = false; });
+    sc.send(7200, "stop");
+    sc.send(7500, "start");
+    sc.send(7600, "th 1340");
+    sc.duration_ms = 9500;
+    sc.reach = [](Scenario &s) { return need(s, {"one_imu", "no_imu", "rearmed_after_imu_loss"}); };
   };
 
   m["imu_disagree"] = [](Scenario &sc) {
@@ -625,6 +809,10 @@ std::map<std::string, std::function<void(Scenario &)>> scenarios() {
     sc.send(140, "trim 1.5 -2.25");
     sc.send(160, "magc 0.001 0.002 0.003");
     sc.send(180, "raw 0");
+    sc.send(190, "hg kv 6");
+    sc.send(200, "hg kpos 0.9");
+    sc.send(210, "hg khi 30");
+    sc.send(220, "hg vmax 0.4");
     flyUp(sc, true, 250);
     for (const char *c : {"pa 0.55", "ia 0.21", "da 0.016", "pr 0.5", "ir 0.2", "dr 0.015",
                           "pp 0.5", "ip 0.2", "dp 0.015", "py 1.6", "iy 0.06", "dy 0.001",
@@ -646,7 +834,8 @@ std::map<std::string, std::function<void(Scenario &)>> scenarios() {
     sc.duration_ms = 9000;
     sc.reach = [](Scenario &s) {
       return join(need(s, {"armed", "descending"}),
-                  needSerial(s, {"Yaw hold ON", "refused"}));
+                  needSerial(s, {"Yaw hold ON", "refused", ">>> hold gain kv = 6.000",
+                                 ">>> hold gain khi = 30.000"}));
     };
   };
 
@@ -676,6 +865,7 @@ std::map<std::string, std::function<void(Scenario &)>> scenarios() {
 
   m["imucal_ok_and_moved"] = [](Scenario &sc) {
     sc.s.h = 0.0;
+    sc.imu_offsets = true;
     sc.send(100, "imucal");
     sc.at(3000, [](Scenario &s) {
       s.kinematic = [](uint32_t tick, State &st) {
@@ -683,10 +873,12 @@ std::map<std::string, std::function<void(Scenario &)>> scenarios() {
       };
     });
     sc.send(3100, "imucal");
-    sc.duration_ms = 6000;
+    sc.at(5400, [](Scenario &s) { s.kinematic = nullptr; s.s = State(); s.s.h = 0.0; });
+    flyUp(sc, false, 5500);                              // 보정값으로 이륙
+    sc.duration_ms = 9000;
     sc.reach = [](Scenario &s) {
-      std::string m = join(needUdp(s, {"IMUCAL,1,", "IMUCAL,0,MOVED"}),
-                           needSerial(s, {"saved=1"}));
+      std::string m = join(join(needUdp(s, {"IMUCAL,1,", "IMUCAL,0,MOVED"}),
+                                needSerial(s, {"saved=1"})), need(s, {"armed"}));
       return g_nvs_puts > 0 ? m : join(m, "nvs write");
     };
   };

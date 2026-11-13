@@ -22,6 +22,7 @@ CI 와 같은 보드 코어가 깔린 arduino-cli 가 필요하다(firmware/READ
 """
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
@@ -87,6 +88,15 @@ def build(sketch, build_dir, debug, jobs):
     return elf
 
 
+def build_conditions():
+    """기준 빌드를 재사용해도 되는지 가르는 빌드 조건: 고정 시각, arduino-cli, 코어, 라이브러리."""
+    parts = [f"SOURCE_DATE_EPOCH={SOURCE_DATE_EPOCH}", f"FQBN={FQBN}"]
+    for args in (["version"], ["core", "list"], ["lib", "list"]):
+        r = subprocess.run(["arduino-cli", *args], capture_output=True, text=True, check=False)
+        parts.append(r.stdout.strip())
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
 def host_preprocess(sketch, debug):
     """호스트에서 본 프로그램(SIL·native 시험이 컴파일하는 것).
 
@@ -139,7 +149,10 @@ def main():
         rev = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", args.base_rev],
                              capture_output=True, text=True, check=True).stdout.strip()
         stamp = tmp / "base.rev"
-        reuse = stamp.is_file() and stamp.read_text().strip() == f"{rev} {args.base_path}"
+        # 리비전·경로뿐 아니라 빌드 조건(고정 시각, arduino-cli·코어·라이브러리)이 같을 때만
+        # 기준 빌드를 다시 쓴다(Codex 검토 P2).
+        key = f"{rev} {args.base_path} {build_conditions()}"
+        reuse = stamp.is_file() and stamp.read_text().strip() == key
         if not reuse:
             for sub in ("base", "extract", "base.tar"):
                 path = tmp / sub
@@ -150,7 +163,7 @@ def main():
             for old in tmp.glob("build-base-*"):
                 shutil.rmtree(old)
             export_baseline(rev, args.base_path, tmp, name)
-            stamp.write_text(f"{rev} {args.base_path}\n")
+            stamp.write_text(key + "\n")
         base = tmp / "base" / name
         # 경로 깊이와 이름을 같게: 후보를 기준 옆에 복사한다.
         cand = tmp / "cand" / name
@@ -172,8 +185,10 @@ def main():
                 continue
             base_build = tmp / f"build-base-{debug}"
             base_elf = base_build / f"{name}.ino.elf"
-            elf_a = base_elf if base_elf.is_file() else build(base, base_build, debug,
-                                                              args.jobs)
+            marker = base_build / ".source_date_epoch"
+            reusable = (base_elf.is_file() and marker.is_file()
+                        and marker.read_text().strip() == SOURCE_DATE_EPOCH)
+            elf_a = base_elf if reusable else build(base, base_build, debug, args.jobs)
             elf_b = build(cand, tmp / f"build-cand-{debug}", debug, args.jobs)
             diffs, notes = compare_firmware_elf.compare(elf_a, elf_b)
             for note in notes:

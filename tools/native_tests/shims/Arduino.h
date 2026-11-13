@@ -71,6 +71,8 @@ inline void (*lockstep_sleep_us)(uint64_t) = nullptr;
 inline void (*lockstep_sleep_until_tick)(TickType_t) = nullptr;
 inline void (*lockstep_task_created)(TaskFunction_t, const char *) = nullptr;
 inline void (*lockstep_ledc_write)(int, uint32_t) = nullptr;
+// 시리얼에 쓴 글자를 쓴 순간에 넘긴다(차분 하네스가 다른 출력과의 순서를 본다).
+inline void (*on_serial)(const std::string &) = nullptr;
 
 inline void reset() {
   serial_output.clear();
@@ -112,9 +114,13 @@ public:
     std::ostringstream stream;
     stream << value;
     arduino_fake::serial_output += stream.str();
+    if (arduino_fake::on_serial) arduino_fake::on_serial(stream.str());
   }
 
-  void println() { arduino_fake::serial_output.push_back('\n'); }
+  void println() {
+    arduino_fake::serial_output.push_back('\n');
+    if (arduino_fake::on_serial) arduino_fake::on_serial("\n");
+  }
 
   template <typename T>
   void println(const T &value) {
@@ -129,6 +135,9 @@ public:
     arduino_fake::appendFormatted(
         arduino_fake::serial_output, format, arguments);
     va_end(arguments);
+    if (arduino_fake::on_serial) {
+      arduino_fake::on_serial(arduino_fake::serial_output.substr(before));
+    }
     return static_cast<int>(arduino_fake::serial_output.size() - before);
   }
 };
