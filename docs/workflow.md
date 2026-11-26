@@ -6,7 +6,7 @@
 2. [하드웨어 구성](hardware_configuration.md)과 [프로젝트 개요](project_overview.md)로
    센서→추정→PID→믹서→ESC 흐름을 확인한다.
 3. [펌웨어 카탈로그](firmware_catalog.md)에서 작업할 스케치를 고른다.
-   주력·보류·진단·보관 코드를 구분하고 진단 스케치의 자동 구동 여부를 확인한다.
+   비행·진단·보관 코드를 구분하고 진단 스케치의 자동 구동 여부를 확인한다.
 4. [벤치 절차](power_on_bench_procedure.md)의 프롭 OFF 단계부터 시작한다.
    단일 모터 식별은 `motor_id_single`을 사용한다.
 
@@ -31,14 +31,16 @@ python -m py_compile scripts/*.py
 python tools/check_repo_layout.py
 python -m unittest discover -s tools -p 'test_*.py' -v
 arduino-cli compile --warnings all --fqbn esp32:esp32:esp32s3 \
-  --build-path /tmp/zetin-flight-build firmware/flight/dual_imu_cascade_pwm
+  --build-path /tmp/zetin-flight-build firmware/flight/zetin_fc
 git diff --check
 ```
 
 Python 패키지는 [requirements.txt](../requirements.txt), 보드 코어·라이브러리는
-[펌웨어 가이드](../firmware/README.md)를 따른다. 전체 CI는 주력·보류 후보와
+[펌웨어 가이드](../firmware/README.md)를 따른다. 전체 CI는 비행 펌웨어와
 진단 스케치를 모두 컴파일한다. 네이티브 성공은 Arduino 전처리·보드 라이브러리
-빌드 성공을 대신하지 않는다.
+빌드 성공을 대신하지 않는다. 비행 펌웨어의 동작을 바꾸지 않는 정리는
+`tools/prove_same_firmware.py`(ELF 동일)나 `tools/diff_firmware_behaviour.py`(차분 하네스)로
+기준 리비전과 비교한다([zetin_fc 안내](../firmware/flight/zetin_fc/README.md)).
 
 ## 지상국 운용 순서
 

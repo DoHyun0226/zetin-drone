@@ -8,11 +8,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_TEST_DIR = REPO_ROOT / "tools" / "native_tests"
-SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "dual_imu_cascade_pwm"
+SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 
 
 class MspSensorTest(unittest.TestCase):
-    """Compile and run the msp-sensor unit test at -m32."""
+    """msp-sensor 단위 시험을 -m32 로 컴파일해 실행한다."""
 
     def test_msp_sensor(self):
         compiler = shutil.which("g++")
@@ -54,6 +54,7 @@ class MspSensorTest(unittest.TestCase):
                 compiler, "-std=c++17", "-O0", "-g", "-Wall", "-m32",
                 "-I", str(NATIVE_TEST_DIR / "shims"),
                 "-I", str(SKETCH_DIR),
+                "-I", str(SKETCH_DIR / "logic"),
                 "-x", "c++",
                 str(NATIVE_TEST_DIR / "test_msp_sensor.cpp"),
                 "-o", str(executable),

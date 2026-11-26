@@ -1,4 +1,4 @@
-"""Formatting helpers for failsafe telemetry consumers."""
+"""failsafe 텔레메트리를 쓰는 쪽을 위한 서식 도우미."""
 
 import math
 
@@ -11,6 +11,30 @@ FAILSAFE_PHASE_NAMES = {
     4: "CUT_ABORT",
 }
 
+# 거리 기반 자동착륙(flow-hold 펌웨어, range_land.h). 단계는 둘 다 DESCENDING 이다.
+LAND_MODE_NAMES = {
+    0: "NONE",
+    1: "RANGE",
+    2: "TIMED",
+    3: "TIMED_FALLBACK",
+}
+
+LAND_STAGE_NAMES = {
+    0: "IDLE",
+    1: "DESCENT",
+    2: "APPROACH",
+    3: "NEAR_GROUND",
+    4: "CONTACT",
+}
+
+LAND_CUT_REASON_NAMES = {
+    0: "NONE",
+    1: "CONTACT",
+    2: "NEAR_GROUND_LOSS",
+    3: "NEAR_GROUND_STUCK",
+    4: "BACKSTOP",
+}
+
 FAILSAFE_PROBE_STATE_NAMES = {
     0: "WAIT",
     1: "DIP",
@@ -21,7 +45,7 @@ FAILSAFE_PROBE_STATE_NAMES = {
 
 
 def phase_number(value):
-    """Return an integer phase, or ``None`` for absent/malformed values."""
+    """정수 phase를 돌려준다. 값이 없거나 잘못되면 ``None``."""
 
     if value is None:
         return None
@@ -35,7 +59,7 @@ def phase_number(value):
 
 
 def format_failsafe_phase(value):
-    """Return a human-readable enum label while retaining the wire value."""
+    """사람이 읽는 enum 이름을 돌려준다. 전송 값도 함께 남긴다."""
 
     phase = phase_number(value)
     if phase is None:
@@ -44,7 +68,7 @@ def format_failsafe_phase(value):
 
 
 def format_failsafe_probe_state(value):
-    """Return a human-readable probe-state label while retaining the wire value."""
+    """사람이 읽는 probe 상태 이름을 돌려준다. 전송 값도 함께 남긴다."""
 
     state = phase_number(value)
     if state is None:
@@ -105,8 +129,26 @@ def _format_probe_status(sample):
     )
 
 
+def _format_land_status(sample):
+    mode = phase_number(sample.get("Land_Mode"))
+    if mode is None:
+        return ""
+    stage = phase_number(sample.get("Land_Stage"))
+    stage_text = "-" if stage is None else LAND_STAGE_NAMES.get(stage, f"UNKNOWN({stage})")
+    try:
+        ref = float(sample.get("Land_Ref_M"))
+    except (TypeError, ValueError):
+        ref = math.nan
+    ref_text = "-" if not math.isfinite(ref) else f"{ref:.2f}m"
+    text = f" | Land {LAND_MODE_NAMES.get(mode, f'UNKNOWN({mode})')} {stage_text} ref {ref_text}"
+    reason = phase_number(sample.get("Land_Cut_Reason"))
+    if reason:
+        text += f" cut {LAND_CUT_REASON_NAMES.get(reason, f'UNKNOWN({reason})')}"
+    return text
+
+
 def format_monitor_status(sample):
-    """Return status text and whether the monitor must use alert styling."""
+    """상태 문구와, 모니터가 경고 스타일을 써야 하는지를 돌려준다."""
 
     phase = phase_number(sample.get("Failsafe_Phase"))
     probe_state = phase_number(sample.get("Failsafe_Probe_State"))
@@ -118,12 +160,13 @@ def format_monitor_status(sample):
         f"P {_format_trim(sample.get('Trim_Pitch'))}"
         f"{_format_hover_status(sample)}"
         f"{_format_probe_status(sample)}"
+        f"{_format_land_status(sample)}"
     )
     return text, alert
 
 
 def render_monitor_title(axis, system_summary, sample):
-    """Render the monitor title and apply an alert box for nonzero phases."""
+    """모니터 제목을 그리고, phase가 0이 아니면 경고 상자를 씌운다."""
 
     failsafe_text, alert = format_monitor_status(sample)
     title = axis.set_title(f"{system_summary}\n{failsafe_text}")

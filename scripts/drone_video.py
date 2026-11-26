@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Camera entry point: record (default) or mp4.
+"""카메라 진입점: record(기본) 또는 mp4.
 
   drone_video.py [record] [--url --out-dir --no-preview --timeout]
   drone_video.py mp4 <csv> [--no-mp4]

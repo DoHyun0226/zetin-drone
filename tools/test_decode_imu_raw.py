@@ -1,4 +1,4 @@
-"""Offline decoder tests for the batched 1 kHz dual-IMU binary stream."""
+"""묶음으로 오는 1 kHz dual-IMU 바이너리 스트림의 오프라인 디코더 시험."""
 
 import contextlib
 import csv
@@ -141,8 +141,8 @@ class DecodeImuRawTests(unittest.TestCase):
             400, 500, 600,
         )
 
-        # ZCAL can arrive after early batches if the first calibration
-        # datagram is lost; per-boot constants still recover those rows.
+        # 첫 calibration datagram 이 유실되면 ZCAL 이 앞쪽 batch 보다 늦게 올 수 있다.
+        # 상수는 부팅마다 고정이므로 그 행들도 복원된다.
         _, rows, fieldnames, stderr = self._decode(
             _zimu(1, 0, [sample]) + _zcal()
         )

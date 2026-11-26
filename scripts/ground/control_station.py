@@ -196,6 +196,8 @@ STATE_TRANSITION_FIELDS = (
     "Yaw_Authority_State",
     "PosHold_State",
     "AltHold_State",
+    "Land_Mode",
+    "Land_Stage",
 )
 
 # [FIX] RC 시퀀스 번호 — 지연 도착한 낡은 패킷을 드론 측에서 폐기할 수 있도록
@@ -251,14 +253,13 @@ last_btn_trim_reset = False
 # 송신
 # ==========================================================
 class _UIBuffer:
-    """Holds ui calls made while a safety action is still pending.
+    """안전 동작이 아직 끝나지 않았을 때 들어온 ui 호출을 잡아 둔다.
 
-    A fault path builds its operator lines here, runs the safety action
-    (disarm / stop_streaming_only, which write into the same buffer), then
-    flushes: the safety state and sends finish before any real ui call, and
-    the console still shows the lines in their original order. The
-    telemetry thread collects every ui call of one packet in one buffer and
-    flushes it after that packet's safety decisions.
+    fault 경로는 운용자용 줄을 여기에 쌓고, 안전 동작(disarm /
+    stop_streaming_only, 같은 버퍼에 쓴다)을 실행한 뒤 flush한다: 안전 상태와
+    송신이 실제 ui 호출보다 먼저 끝나고, 콘솔에는 줄이 원래 순서대로 나온다.
+    텔레메트리 스레드는 패킷 하나의 ui 호출을 모두 한 버퍼에 모으고, 그 패킷의
+    안전 판단이 끝난 뒤 flush한다.
     """
 
     def __init__(self):
@@ -280,8 +281,8 @@ class _UIBuffer:
         self._calls.append(("update", snap))
 
     def flush(self, swallow=False):
-        """Replay the calls on ``ui`` in order. Every call is attempted; the
-        first failure is re-raised afterwards unless ``swallow``."""
+        """호출을 ``ui``에 순서대로 다시 실행한다. 모든 호출을 시도하고,
+        ``swallow``가 아니면 첫 실패를 끝난 뒤 다시 낸다."""
         calls, self._calls = self._calls, []
         first_error = None
         for kind, value in calls:
@@ -344,7 +345,7 @@ def reliable_send(cmd: str):
 
 
 def disarm(reason: str = "수동", out=None):
-    """out: a _UIBuffer when called from a fault path (flushed by the caller)."""
+    """out: fault 경로에서 부를 때의 _UIBuffer(호출한 쪽이 flush한다)."""
     global is_armed, is_streaming, current_throttle, throttle_f, arm_state
     with safety_cmd_lock:
         cancelled_resume = _invalidate_resume_attempt()
@@ -390,7 +391,7 @@ def stop_streaming_only(reason: str, out=None):
         with telem_lock:
             current_throttle = 1000
             throttle_f = 1000.0
-    out = ui if out is None else out  # out: _UIBuffer from a fault path
+    out = ui if out is None else out  # out: fault 경로의 _UIBuffer
     if cancelled_resume:
         out.event(f"\n[RESUME] 실패: {reason}으로 복구 시도 취소")
     out.event(f"\n>>> [SYSTEM] 로컬 해제 ({reason}) - stop 미전송")
@@ -479,7 +480,7 @@ def request_resume(source: str) -> bool:
 def advance_resume_attempt(sample, now=None, out=None):
     """텔레메트리 확인을 진행하고, 수락된 RC가 생긴 뒤에만 resume을 보낸다.
 
-    out: the telemetry thread's per-packet _UIBuffer (flushed by the caller).
+    out: 텔레메트리 스레드의 패킷별 _UIBuffer(호출한 쪽이 flush한다).
     """
     global resume_state, resume_deadline, resume_attempt_id
     global resume_result_total_baseline, resume_result_dropped_baseline
@@ -631,7 +632,7 @@ def check_arm_timeout(now=None):
 def advance_arm_attempt(sample, now=None, out=None):
     """펌웨어 상태로 무장을 확정하거나 제한된 start 재시도를 수행한다.
 
-    out: the telemetry thread's per-packet _UIBuffer (flushed by the caller).
+    out: 텔레메트리 스레드의 패킷별 _UIBuffer(호출한 쪽이 flush한다).
     """
     global arm_state, arm_next_retry, is_armed, is_streaming
     global current_throttle, throttle_f
@@ -751,7 +752,7 @@ def deadzone(v: float, dz: float = 0.05) -> float:
 
 
 def handle_stdin_command(msg: str):
-    """Route safety/stateful stdin commands before generic UDP passthrough."""
+    """안전·상태가 걸린 stdin 명령을 일반 UDP 전달보다 먼저 처리한다."""
     global current_throttle, throttle_f, mag_enabled_choice
 
     command = msg.strip()
@@ -834,7 +835,7 @@ def _format_drone_trim(sample):
 
 
 def format_rc_timeout_fault(sample):
-    """Describe the observed firmware action without guessing its cut reason."""
+    """관측된 펌웨어 동작을 설명한다. 차단 이유는 추측하지 않는다."""
     phase_raw = sample.get("Failsafe_Phase")
     armed_raw = sample.get("Armed")
     phase = phase_number(phase_raw)
@@ -867,7 +868,7 @@ def format_rc_timeout_fault(sample):
 
 
 def format_autoland_telemetry(sample):
-    """Return the non-decimated Stage E status line, or None outside failsafe."""
+    """솎아내지 않은 Stage E 상태 줄을 돌려준다. failsafe 밖이면 None."""
     phase = phase_number(sample.get("Failsafe_Phase"))
     if phase is None or phase == 0:
         return None
@@ -907,7 +908,7 @@ def format_autoland_telemetry(sample):
 
 
 def format_status_telemetry(sample):
-    """Return the 1Hz operator status line for a valid telemetry sample."""
+    """유효한 텔레메트리 샘플로 1Hz 운용자 상태 줄을 돌려준다."""
     faults = ",".join(active_fault_names(sample)) or "-"
     return (
         "[STATUS] "
@@ -939,7 +940,7 @@ def _format_raw_status():
 
 
 def _append_raw_datagram(data):
-    """Append an opaque ZIMU/ZCAL datagram; inspect only ZIMU header counters."""
+    """ZIMU/ZCAL datagram을 그대로 덧붙인다. ZIMU 헤더 카운터만 들여다본다."""
     global raw_file, raw_batch_count, raw_last_dropped, raw_last_receive_time
     if not raw_capture_enabled:
         return
@@ -1239,7 +1240,7 @@ def telemetry_thread():
 # 컨트롤러 처리 스레드
 # ==========================================================
 def startup_help_lines():
-    """Start-up help: printed by controller_thread, shown again by the dashboard's '?'."""
+    """시작 도움말: controller_thread가 출력하고, 대시보드의 '?'가 다시 보여준다."""
     return [
         "========== DRONE CONTROLLER ==========",
         " [X]        Arm / Disarm",
@@ -1254,6 +1255,7 @@ def startup_help_lines():
         " Control: th <val>, yaw <0|1>, raw on|off, mag on|off, gains, start, stop, resume",
         "          trim <roll> <pitch>, magc <x> <y> <z>",
         " FlowHold: flowcal 1|0, poshold 1|0, althold 1|0, hg <name> <val>",
+        " RangeLand: rangeland 1|0 (disarmed only; default 0 = timed descent)",
         " IMU cal:  imucal (disarmed, drone still on the floor, 2 s; saved to NVS)",
         "======================================",
     ]
@@ -1475,13 +1477,13 @@ def shutdown_workers_and_close_log(workers):
 
 
 def _handle_worker_fault(worker, error, pending=None):
-    """A worker died: make the station safe first, tell the operator second.
+    """worker가 죽었다: 먼저 지상국을 안전하게 하고, 그다음 운용자에게 알린다.
 
-    Same outcome as a telemetry loss: RC stops (stop_streaming_only, no stop
-    packet, so a descending drone keeps its autoland) and the fault latches
-    until restart, so no later arm/resume/RC can reopen the link. ``pending``
-    holds the dying packet's unprinted lines; they come out first, after the
-    safety steps, followed by the fault lines.
+    결과는 텔레메트리 손실과 같다: RC를 멈추고(stop_streaming_only, stop 패킷
+    없음. 그래서 하강 중인 드론은 autoland를 유지한다) fault를 재시작 때까지
+    latch한다. 그래서 이후의 arm/resume/RC가 링크를 다시 열 수 없다. ``pending``은
+    죽어 가던 패킷의 출력 안 된 줄이다. 안전 단계 뒤에 이 줄이 먼저 나오고,
+    이어서 fault 줄이 나온다.
     """
     global worker_fault
     label = WORKER_LABELS.get(worker, worker)
@@ -1526,20 +1528,20 @@ def _run_worker(worker, target):
 
 
 def telemetry_worker():
-    """Thread entry: telemetry_thread with the worker-fault safety net."""
+    """스레드 진입점: worker-fault 안전망을 씌운 telemetry_thread."""
     _run_worker("telemetry", telemetry_thread)
 
 
 def controller_worker():
-    """Thread entry: controller_thread with the worker-fault safety net."""
+    """스레드 진입점: worker-fault 안전망을 씌운 controller_thread."""
     _run_worker("controller", controller_thread)
 
 
 def snapshot():
-    """Station state for the dashboard.
+    """대시보드용 지상국 상태.
 
-    Takes only telem_lock (never safety_cmd_lock): the telemetry thread calls
-    this per packet and must not wait behind a blocking reliable_send.
+    telem_lock만 잡는다(safety_cmd_lock은 잡지 않는다): 텔레메트리 스레드가
+    패킷마다 이것을 부르므로, 막혀 있는 reliable_send 뒤에서 기다리면 안 된다.
     """
     with telem_lock:
         return {
@@ -1583,20 +1585,20 @@ def _on_stdin_eof():
 
 
 def _on_dashboard_fault(error):
-    """Internal dashboard error (event loop, redraw): a fault, not an operator stop.
+    """대시보드 내부 오류(event loop, redraw): 운용자 정지가 아니라 fault다.
 
-    Same handling as a dead worker: latch, cancel arm/resume, stop RC without
-    a stop packet (the drone's RC-timeout autoland takes over). The UI then
-    continues as a line console; Ctrl+C keeps its conditional disarm.
+    죽은 worker와 같이 처리한다: latch하고, arm/resume을 취소하고, stop 패킷 없이
+    RC를 멈춘다(드론의 RC-timeout autoland가 이어받는다). 그 뒤 UI는 줄 콘솔로
+    계속된다. Ctrl+C는 조건부 disarm을 그대로 한다.
     """
     _handle_worker_fault("dashboard", error)
 
 
 def _on_ui_run_escape(error):
-    """``ui.run`` must not raise; if anything escapes it, make the drone safe first.
+    """``ui.run``은 예외를 내면 안 된다. 무엇이든 빠져나오면 드론부터 안전하게 한다.
 
-    Same conditional disarm as Ctrl+C (pad mode only), before after_run and
-    the log cleanup. A KeyboardInterrupt is the Ctrl+C itself.
+    Ctrl+C와 같은 조건부 disarm(pad 모드만)을 after_run과 로그 정리보다 먼저
+    한다. KeyboardInterrupt는 Ctrl+C 그 자체다.
     """
     if isinstance(error, KeyboardInterrupt):
         reason = "키보드 인터럽트"
@@ -1615,13 +1617,13 @@ def _on_ui_run_escape(error):
 
 
 def _install_sigterm_handler(station_ui, state):
-    """SIGTERM takes the Ctrl+C path: conditional disarm, leave the UI, save logs.
+    """SIGTERM은 Ctrl+C 경로를 탄다: 조건부 disarm, UI 종료, 로그 저장.
 
-    A running dashboard gets it as its SIGINT key (``station_ui.interrupt()``);
-    otherwise the handler raises KeyboardInterrupt in the main thread, which
-    the UI turns into ``on_interrupt()``. Once the UI has returned
-    (``state["ui_done"]``) the handler does nothing, so the log saving
-    finishes. Returns the previous handler, or None off the main thread.
+    대시보드가 돌고 있으면 SIGINT 키로 받는다(``station_ui.interrupt()``).
+    아니면 handler가 메인 스레드에서 KeyboardInterrupt를 내고, UI가 이것을
+    ``on_interrupt()``로 바꾼다. UI가 돌아온 뒤에는(``state["ui_done"]``)
+    handler가 아무것도 하지 않아 로그 저장이 끝까지 된다. 이전 handler를
+    돌려주고, 메인 스레드가 아니면 None.
     """
     def handler(_signum, _frame):
         if state["ui_done"]:
@@ -1638,17 +1640,17 @@ def _install_sigterm_handler(station_ui, state):
     try:
         return signal.signal(signal.SIGTERM, handler)
     except (ValueError, OSError):
-        return None  # signal handlers can only be set in the main thread
+        return None  # signal handler는 메인 스레드에서만 설정할 수 있다
 
 
 def main(argv=None, ui=None):
-    """Start the workers, run the stdin loop, then save the logs.
+    """worker를 띄우고, stdin 루프를 돌리고, 로그를 저장한다.
 
-    Socket, log files, state and the mode (--keyboard/--listen) are set up
-    at import time. ``argv`` (when given) re-reads --no-raw/--no-mag/--plain
-    and must name the import-time mode; ``ui`` replaces the module's output
-    object for this and every later call. Without ``ui``, ``make_ui`` picks
-    the dashboard on a terminal and the line console otherwise.
+    소켓, 로그 파일, 상태, 모드(--keyboard/--listen)는 import 때 정해진다.
+    ``argv``(주어지면)는 --no-raw/--no-mag/--plain을 다시 읽으며 import 때의
+    모드를 적어야 한다. ``ui``는 이번과 이후 모든 호출에서 모듈의 출력 객체를
+    대신한다. ``ui``가 없으면 ``make_ui``가 터미널이면 대시보드를, 아니면
+    줄 콘솔을 고른다.
     """
     global cli_args, raw_capture_enabled, mag_enabled_choice
     if argv is not None:
@@ -1707,7 +1709,7 @@ def main(argv=None, ui=None):
         for worker in workers:
             worker.start()
         station_ui.run(handle_stdin_command, _on_stdin_interrupt, _on_stdin_eof)
-    except BaseException as error:  # noqa: BLE001 - disarm before any cleanup
+    except BaseException as error:  # noqa: BLE001 - 정리보다 disarm이 먼저
         escaped = error
         _on_ui_run_escape(error)
     finally:

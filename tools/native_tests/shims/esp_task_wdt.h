@@ -1,9 +1,9 @@
 #pragma once
 
-// Host-test stub for the ESP-IDF task watchdog. The flight firmware registers
-// pid_task with the TWDT and resets it each loop; none of that affects the pure
-// control-math logic under test, so these are inert no-ops that just satisfy the
-// compiler. Mirrors the real esp_task_wdt.h surface the sketch uses.
+// ESP-IDF 태스크 watchdog 의 호스트 시험용 stub. 비행 펌웨어는 pid_task 를
+// TWDT 에 등록하고 루프마다 리셋한다. 시험 대상인 순수 제어 수학 로직과는
+// 무관하므로, 컴파일만 통과시키는 아무 동작 없는 no-op 이다. zetin_fc 가 쓰는
+// 실제 esp_task_wdt.h 의 인터페이스를 그대로 따른다.
 
 #include <cstdint>
 
@@ -22,8 +22,8 @@ typedef struct {
   bool trigger_panic;
 } esp_task_wdt_config_t;
 
-// NULL subscribes the calling task; the host tests never call pid_task, so a
-// no-op is sufficient.
+// NULL 은 호출한 태스크를 등록한다. 호스트 시험은 pid_task 를 부르지 않으므로
+// no-op 으로 충분하다.
 inline esp_err_t esp_task_wdt_add(void *) { return ESP_OK; }
 inline esp_err_t esp_task_wdt_reset(void) { return ESP_OK; }
 inline esp_err_t esp_task_wdt_init(const esp_task_wdt_config_t *) { return ESP_OK; }

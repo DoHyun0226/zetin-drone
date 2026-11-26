@@ -130,7 +130,7 @@ class OutputErrorTest(unittest.TestCase):
                 [part(jpeg(1), 0)], MjpegParser(BOUNDARY), FullDisk(), writer, 0, RecordState(), None,
                 threading.Event(),
             )
-        self.assertNotIsInstance(ctx.exception, OSError)  # must not look like a link drop
+        self.assertNotIsInstance(ctx.exception, OSError)  # 링크 끊김처럼 보이면 안 된다
 
 
 class LatestFrameTest(unittest.TestCase):
@@ -150,7 +150,7 @@ class IterResponseTest(unittest.TestCase):
             b"HTTP/1.1 200 OK\r\nContent-Type: " + CONTENT_TYPE.encode()
             + b"\r\nTransfer-Encoding: chunked\r\n\r\n"
             + b"%x\r\n" % len(body) + body + b"\r\n"
-            + b"40\r\n" + b"\r\n--" + BOUNDARY  # next chunk cut short: connection dropped
+            + b"40\r\n" + b"\r\n--" + BOUNDARY  # 다음 청크가 중간에 잘림: 연결 끊김
         )
 
         class FakeSock:
@@ -178,7 +178,7 @@ class RunTest(unittest.TestCase):
             raise OSError("link dropped")
 
         def second():
-            yield part(jpeg(3), 0) + part(jpeg(4), 1)  # camera rebooted: seq restarts
+            yield part(jpeg(3), 0) + part(jpeg(4), 1)  # 카메라 재부팅: seq 가 처음부터 다시 시작
             stop.set()
 
         def opener(url, timeout_s):
@@ -252,7 +252,7 @@ class RunTest(unittest.TestCase):
             srv.sendall(
                 b"HTTP/1.1 200 OK\r\nContent-Type: " + CONTENT_TYPE.encode()
                 + b"\r\nTransfer-Encoding: chunked\r\n\r\n" + b"%x\r\n" % len(body) + body + b"\r\n"
-            )  # then silence: the next read1() blocks
+            )  # 그 뒤 무응답: 다음 read1() 이 블록된다
             resp = http.client.HTTPResponse(cli)
             resp.begin()
 
@@ -346,8 +346,8 @@ class SafetyTest(unittest.TestCase):
         servers = []
 
         def opener(url, timeout_s):
-            stop.set()          # user quits while we are still connecting ...
-            time.sleep(0.3)     # ... and main's interrupt() runs before the socket exists
+            stop.set()          # 아직 연결 중에 사용자가 종료 ...
+            time.sleep(0.3)     # ... 소켓이 생기기 전에 main 의 interrupt() 가 실행된다
             srv, cli = socket.socketpair()
             servers.append(srv)
             srv.sendall(

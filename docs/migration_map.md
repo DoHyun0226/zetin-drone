@@ -6,7 +6,7 @@
 
 | 이전 경로 | 새 경로 | 수명주기 |
 |---|---|---|
-| `firmware/examples/DUAL_IMU_CASCADE/DUAL_IMU_CASCADE.ino` | `firmware/flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino` | 현행 |
+| `firmware/examples/DUAL_IMU_CASCADE/DUAL_IMU_CASCADE.ino` | `firmware/archive/legacy_flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino` | 보관 |
 | `firmware/examples/PWM_TEST/PWM_TEST.ino` | `firmware/diagnostics/motor_pwm_bench/motor_pwm_bench.ino` | 현행 |
 | `firmware/examples/IMU_TEST_RAW/IMU_TEST_RAW.ino` | `firmware/diagnostics/icm42670_single_raw/icm42670_single_raw.ino` | 현행 |
 | `firmware/examples/DUAL_IMU_RAW_TEST/DUAL_IMU_RAW_TEST.ino` | `firmware/diagnostics/icm42670_dual_raw/icm42670_dual_raw.ino` | 현행 |
@@ -45,8 +45,6 @@
 | `scripts/GPS_Reciever.py` | `scripts/archive/receive_gps_udp_legacy.py` | 보관 |
 | `test/tcp_test.py` | `scripts/archive/test_tcp_legacy.py` | 보관 |
 | `docs/ONBOARDING.md` | `docs/project_overview.md` | 현행 |
-| `docs/superpowers/specs/2026-05-14-dual-imu-pid-design.md` | `docs/history/2026-05-14-dual-imu-pid-design.md` | 과거 |
-| `docs/superpowers/plans/2026-05-14-dual-imu-pid.md` | `docs/history/2026-05-14-dual-imu-pid-implementation-plan.md` | 과거 |
 | `docs/presentation.c` | `docs/archive/pid_dshot_presentation_snippet.c` | 보관 |
 | `docs/commit_message.txt` | `docs/archive/commit_message_snapshot.txt` | 보관 |
 | `test/README.md` | `scripts/archive/README.md` | 보관 메모로 통합 |

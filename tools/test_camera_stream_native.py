@@ -12,7 +12,7 @@ SKETCH_DIR = REPO_ROOT / "firmware" / "camera" / "esp32cam_stream"
 
 
 class CameraStreamNativeTest(unittest.TestCase):
-    """Compile and run the camera-stream unit test at -m32."""
+    """camera-stream 단위 시험을 -m32 로 컴파일해 실행한다."""
 
     def test_camera_stream(self):
         compiler = shutil.which("g++")

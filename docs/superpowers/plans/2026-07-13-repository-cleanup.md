@@ -20,7 +20,7 @@
 ESP32Servo/LEDC PWM, Python 3 표준 라이브러리, pandas, matplotlib, pygame.
 
 **설계:**
-[`docs/design/2026-07-13-repository-cleanup-design.md`](../design/2026-07-13-repository-cleanup-design.md)
+[`docs/design/2026-07-13-repository-cleanup-design.md`](../specs/2026-07-13-repository-cleanup-design.md)
 
 ## 전역 제약
 

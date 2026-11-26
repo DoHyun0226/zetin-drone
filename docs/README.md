@@ -29,24 +29,19 @@
 ## 설계·계획 기록
 
 날짜가 박힌 기록이다. 사후 수정하지 않고, 틀린 것으로 밝혀지면 정정을 병기한다.
+명령·상수·완료 체크는 작성 당시 상태이므로 현재 실행에는 위 유지 문서를 쓴다.
 
-- [`superpowers/specs/`](superpowers/specs/) — 기능별 설계 문서 (자동착륙, yaw 각속도
-  명령, 자기계 캘리브레이션, Tier 1 관측성)
-- [`superpowers/plans/`](superpowers/plans/) — 그 설계의 구현 계획
-- [저장소 정리 설계](design/2026-07-13-repository-cleanup-design.md) ·
-  [구현 계획](plans/2026-07-13-repository-cleanup.md)
+- [`superpowers/specs/`](superpowers/specs/) — 설계 문서 `YYYY-MM-DD-<주제>-design.md`
+- [`superpowers/plans/`](superpowers/plans/) — 그 설계의 구현 계획 `YYYY-MM-DD-<주제>.md`
+- [`reports/`](reports/) — 점검 보고: [2026-09-07 코드·문서·노션 정합성 점검](reports/2026-09-07-documentation-audit.md)
 
-## 과거 문서
-
-아래 및 날짜가 붙은 계획의 완료 체크·명령·상수는 작성 당시 상태다.
-현재 실행에는 위 유지 문서를 사용한다. 특히 프로브 착지컷·옛 스키마·
-분리 전 발표자료 경로를 현행으로 옮기지 않는다.
-
-- [2026-05-14 듀얼 IMU PID 설계](history/2026-05-14-dual-imu-pid-design.md)
-- [2026-05-14 듀얼 IMU PID 구현 계획](history/2026-05-14-dual-imu-pid-implementation-plan.md)
-- [2026-09-07 코드·문서·노션 정합성 점검](reports/2026-09-07-documentation-audit.md)
+가장 오래된 기록은 [2026-05-14 듀얼 IMU PID 설계](superpowers/specs/2026-05-14-dual-imu-pid-design.md)와
+[2026-07-13 저장소 정리 설계](superpowers/specs/2026-07-13-repository-cleanup-design.md)다. 특히 옛 프로브
+착지컷·옛 스키마·분리 전 발표자료 경로를 현행으로 옮기지 않는다.
 
 ## 보관 문서
+
+[`archive/`](archive/) — 현행에서 쓰지 않는 조각.
 
 - [PID/DShot 발표용 코드 조각](archive/pid_dshot_presentation_snippet.c)
 - [과거 커밋 메시지 스냅샷](archive/commit_message_snapshot.txt)
@@ -58,3 +53,7 @@
 공개본은 <https://lightminn.github.io/zetin-drone-presentations/>다. 옛 주소
 `lightminn.github.io/zetin-drone/`와 `/10min/`은 리다이렉트로 살려 두었다.
 Oracle 웹 호스팅 가이드와 모바일 실습 랩도 그쪽으로 갔다.
+
+## 로컬 자료
+
+`materials/` 는 git 에 올라가지 않는다(대용량 CAD·발표 원본·개인 서류). 각 로컬 사본에만 있다.

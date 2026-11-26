@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Decode ZIMU/ZCAL datagrams appended to a binary capture into CSV.
+"""바이너리 캡처에 이어 붙은 ZIMU/ZCAL datagram을 CSV로 디코딩한다.
 
-Raw columns preserve the twelve int16 register counts. When at least one ZCAL
-record is present, physical columns are also emitted in the IMU1 sensor frame:
-IMU1 stays on its sensor axes and IMU2 is sign-aligned to those axes. No body
-frame transform or firmware software LPF is applied by this decoder.
+raw 열은 int16 레지스터 카운트 12개를 그대로 담는다. ZCAL 레코드가 하나라도
+있으면 IMU1 센서 좌표계의 물리량 열도 낸다: IMU1은 자기 센서 축 그대로이고
+IMU2는 그 축에 부호를 맞춘다. 이 디코더는 body 좌표계 변환이나 펌웨어
+소프트웨어 LPF를 적용하지 않는다.
 """
 
 from __future__ import annotations
@@ -333,7 +333,7 @@ def decode_file(
     input_path: pathlib.Path | str,
     output_path: pathlib.Path | str | None = None,
 ) -> DecodeSummary:
-    """Decode one append-only capture and return its loss/corruption summary."""
+    """덧붙이기만 한 캡처 하나를 디코딩하고 손실/손상 요약을 돌려준다."""
     input_path = pathlib.Path(input_path)
     output_path = (
         pathlib.Path(output_path)

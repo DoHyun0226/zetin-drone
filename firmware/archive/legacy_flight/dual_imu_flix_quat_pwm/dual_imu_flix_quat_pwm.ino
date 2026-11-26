@@ -88,7 +88,7 @@ const float MAX_TARGET_RATE_YAW = 180.0f * DEG_TO_RAD;
 const float SAFETY_TILT_DEG   = 60.0f;
 const int   THROTTLE_IDLE_US  = 1100;         // 이하면 착지/적분 리셋 취급
 
-// IMU2는 x,z축이 IMU1 대비 반전 (하드웨어 측정 결과, docs/history 참조).
+// IMU2는 x,z축이 IMU1 대비 반전 (하드웨어 측정 결과, docs/superpowers/specs/2026-05-14-dual-imu-pid-design.md 참조).
 const float IMU2_SIGN_X = -1.0f;
 const float IMU2_SIGN_Y =  1.0f;
 const float IMU2_SIGN_Z = -1.0f;

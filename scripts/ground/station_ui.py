@@ -1,34 +1,31 @@
-"""Output layer of the control station.
+"""지상국의 출력 계층.
 
-``control_station`` never calls ``print`` directly; it hands every line to a
-UI object. ``ConsoleUI`` reproduces the plain line output the station has
-always had, character for character. ``DashboardUI`` is the full-screen
-prompt_toolkit view (status panels, event list, command line); ``make_ui``
-picks it on a terminal and falls back to ``ConsoleUI`` otherwise.
-prompt_toolkit is imported lazily, only on the dashboard path.
+``control_station``은 ``print``를 직접 부르지 않고 모든 줄을 UI 객체에 넘긴다.
+``ConsoleUI``는 지상국이 원래 내던 평범한 줄 출력을 글자 하나까지 똑같이 낸다.
+``DashboardUI``는 전체 화면 prompt_toolkit view(상태 패널, 이벤트 목록, 명령 줄)다.
+``make_ui``는 터미널이면 이것을 고르고, 아니면 ``ConsoleUI``로 돌아간다.
+prompt_toolkit은 대시보드 경로에서만 늦게 import한다.
 
-Contract for every UI: no method raises — neither the output methods
-(``event``, ``periodic``, ``transition``, ``alert``, ``update``,
-``after_run``) nor ``run``. The output methods are called from the safety
-paths (disarm, stop of RC streaming, worker-fault handling) after the state
-change, and a broken terminal must not abort those paths. Failures are
-swallowed with at most one line on stderr.
+모든 UI의 계약: 어떤 메서드도 예외를 내지 않는다. 출력 메서드(``event``,
+``periodic``, ``transition``, ``alert``, ``update``, ``after_run``)와 ``run``
+모두 그렇다. 출력 메서드는 안전 경로(disarm, RC streaming 정지, worker-fault
+처리)에서 상태를 바꾼 뒤 불리므로, 터미널이 망가졌다고 그 경로가 중단되면 안
+된다. 실패는 삼키고 stderr에 많아야 한 줄 남긴다.
 
-Locking rule for ``DashboardUI``: its output methods are called from the
-telemetry thread while ``telem_lock`` is held and from the safety paths.
-They only touch the UI's own leaf lock (never a station lock, never
-``snapshot()``), never wait for a redraw, and never raise. The station's
-snapshot provider is called only from the dashboard's own redraw on the
-event-loop thread, outside the UI lock.
+``DashboardUI``의 잠금 규칙: 출력 메서드는 ``telem_lock``을 잡은 텔레메트리
+스레드와 안전 경로에서 불린다. 출력 메서드는 UI 자신의 leaf lock만 건드리고
+(지상국 잠금이나 ``snapshot()``은 건드리지 않는다), redraw를 기다리지 않고,
+예외를 내지 않는다. 지상국 snapshot provider는 event-loop 스레드에서 대시보드
+자신의 redraw가 UI 잠금 밖에서만 부른다.
 
-An internal dashboard error (an exception in the event loop, a failing
-redraw) is not an operator stop: ``DashboardUI`` calls the station's fault
-handler (``set_fault_handler``: latch, RC stop, no disarm) before any
-diagnostic, then continues as a ``ConsoleUI`` until Ctrl+C/Ctrl+D.
+대시보드 내부 오류(event loop 안의 예외, 실패한 redraw)는 운용자 정지가 아니다:
+``DashboardUI``는 진단 출력보다 먼저 지상국 fault handler(``set_fault_handler``:
+latch, RC 정지, disarm 없음)를 부르고, 그 뒤 Ctrl+C/Ctrl+D까지 ``ConsoleUI``로
+계속된다.
 
-``input_end_hold`` (``--listen``): when the input ends without an
-interactive Ctrl+D, ``run`` keeps reception going by calling this blocking
-callable; a Ctrl+C/SIGTERM while it waits ends the run like Ctrl+C.
+``input_end_hold``(``--listen``): 대화형 Ctrl+D 없이 입력이 끝나면 ``run``은 이
+blocking callable을 불러 수신을 계속한다. 기다리는 동안 Ctrl+C/SIGTERM이 오면
+Ctrl+C와 같이 실행을 끝낸다.
 """
 
 import collections
@@ -39,7 +36,7 @@ import time
 
 
 def _report_ui_failure(method, error):
-    """Best-effort one-line note on stderr; never raises."""
+    """stderr에 한 줄 메모를 남기려 시도한다. 예외를 내지 않는다."""
     try:
         sys.stderr.write(f"[ConsoleUI] {method} 출력 실패: {error!r}\n")
     except Exception:
@@ -50,51 +47,50 @@ INPUT_END_HOLD_MESSAGE = "[STDIN] 입력 종료 - 수신 계속 (Ctrl+C로 종�
 
 
 class ConsoleUI:
-    """Plain line output: the station's original ``print`` behaviour."""
+    """평범한 줄 출력: 지상국 원래의 ``print`` 동작."""
 
     def __init__(self, input_end_hold=None):
         self._input_end_hold = input_end_hold
 
     def set_snapshot_provider(self, provider):
-        """The console draws no panels; it never pulls a snapshot."""
+        """콘솔은 패널을 그리지 않으므로 snapshot을 가져오지 않는다."""
 
     def set_fault_handler(self, handler):
-        """The console has no internal renderer that could fail; nothing to report."""
+        """콘솔에는 실패할 수 있는 내부 renderer가 없다. 알릴 것이 없다."""
 
     def event(self, text):
-        """One-off event line (arm/disarm, faults, warnings, logs...)."""
+        """한 번 나오는 이벤트 줄(arm/disarm, fault, 경고, 로그...)."""
         try:
             print(text)
         except Exception as error:
             _report_ui_failure("event", error)
 
     def periodic(self, text):
-        """Repeating line ([STATUS], [DIAG], [AUTO-LAND], [AXIS], analog [TH])."""
+        """반복되는 줄([STATUS], [DIAG], [AUTO-LAND], [AXIS], 아날로그 [TH])."""
         try:
             print(text)
         except Exception as error:
             _report_ui_failure("periodic", error)
 
     def alert(self, text):
-        """Must-not-miss line; the console has nowhere else to put it."""
+        """놓치면 안 되는 줄. 콘솔에는 따로 둘 곳이 없다."""
         self.event(text)
 
     def transition(self, text):
-        """State-transition event for the dashboard; the console prints nothing."""
+        """대시보드용 상태 전이 이벤트. 콘솔은 아무것도 출력하지 않는다."""
 
     def update(self, snap):
-        """Fresh station snapshot for the dashboard; the console ignores it."""
+        """대시보드용 새 지상국 snapshot. 콘솔은 무시한다."""
 
     def run(self, input_handler, on_interrupt, on_eof):
-        """The stdin command loop; never raises.
+        """stdin 명령 루프. 예외를 내지 않는다.
 
-        Ctrl+C -> ``on_interrupt()``, Ctrl+D (EOF) -> ``on_eof()``, then
-        return. A broken input stream (closed stdin, I/O error) ends like
-        EOF: ``on_eof()``'s conditional disarm runs first, then the error is
-        reported. A command that raises is reported as an event and the loop
-        continues. With ``input_end_hold`` the run does not end at EOF: after
-        ``on_eof()`` it waits in the hold until Ctrl+C/SIGTERM
-        (``on_interrupt()``) or until the hold returns.
+        Ctrl+C -> ``on_interrupt()``, Ctrl+D(EOF) -> ``on_eof()``, 그리고
+        돌아온다. 입력 스트림이 망가지면(stdin 닫힘, I/O 오류) EOF처럼 끝난다:
+        ``on_eof()``의 조건부 disarm을 먼저 하고 오류를 보고한다. 예외를 낸
+        명령은 이벤트로 보고하고 루프를 계속한다. ``input_end_hold``가 있으면
+        EOF에서 끝나지 않는다: ``on_eof()`` 뒤 Ctrl+C/SIGTERM
+        (``on_interrupt()``)이 오거나 hold가 돌아올 때까지 hold에서 기다린다.
         """
         while True:
             try:
@@ -136,7 +132,7 @@ class ConsoleUI:
             _report_ui_failure(name, error)
 
     def _hold_after_input_end(self, on_interrupt):
-        """--listen: the input is gone but reception goes on until Ctrl+C/SIGTERM."""
+        """--listen: 입력은 끝났지만 Ctrl+C/SIGTERM까지 수신은 계속한다."""
         hold = self._input_end_hold
         if hold is None:
             return
@@ -149,21 +145,21 @@ class ConsoleUI:
             _report_ui_failure("input_end_hold", error)
 
     def after_run(self):
-        """Hook after ``run`` returns; the console has nothing buffered."""
+        """``run``이 돌아온 뒤의 hook. 콘솔은 버퍼에 쌓아 둔 것이 없다."""
 
 
 # ---------------------------------------------------------------------------
-# Full-screen dashboard (prompt_toolkit, imported lazily)
+# 전체 화면 대시보드(prompt_toolkit, 늦게 import)
 # ---------------------------------------------------------------------------
 EVENT_HISTORY = 500
-REDRAW_INTERVAL_SEC = 0.1       # min_redraw_interval and refresh_interval: 10 Hz
-LINK_RATE_WINDOW_SEC = 1.0      # packets/s averaged over at least this long
-_FIXED_ROWS = 3                 # event title + separator + input line
+REDRAW_INTERVAL_SEC = 0.1       # min_redraw_interval과 refresh_interval: 10 Hz
+LINK_RATE_WINDOW_SEC = 1.0      # packets/s는 최소 이 시간 동안 평균한다
+_FIXED_ROWS = 3                 # 이벤트 제목 + 구분선 + 입력 줄
 _MIN_EVENT_ROWS = 1
 _PAD_HINTS = "X 시동  △ 복구  R2/L2 스로틀  ? 도움말 "
 _LISTEN_HINTS = "? 도움말 "
 def _wrap_cells(text, width):
-    """Split ``text`` into pieces that each fit ``width`` terminal cells."""
+    """``text``를 각각 터미널 칸 ``width``에 들어가는 조각으로 나눈다."""
     from prompt_toolkit.utils import get_cwidth
 
     width = max(1, width)
@@ -203,49 +199,49 @@ def _event_style(kind, text):
 
 
 class DashboardUI:
-    """Fixed status panels, an event list and a command line (spec section 6).
+    """고정 상태 패널, 이벤트 목록, 명령 줄(스펙 6절).
 
-    ``event``/``transition``/``alert`` append a time-stamped entry and ask for
-    a redraw; ``periodic`` is ignored (the panels show those values);
-    ``update`` swaps in the latest snapshot. ``Application`` coalesces the
-    redraw requests (``min_redraw_interval``) and redraws on its own every
-    ``refresh_interval`` so the "수신 없음 N.Ns" age keeps moving.
+    ``event``/``transition``/``alert``는 시각을 붙인 항목을 넣고 redraw를
+    요청한다. ``periodic``은 무시한다(그 값은 패널이 보여준다). ``update``는
+    최신 snapshot으로 바꿔 넣는다. ``Application``이 redraw 요청을 묶고
+    (``min_redraw_interval``) ``refresh_interval``마다 스스로 다시 그려서
+    "수신 없음 N.Ns" 경과 시간이 계속 움직인다.
 
-    Once the dashboard is gone (``after_run`` or a failed start) every output
-    method forwards to a ``ConsoleUI``, so later lines reach the terminal.
+    대시보드가 사라지면(``after_run`` 또는 시작 실패) 모든 출력 메서드가
+    ``ConsoleUI``로 넘긴다. 그래서 이후 줄도 터미널에 나온다.
     """
 
     def __init__(self, help_lines=(), *, input=None, output=None, clock=time.monotonic,
                  snapshot_provider=None, input_end_hold=None, fault_handler=None):
-        # prompt_toolkit (and the dashboard view, which needs it) load here.
+        # prompt_toolkit(과 그것이 필요한 대시보드 view)은 여기서 불러온다.
         from ground import dashboard_view
 
         self._view = dashboard_view
         self._snapshot_provider = snapshot_provider
         self._input_end_hold = input_end_hold
         self._fault_handler = fault_handler
-        self._fault = None   # first internal dashboard error (see _report_fault)
+        self._fault = None   # 첫 대시보드 내부 오류(_report_fault 참고)
         self._help_lines = list(help_lines)
         self._input = input
         self._output = output
         self._clock = clock
-        self._lock = threading.Lock()        # leaf lock: events, snapshot, rate
-        self._print_lock = threading.Lock()  # keeps after_run output in order
+        self._lock = threading.Lock()        # leaf lock: 이벤트, snapshot, 속도
+        self._print_lock = threading.Lock()  # after_run 출력 순서를 지킨다
         self._events = collections.deque(maxlen=EVENT_HISTORY)
         self._snap = {}
         self._packets = 0
         self._rate = dashboard_view.LinkRateTracker()
         self._rate_time = None
         self._link_hz = None
-        self._console = None   # ConsoleUI once the dashboard is gone
-        self._ended = False    # a safety callback (on_interrupt/on_eof) has run
+        self._console = None   # 대시보드가 사라진 뒤의 ConsoleUI
+        self._ended = False    # 안전 callback(on_interrupt/on_eof)이 실행됨
         self._app = None
         self._textarea = None
-        self._panel_cache = None    # (render_counter, rows) for one frame
+        self._panel_cache = None    # 한 프레임의 (render_counter, rows)
         self._drawn_panel = []
         self._drawn_events = []
 
-    # --- output methods (any thread; never block, never raise) -------------
+    # --- 출력 메서드(아무 스레드. 막히지 않고 예외를 내지 않는다) -------------
     def event(self, text):
         self._add("event", "event", text)
 
@@ -256,14 +252,14 @@ class DashboardUI:
         self._add("alert", "alert", text)
 
     def periodic(self, text):
-        """[STATUS]/[DIAG]/[AUTO-LAND]/[AXIS]/[TH]: the panels show these values."""
+        """[STATUS]/[DIAG]/[AUTO-LAND]/[AXIS]/[TH]: 이 값들은 패널이 보여준다."""
         console = self._console
         if console is not None:
             with self._print_lock:
                 console.periodic(text)
 
     def update(self, snap):
-        """Latest station snapshot; called once per telemetry packet, valid or malformed."""
+        """최신 지상국 snapshot. 텔레메트리 패킷마다 한 번 불린다(유효하든 깨졌든)."""
         try:
             console = self._console
             if console is not None:
@@ -275,20 +271,20 @@ class DashboardUI:
             _report_ui_failure("update", error)
 
     def set_snapshot_provider(self, provider):
-        """Station ``snapshot`` function, pulled on every redraw (event-loop thread)."""
+        """지상국 ``snapshot`` 함수. redraw마다 가져온다(event-loop 스레드)."""
         self._snapshot_provider = provider
 
     def set_fault_handler(self, handler):
-        """Station callback ``handler(error)`` for an internal dashboard error.
+        """대시보드 내부 오류용 지상국 callback ``handler(error)``.
 
-        Called once, before any diagnostic output, from the thread that saw
-        the error. It must make the station safe without treating the error
-        as an operator stop (the station latches a fault and stops RC).
+        오류를 본 스레드에서 진단 출력보다 먼저 한 번 불린다. 오류를 운용자
+        정지로 다루지 않고 지상국을 안전하게 해야 한다(지상국은 fault를 latch하고
+        RC를 멈춘다).
         """
         self._fault_handler = handler
 
     def _report_fault(self, error):
-        """First internal error: the station's fault handler, exactly once; never raises."""
+        """첫 내부 오류: 지상국 fault handler를 정확히 한 번 부른다. 예외를 내지 않는다."""
         if self._fault is not None:
             return
         self._fault = error
@@ -313,12 +309,12 @@ class DashboardUI:
                 self._rate_time = now
 
     def _pull_snapshot(self):
-        """Refresh tick (event-loop thread): read the station state itself.
+        """refresh tick(event-loop 스레드): 지상국 상태를 직접 읽는다.
 
-        Local safety changes (disarm, RC stop on link loss, a worker fault)
-        happen without a datagram, so no update() follows them. The provider
-        takes telem_lock; it is called here with no UI lock held, and never
-        from an output method (their callers may hold telem_lock).
+        로컬 안전 변화(disarm, 링크 손실 때 RC 정지, worker fault)는 datagram 없이
+        일어나므로 뒤따르는 update()가 없다. provider는 telem_lock을 잡는다. 여기서는
+        UI 잠금 없이 부르고, 출력 메서드에서는 부르지 않는다(그 호출자가
+        telem_lock을 잡고 있을 수 있다).
         """
         provider = self._snapshot_provider
         if provider is None:
@@ -326,7 +322,7 @@ class DashboardUI:
         try:
             snap = provider()
         except Exception:
-            return  # keep the last snapshot; the panels show its age
+            return  # 마지막 snapshot을 유지한다. 패널이 경과 시간을 보여준다
         self._store_snapshot(snap)
 
     def _add(self, method, kind, text):
@@ -350,9 +346,9 @@ class DashboardUI:
     def _invalidate(self):
         app = self._app
         if app is not None:
-            app.invalidate()  # thread safe; returns at once
+            app.invalidate()  # thread safe. 바로 돌아온다
 
-    # --- state copies for drawing and tests --------------------------------
+    # --- 그리기와 시험용 상태 사본 --------------------------------
     @property
     def running(self):
         app = self._app
@@ -372,13 +368,13 @@ class DashboardUI:
         rows = list(self._drawn_panel) + list(self._drawn_events)
         return "\n".join("".join(text for _style, text in row) for row in rows)
 
-    # --- drawing (event-loop thread only) ----------------------------------
+    # --- 그리기(event-loop 스레드 전용) ----------------------------------
     def _size(self):
         size = self._app.output.get_size()
         return max(1, size.columns), max(1, size.rows)
 
     def _panel_rows(self):
-        """Top bar + panels for this frame; cached per render."""
+        """이 프레임의 상단 바 + 패널. render마다 캐시한다."""
         app = self._app
         counter = getattr(app, "render_counter", None)
         cached = self._panel_cache
@@ -387,8 +383,8 @@ class DashboardUI:
         self._pull_snapshot()
         try:
             width, height = self._size()
-            # compact layout is decided on the whole terminal (80x24 rule);
-            # the event title, one event row and the input line stay visible.
+            # compact 배치는 터미널 전체 크기로 정한다(80x24 규칙).
+            # 이벤트 제목, 이벤트 한 행, 입력 줄은 계속 보인다.
             rows = self._view.render(self._draw_snapshot(), width, height, time.monotonic())
             rows = rows[:max(0, height - _FIXED_ROWS - _MIN_EVENT_ROWS)]
         except Exception as error:
@@ -443,7 +439,7 @@ class DashboardUI:
             fragments.extend(row)
         return fragments
 
-    # --- the application ---------------------------------------------------
+    # --- application ---------------------------------------------------
     def _build_app(self, input_handler, on_interrupt, on_eof):
         from prompt_toolkit.application import Application
         from prompt_toolkit.application.current import get_app_session
@@ -465,7 +461,7 @@ class DashboardUI:
                     self._end(app_ref[0], "on_interrupt", on_interrupt)
                 except Exception as error:
                     self.event(f"[STDIN] 명령 처리 오류: {type(error).__name__}: {error}")
-            return False  # clear the line (it stays in the history)
+            return False  # 줄을 비운다(기록에는 남는다)
 
         textarea = TextArea(
             prompt="> ", multiline=False, wrap_lines=False,
@@ -528,38 +524,36 @@ class DashboardUI:
         return app
 
     def _run_safety(self, name, callback):
-        """Run the first safety callback (on_interrupt/on_eof) exactly once."""
+        """첫 안전 callback(on_interrupt/on_eof)을 정확히 한 번 실행한다."""
         if not self._ended:
             self._ended = True
             ConsoleUI._call_safely(name, callback)
 
     def _end(self, app, name, callback):
-        """Ctrl+C / Ctrl+D: the safety callback first, then leave the app."""
+        """Ctrl+C / Ctrl+D: 안전 callback을 먼저 하고 app을 나간다."""
         self._run_safety(name, callback)
         try:
             app.exit()
         except Exception:
-            pass  # already exiting
+            pass  # 이미 나가는 중
 
     def run(self, input_handler, on_interrupt, on_eof):
-        """Run the dashboard until Ctrl+C / Ctrl+D; never raises.
+        """Ctrl+C / Ctrl+D까지 대시보드를 돌린다. 예외를 내지 않는다.
 
-        Same contract as ``ConsoleUI.run``: Ctrl+C -> ``on_interrupt()``,
-        Ctrl+D -> ``on_eof()``; any other end of the input (closed input,
-        an error inside the application) runs ``on_eof()`` first and then
-        reports. A command that raises is reported as an event. A Ctrl+C
-        that arrives while the dashboard is still being built (or after it
-        has let go of the keys) also runs ``on_interrupt()``. An internal
-        error (an exception in the event loop, a failing redraw) is not a
-        stop request: the fault handler runs first, then the run continues
-        as a line console until Ctrl+C/Ctrl+D.
+        ``ConsoleUI.run``과 같은 계약: Ctrl+C -> ``on_interrupt()``,
+        Ctrl+D -> ``on_eof()``. 입력이 다른 식으로 끝나면(입력 닫힘,
+        application 안의 오류) ``on_eof()``를 먼저 하고 보고한다. 예외를 낸
+        명령은 이벤트로 보고한다. 대시보드를 아직 만드는 중에(또는 키를 놓은
+        뒤에) 온 Ctrl+C도 ``on_interrupt()``를 실행한다. 내부 오류(event loop
+        안의 예외, 실패한 redraw)는 정지 요청이 아니다: fault handler를 먼저
+        실행하고, 그 뒤 Ctrl+C/Ctrl+D까지 줄 콘솔로 계속된다.
         """
         try:
             self._run(input_handler, on_interrupt, on_eof)
         except KeyboardInterrupt:
             # 키 바인딩이 Ctrl+C를 받기 전(대시보드 구성 중·시작 직전) 또는 그 뒤
             self._run_safety("on_interrupt", on_interrupt)
-        except BaseException as error:  # noqa: BLE001 - run() must not raise
+        except BaseException as error:  # noqa: BLE001 - run()은 예외를 내면 안 된다
             self._report_fault(error)
             self._continue_on_console(error, input_handler, on_interrupt, on_eof)
 
@@ -590,7 +584,7 @@ class DashboardUI:
         except EOFError:
             # 입력이 닫혔다: on_eof는 닫힘을 본 순간 이미 돌았다(아래가 예비)
             input_closed = True
-        except BaseException as caught:  # noqa: BLE001 - run() must not raise
+        except BaseException as caught:  # noqa: BLE001 - run()은 예외를 내면 안 된다
             error = caught
         finally:
             self._app = None
@@ -608,7 +602,7 @@ class DashboardUI:
             self._switch_to_console()._hold_after_input_end(on_interrupt)
 
     def _install_loop_exception_handler(self, app):
-        """pre_run (inside the running loop): route loop exceptions to the fault path."""
+        """pre_run(돌고 있는 루프 안): 루프 예외를 fault 경로로 보낸다."""
         import asyncio
 
         asyncio.get_running_loop().set_exception_handler(
@@ -616,9 +610,9 @@ class DashboardUI:
         )
 
     def _on_loop_exception(self, app, context):
-        """Event-loop exception: the station's fault handler first, then leave the app.
+        """event-loop 예외: 지상국 fault handler를 먼저 하고 app을 나간다.
 
-        Never raises. Not an operator stop: no on_interrupt/on_eof here.
+        예외를 내지 않는다. 운용자 정지가 아니므로 여기서는 on_interrupt/on_eof가 없다.
         """
         try:
             exception = context.get("exception")
@@ -628,12 +622,12 @@ class DashboardUI:
             try:
                 app.exit()
             except Exception:
-                pass  # already exiting
+                pass  # 이미 나가는 중
         except Exception as error:
             _report_ui_failure("event loop", error)
 
     def _continue_on_console(self, error, input_handler, on_interrupt, on_eof):
-        """After an internal error: diagnostic, then the line console until Ctrl+C/Ctrl+D."""
+        """내부 오류 뒤: 진단을 내고, Ctrl+C/Ctrl+D까지 줄 콘솔로 간다."""
         console = self._switch_to_console()
         console.event(
             f"[WARN] 대시보드 오류: {type(error).__name__}: {error} - 줄 출력으로 계속"
@@ -641,13 +635,12 @@ class DashboardUI:
         console.run(input_handler, on_interrupt, on_eof)
 
     def interrupt(self):
-        """Ctrl+C request from a signal handler (SIGTERM); never raises, never blocks.
+        """signal handler(SIGTERM)에서 온 Ctrl+C 요청. 예외를 내지 않고 막히지 않는다.
 
-        Returns True when the running dashboard takes the request: it is
-        handed to the event loop as the SIGINT key, so the usual Ctrl+C
-        binding runs the safety callback and leaves the app. Returns False
-        when no dashboard loop is running; the caller then raises
-        KeyboardInterrupt, which ``run`` turns into ``on_interrupt()``.
+        돌고 있는 대시보드가 요청을 받으면 True: 요청은 SIGINT 키로 event loop에
+        넘어가므로, 보통의 Ctrl+C 바인딩이 안전 callback을 실행하고 app을 나간다.
+        대시보드 루프가 돌고 있지 않으면 False: 그러면 호출한 쪽이
+        KeyboardInterrupt를 내고, ``run``이 이것을 ``on_interrupt()``로 바꾼다.
         """
         try:
             app = self._app
@@ -660,7 +653,7 @@ class DashboardUI:
             return False
 
     def after_run(self):
-        """Dashboard closed: print the event list; later output goes to a ConsoleUI."""
+        """대시보드 닫힘: 이벤트 목록을 출력한다. 이후 출력은 ConsoleUI로 간다."""
         console = self._console
         if console is not None:
             console.after_run()
@@ -668,7 +661,7 @@ class DashboardUI:
         self._switch_to_console()
 
     def _switch_to_console(self):
-        """Print the buffered event list, then forward every output method."""
+        """쌓아 둔 이벤트 목록을 출력하고, 이후 모든 출력 메서드를 넘긴다."""
         console = ConsoleUI(input_end_hold=self._input_end_hold)
         try:
             with self._print_lock:
@@ -686,10 +679,10 @@ class DashboardUI:
 
 
 class _InputClosedWatch:
-    """prompt_toolkit input wrapper: calls ``on_closed`` when ``closed`` is first seen True.
+    """prompt_toolkit 입력 wrapper: ``closed``가 처음 True로 보이면 ``on_closed``를 부른다.
 
-    prompt_toolkit checks ``input.closed`` right after reading the keys and,
-    when it is True, ends the app with EOFError after one last redraw.
+    prompt_toolkit은 키를 읽은 직후 ``input.closed``를 확인하고, True이면
+    마지막 redraw 한 번 뒤 EOFError로 app을 끝낸다.
     """
 
     def __init__(self, inner, on_closed):
@@ -709,10 +702,10 @@ class _InputClosedWatch:
 
 def make_ui(args, isatty=None, *, help_lines=(), snapshot_provider=None,
             input_end_hold=None):
-    """Dashboard on a terminal; ``ConsoleUI`` for --plain, pipes and no prompt_toolkit.
+    """터미널이면 대시보드. --plain, 파이프, prompt_toolkit 없음이면 ``ConsoleUI``.
 
-    ``snapshot_provider`` is pulled by the dashboard on its redraw;
-    ``input_end_hold`` keeps a run going after the input ends (--listen).
+    ``snapshot_provider``는 대시보드가 redraw 때 가져온다.
+    ``input_end_hold``는 입력이 끝난 뒤에도 실행을 이어 간다(--listen).
     """
     if getattr(args, "plain", False):
         return ConsoleUI(input_end_hold=input_end_hold)
@@ -729,7 +722,7 @@ def make_ui(args, isatty=None, *, help_lines=(), snapshot_provider=None,
         if importlib.util.find_spec("prompt_toolkit") is None:
             raise ImportError("prompt_toolkit")
         return DashboardUI(help_lines=help_lines, snapshot_provider=snapshot_provider,
-                           input_end_hold=input_end_hold)  # fault handler: main() sets it
+                           input_end_hold=input_end_hold)  # fault handler: main()이 설정한다
     except (ImportError, ValueError):
         console = ConsoleUI(input_end_hold=input_end_hold)
         console.event("[WARN] prompt_toolkit 없음 - 줄 출력으로 실행")

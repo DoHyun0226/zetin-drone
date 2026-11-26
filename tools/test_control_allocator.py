@@ -8,11 +8,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_TEST_DIR = REPO_ROOT / "tools" / "native_tests"
-SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "dual_imu_cascade_pwm"
+SKETCH_DIR = REPO_ROOT / "firmware" / "flight" / "zetin_fc"
 
 
 class ControlAllocatorTest(unittest.TestCase):
-    """Compile and run the pure priority-control allocator at ESP32-width."""
+    """순수 priority-control allocator 를 ESP32 폭으로 컴파일해 실행한다."""
 
     def test_control_allocator(self):
         compiler = shutil.which("g++")
@@ -44,6 +44,7 @@ class ControlAllocatorTest(unittest.TestCase):
             compile_command = [
                 compiler, "-std=c++17", "-O0", "-g", "-Wall", "-m32",
                 "-I", str(SKETCH_DIR),
+                "-I", str(SKETCH_DIR / "logic"),
                 str(NATIVE_TEST_DIR / "test_control_allocator.cpp"),
                 "-o", str(executable),
             ]

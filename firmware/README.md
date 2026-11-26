@@ -1,33 +1,27 @@
 # Firmware
 
-주력은 **ESP32-S3 + 듀얼 ICM42670 + PWM 제어**다. BMM350 자기계는 선택적
-yaw 융합에, 3901-L0X 거리·광류 센서는 기록에 사용한다. 전체 스케치의
-지원 상태는 [펌웨어 카탈로그](../docs/firmware_catalog.md)에서 확인한다.
-[`archive/`](archive/README.md)는 역사 보존 영역이며 빌드 지원 대상이 아니다.
+비행 펌웨어는 [`flight/zetin_fc/`](flight/zetin_fc/) 하나다. **ESP32-S3 + 듀얼 ICM42670 +
+BMM350 + 3901-L0X + PWM ESC**. 전체 스케치의 지원 상태는
+[펌웨어 카탈로그](../docs/firmware_catalog.md)에서 확인한다. [`archive/`](archive/README.md)는
+역사 보존 영역이며 빌드 지원 대상이 아니다.
 
-## 비행 펌웨어 선택
+## 비행 펌웨어
 
-- [`flight/dual_imu_cascade_pwm/`](flight/dual_imu_cascade_pwm/): 듀얼
-  ICM42670, 바깥쪽 자세 루프와 안쪽 각속도 루프, 4채널 PWM을 사용하는
-  주력 비행 제어 경로. 실비행 기록은 있지만 반복 가능한 안정 비행과
-  자동착륙의 실기 검증 완료를 뜻하지 않는다. 운용은
-  [전원 인가·벤치 절차](../docs/power_on_bench_procedure.md)를 따른다.
-- [`flight/dual_imu_cascade_flow_hold/`](flight/dual_imu_cascade_flow_hold/):
-  주력 스케치의 복사본에 3901-L0X 광류 보정(`flowcal`), 광류 위치 유지(`poshold`),
-  거리계 고도 유지(`althold`)를 더한 **실험 후보**다. 2026-10-30 테더 비행에서 위치
-  유지가 제동 방향으로 동작함을 확인했다(튜닝 진행 중). 공유 헤더 6개는 주력과 바이트
-  동일해야 한다 (`tools/test_flow_hold_sketch.py`). 미보정이면 `poshold` 를 거부한다.
-  주력과 달리 **부팅 때 IMU 정지 보정을 하지 않고 저장값**(NVS, 없으면 컴파일 값)을
-  쓴다. 다시 재려면 바닥에 가만히 둔 채 지상국에서 `imucal` 을 보낸다(2 s, NVS 저장).
-  텔레메트리는
-  주력 75필드 뒤에 16필드를 더 보낸다. 설계와 벤치 순서는
-  [계획](../docs/superpowers/plans/2026-10-29-flow-position-hold.md).
-- [`flight/dual_imu_flix_quat_pwm/`](flight/dual_imu_flix_quat_pwm/):
-  [flix](https://github.com/okalachev/flix) 아키텍처 기반 쿼터니언 자세
-  추정·SI 단위 캐스케이드 제어 **보류 후보**다. 빌드 매트릭스에는 포함되지만
-  현행 지상국의 `rcr` 명령·자동착륙·확장 텔레메트리를 지원하지 않는다.
-  게인 단위와 yaw 부호도 다르다. 호환성 범위와 벤치 검증 절차는
-  [해당 README](flight/dual_imu_flix_quat_pwm/README.md) 참조.
+[`flight/zetin_fc/`](flight/zetin_fc/): 듀얼 ICM42670 융합, 바깥 자세 루프와 안쪽 각속도
+루프(캐스케이드 PID), 축 우선순위 믹서, 자기계 yaw 융합, 3901-L0X 광류 보정(`flowcal`)·위치
+유지(`poshold`)·거리계 고도 유지(`althold`), RC 상실 자동착륙(시간 기반, 그리고 기본 OFF 인 거리
+기반 `rangeland`). 실비행·테더 비행 기록은 있지만 반복 가능한 안정 비행과 자동착륙의 실기 검증
+완료를 뜻하지 않는다. 운용은 [전원 인가·벤치 절차](../docs/power_on_bench_procedure.md)를 따른다.
+파일 구성과 수정 전 검증 방법은 [zetin_fc 안내](flight/zetin_fc/README.md)에 있다.
+
+- **부팅 때 IMU 정지 보정을 하지 않고 저장값**(NVS, 없으면 컴파일 값)을 쓴다. 다시 재려면
+  바닥에 가만히 둔 채 지상국에서 `imucal` 을 보낸다(2 s, NVS 저장).
+- 광류 미보정이면 `poshold` 를 거부한다. 텔레메트리는 97필드다.
+
+2026-11-13 옛 주력 [`dual_imu_cascade_pwm`](archive/legacy_flight/dual_imu_cascade_pwm/)(광류 기능이
+없는 같은 계열)과 flix 쿼터니언 보류 후보
+[`dual_imu_flix_quat_pwm`](archive/legacy_flight/dual_imu_flix_quat_pwm/)은 `archive/legacy_flight` 로
+옮겼다. 옛 로그(75필드)는 지상국이 계속 읽는다.
 
 핀 배치: 모터 FL/RR/FR/RL = GPIO 4/5/6/7, SPI SCK/MISO/MOSI =
 GPIO 12/13/11, IMU1/IMU2 CS = GPIO 10/9.
@@ -82,7 +76,7 @@ GPIO 12/13/11, IMU1/IMU2 CS = GPIO 10/9.
 Arduino CLI를 사용한다. 의존성과 버전의 기준은
 [CI 워크플로](../.github/workflows/ci.yml)의 `firmware` 잡이다.
 `ICM42670P`는 비행·IMU 진단에, `ESP32Servo`는 `motor_pwm_bench`에 필요하다.
-주력 스케치는 자기계 융합을 끄더라도 `DFRobot_BMM350`을 빌드 의존성으로
+비행 펌웨어는 자기계 융합을 끄더라도 `DFRobot_BMM350`을 빌드 의존성으로
 요구한다. CI와 같은 설치 절차는 다음과 같다:
 
 ```bash
@@ -98,7 +92,7 @@ arduino-cli lib install --git-url https://github.com/DFRobot/DFRobot_BMM350.git
 저장소 루트에서 빌드한다. 빌드 산출물은 저장소 밖 `/tmp`에 둔다:
 
 ```bash
-sketch=firmware/flight/dual_imu_cascade_pwm
+sketch=firmware/flight/zetin_fc
 name=$(basename "$sketch")
 arduino-cli compile --warnings all \
   --fqbn esp32:esp32:esp32s3 \
@@ -106,7 +100,7 @@ arduino-cli compile --warnings all \
   "$sketch"
 ```
 
-진단과 보류 후보도 `sketch` 경로를 바꿔 같은 방식으로 빌드한다. CI는
+진단 스케치도 `sketch` 경로를 바꿔 같은 방식으로 빌드한다. CI는
 `flight/`와 `diagnostics/`를 컴파일하고 `archive/`는 제외한다. 컴파일 성공은
 핀 연결, ESC 동작, 통신, 비행을 검증한 결과와 구분한다.
 

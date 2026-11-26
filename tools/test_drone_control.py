@@ -1,4 +1,4 @@
-"""Tests for the scripts/drone_control.py control-station entry point."""
+"""scripts/drone_control.py 조종 스테이션 진입점 시험."""
 
 import contextlib
 import io
@@ -41,7 +41,7 @@ class DroneControlTest(unittest.TestCase):
         self.addCleanup(sys.modules.pop, STATION, None)
 
     def _main_without_station(self, argv):
-        """Run drone_control.main and fail the test if it touches the station."""
+        """drone_control.main 을 실행하고, 스테이션을 건드리면 시험을 실패시킨다."""
         with (
             mock.patch.object(socket, "socket") as make_socket,
             mock.patch.object(Path, "open") as path_open,

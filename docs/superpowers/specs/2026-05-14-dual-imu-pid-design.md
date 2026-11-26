@@ -2,9 +2,9 @@
 
 > 과거 문서: 이 문서는 대체된 듀얼 IMU PID 반복 작업을 설명한다.
 > 현행 비행 제어 후보:
-> [`dual_imu_cascade_pwm`](../../firmware/flight/dual_imu_cascade_pwm/).
+> [`dual_imu_cascade_pwm`](../../../firmware/archive/legacy_flight/dual_imu_cascade_pwm/).
 > 보관된 결과물:
-> [`dual_imu_pid_pwm`](../../firmware/archive/legacy_flight/dual_imu_pid_pwm/).
+> [`dual_imu_pid_pwm`](../../../firmware/archive/legacy_flight/dual_imu_pid_pwm/).
 
 **날짜:** 2026-05-14
 **상태:** 승인됨, 구현 계획 준비 완료

@@ -1,6 +1,6 @@
 # BMM350 Yaw 융합 — HW 벤치 테스트 절차
 
-[주력 `dual_imu_cascade_pwm`](../firmware/flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)의 BMM350 yaw 융합 대상.
+[옛 주력 `dual_imu_cascade_pwm`](../firmware/archive/legacy_flight/dual_imu_cascade_pwm/dual_imu_cascade_pwm.ino)의 BMM350 yaw 융합 대상.
 SIL은 융합 수학만 검증한다. 이 절차가 실센서·실간섭을 검증한다.
 
 ## 현재 절차와 과거 기록의 경계

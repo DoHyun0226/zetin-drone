@@ -1,4 +1,4 @@
-"""Tests for the scripts/drone_logs.py log-analysis entry point."""
+"""scripts/drone_logs.py 로그 분석 진입점 시험."""
 
 import csv
 import os
