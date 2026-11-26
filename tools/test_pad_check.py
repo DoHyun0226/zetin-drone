@@ -1,4 +1,4 @@
-"""Tests for scripts/ground/pad_check.py (the --pad-check gamepad diagnosis)."""
+"""scripts/ground/pad_check.py(--pad-check 게임패드 진단) 시험."""
 
 import contextlib
 import io
@@ -16,7 +16,7 @@ from ground import pad_check  # noqa: E402
 
 
 class FakeJoystick:
-    """Scripted joystick: each pump() advances one step of the script."""
+    """대본대로 움직이는 joystick. pump() 한 번마다 대본이 한 단계 진행된다."""
 
     def __init__(self, steps, name="Fake Pad"):
         self.steps = steps
@@ -69,7 +69,7 @@ def fake_pygame(joystick, count=1):
 
 
 class FakeTime:
-    """monotonic advances 0.1 s per call; sleep raises after `limit` calls."""
+    """monotonic 은 호출마다 0.1 s 씩 늘고, sleep 은 `limit` 번 호출 뒤 예외를 낸다."""
 
     def __init__(self, limit):
         self.now = 0.0

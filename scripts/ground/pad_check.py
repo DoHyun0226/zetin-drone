@@ -1,17 +1,17 @@
-"""Gamepad axis/button/hat diagnosis for ``drone_control.py --pad-check``.
+"""``drone_control.py --pad-check``용 게임패드 axis/button/hat 진단.
 
-Local only: never opens a socket and sends nothing to the drone. pygame is
-imported inside ``main`` so importing this module has no side effects.
+로컬 전용이다: 소켓을 열지 않고 드론에 아무것도 보내지 않는다. pygame은
+``main`` 안에서 import하므로 이 모듈을 import해도 부작용이 없다.
 
-Default: measure the resting values (first 0.7 s hands off), then print only
-the inputs that change, with their axis/button/hat index:
+기본: 정지 값을 잰 뒤(처음 0.7 s는 손을 뗀다), 바뀌는 입력만
+axis/button/hat 번호와 함께 출력한다:
 
     AXIS  4:  -1.00 -> +1.00
     BUTTON 0:  DOWN / UP
     HAT   0:  (0, 0) -> (0, 1)
 
-``--live`` instead prints every value on one continuously refreshed line
-(the labels there follow the usual DualSense layout; verify the numbers).
+``--live``는 대신 모든 값을 계속 갱신되는 한 줄에 출력한다
+(이름표는 보통의 DualSense 배치를 따른다. 번호는 직접 확인한다).
 """
 
 import argparse

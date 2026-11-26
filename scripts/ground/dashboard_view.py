@@ -1,8 +1,8 @@
-"""Dashboard view model: snapshot -> styled screen lines.
+"""대시보드 view model: snapshot -> 스타일 입힌 화면 줄.
 
-Pure functions only. Importing this module must not touch the control station
-(its import binds the UDP port and opens log files). The value formatters shared
-with the console lines live in ground.status_format (no prompt_toolkit).
+순수 함수만 둔다. 이 모듈을 import해도 지상국에 손대면 안 된다(지상국을
+import하면 UDP 포트를 잡고 로그 파일을 연다). 콘솔 줄과 같이 쓰는 값
+formatter는 ground.status_format에 있다(prompt_toolkit 없음).
 """
 
 import math
@@ -12,6 +12,9 @@ from prompt_toolkit.utils import get_cwidth
 from ground.failsafe_telemetry import (
     FAILSAFE_PHASE_NAMES,
     FAILSAFE_PROBE_STATE_NAMES,
+    LAND_CUT_REASON_NAMES,
+    LAND_MODE_NAMES,
+    LAND_STAGE_NAMES,
     phase_number,
 )
 from ground.status_format import (
@@ -28,7 +31,7 @@ from ground.status_format import (
 )
 from ground.telemetry_schema import active_fault_names
 
-# Same values as control_station.TELEM_TIMEOUT_SEC / TRIM_TOLERANCE.
+# control_station.TELEM_TIMEOUT_SEC / TRIM_TOLERANCE와 같은 값.
 STALE_AFTER_SEC = 1.5
 TRIM_MATCH_TOLERANCE = 0.01
 COMPACT_WIDTH = 80
@@ -36,10 +39,10 @@ COMPACT_HEIGHT = 24
 
 
 # ---------------------------------------------------------------------------
-# Link rate (the snapshot only has counters; the caller feeds this tracker)
+# 링크 속도(snapshot에는 카운터만 있다. 호출한 쪽이 이 tracker에 넣어 준다)
 # ---------------------------------------------------------------------------
 class LinkRateTracker:
-    """Packets/s from successive (time, counter) pairs."""
+    """연속된 (시각, 카운터) 쌍으로 구한 packets/s."""
 
     def __init__(self):
         self._last = None
@@ -56,10 +59,10 @@ class LinkRateTracker:
 
 
 # ---------------------------------------------------------------------------
-# Line building
+# 줄 만들기
 # ---------------------------------------------------------------------------
 def _clip(segments, width):
-    """Cut a row of (style, text) pieces to ``width`` terminal cells."""
+    """(style, text) 조각으로 된 행을 터미널 칸 ``width``에 맞게 자른다."""
     out = []
     used = 0
     for style, text in segments:
@@ -103,7 +106,7 @@ class _Row:
 
 
 def _valid_height(value):
-    """Height_M is -1 when invalid (telemetry_schema); show only real heights."""
+    """Height_M은 무효일 때 -1이다(telemetry_schema). 실제 높이만 보여준다."""
     try:
         numeric = float(value)
     except (TypeError, ValueError):
@@ -127,11 +130,11 @@ def _on_off(value):
 
 
 def _arm_banner(snap, sample, stale):
-    """Firmware armed state (fresh telemetry only), then the local control state.
+    """펌웨어 무장 상태(새 텔레메트리일 때만), 그다음 로컬 제어 상태.
 
-    The local state is the station's own view (``is_armed``); it is always
-    disarmed in --keyboard/--listen, so it must never stand in for the drone.
-    Returns the banner segments and the mismatch text (None when they agree).
+    로컬 상태는 지상국 자신의 판단(``is_armed``)이다. --keyboard/--listen에서는
+    늘 disarm 상태이므로 절대 드론 상태를 대신하면 안 된다.
+    배너 조각과 불일치 문구(둘이 맞으면 None)를 돌려준다.
     """
     firmware = None if stale else phase_number(sample.get("Armed"))
     if firmware == 1:
@@ -206,10 +209,10 @@ def _top_bar(snap, sample, now, stale, age):
 
 
 def render(snap, width, height, now):
-    """Return the top bar and panels as lines of ``(style, text)`` pieces.
+    """상단 바와 패널을 ``(style, text)`` 조각의 줄로 돌려준다.
 
-    ``height`` is the number of rows this view may use; the caller draws the
-    event list and input line below. Takes no locks and never mutates ``snap``.
+    ``height``는 이 view가 쓸 수 있는 행 수다. 이벤트 목록과 입력 줄은 호출한
+    쪽이 아래에 그린다. 잠금을 잡지 않고 ``snap``을 바꾸지 않는다.
     """
     sample = snap.get("last_sample")
     has_sample = isinstance(sample, dict)
@@ -272,7 +275,7 @@ def render(snap, width, height, now):
         for name, motor in zip(("M1 FL", "M2 RR", "M3 FR", "M4 RL"), motors):
             r.kv(name, motor)
         try:
-            # Same definition as the console [DIAG] line: (M1+M2) - (M3+M4).
+            # 콘솔 [DIAG] 줄과 같은 정의: (M1+M2) - (M3+M4).
             cw_ccw = (float(data["Motor_M1"]) + float(data["Motor_M2"])
                       - float(data["Motor_M3"]) - float(data["Motor_M4"]))
             if not math.isfinite(cw_ccw):
@@ -306,9 +309,14 @@ def render(snap, width, height, now):
     r.kv("Faults", faults, "class:alert" if faults != "-" and not stale else None)
     lines.append(r.segments)
 
-    # flow-hold panel (flow firmware only)
+    # 위치 유지 패널(zetin_fc만 해당. 옛 75필드 펌웨어에는 이 필드가 없다)
     if data.get("PosHold_State") is not None:
         r = row("위치")
+        # 거리 기반 자동착륙 스위치. 좁은 화면에서도 잘리지 않게 맨 앞에 둔다. 필드가 없는
+        # 펌웨어는 OFF 로 단정하지 않는다.
+        rangeland = phase_number(data.get("RangeLand_On"))
+        if rangeland is not None:
+            r.kv("RangeLand", "ON" if rangeland else "OFF")
         r.kv("PosHold", _state_name(POSHOLD_STATE_NAMES, data.get("PosHold_State")))
         r.kv("AltHold", _state_name(ALTHOLD_STATE_NAMES, data.get("AltHold_State")))
         r.kv("Vel R/P", f"{_signed(data.get('Flow_Vel_R'), 2)}/"
@@ -316,7 +324,7 @@ def render(snap, width, height, now):
         r.kv("Vz", _signed(data.get("Vz_MS"), 2))
         lines.append(r.segments)
 
-    # failsafe panel: loud while auto-landing
+    # failsafe 패널: 자동착륙 중에는 눈에 띄게
     if in_failsafe:
         name = FAILSAFE_PHASE_NAMES.get(phase, f"UNKNOWN({phase})")
         style = "class:alert"
@@ -331,6 +339,17 @@ def render(snap, width, height, now):
             fr.kv("Resp_G", _format_optional_float(data.get("Failsafe_Probe_Response_G"), 4),
                   style)
         lines.append(fr.segments)
+        # 거리 기반 자동착륙(flow-hold 펌웨어만 보낸다)
+        land_mode = phase_number(data.get("Land_Mode"))
+        if land_mode is not None:
+            lr = _Row(style).label("Land")
+            lr.kv("Mode", _state_name(LAND_MODE_NAMES, land_mode), style)
+            lr.kv("Stage", _state_name(LAND_STAGE_NAMES, data.get("Land_Stage")), style)
+            lr.kv("Ref", _format_optional_float(data.get("Land_Ref_M"), 2), style)
+            reason = phase_number(data.get("Land_Cut_Reason"))
+            if reason:
+                lr.kv("Cut", _state_name(LAND_CUT_REASON_NAMES, reason), style)
+            lines.append(lr.segments)
 
     return [_clip(line, width) for line in lines[:max(0, height)]]
 

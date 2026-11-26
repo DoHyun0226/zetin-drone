@@ -1,4 +1,4 @@
-"""Tests for the control-station output layer (ConsoleUI, DashboardUI, make_ui)."""
+"""조종 스테이션 출력 계층(ConsoleUI, DashboardUI, make_ui) 시험."""
 
 import builtins
 import contextlib
@@ -114,7 +114,7 @@ class ConsoleUITest(unittest.TestCase):
             ConsoleUI().run(handler, lambda: calls.append("interrupt"), lambda: None)
         self.assertEqual(calls, ["interrupt"])
 
-    # --- review round 1: run() contains every failure ---
+    # --- 검토 1차: run() 이 모든 실패를 안에서 막는다 ---
 
     def _run_collecting(self, input_side_effect=None, handler=None, stdin=None):
         calls = []
@@ -151,8 +151,8 @@ class ConsoleUITest(unittest.TestCase):
         self.assertIn("[STDIN] 입력 오류: OSError", out)
 
     def test_input_error_runs_the_safety_callback_before_any_output(self):
-        # stdout blocks until the EOF callback (the conditional disarm) has run;
-        # a write that comes first waits out the timeout and is recorded.
+        # stdout 은 EOF 콜백(조건부 disarm)이 실행될 때까지 막힌다.
+        # 그보다 먼저 온 쓰기는 timeout 까지 기다린 뒤 기록된다.
         disarmed = threading.Event()
         writes = []
 
@@ -214,7 +214,7 @@ class ConsoleUITest(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# DashboardUI (prompt_toolkit) — no real terminal: pipe input + DummyOutput
+# DashboardUI(prompt_toolkit) — 실제 터미널 없이 pipe 입력 + DummyOutput
 # ---------------------------------------------------------------------------
 WAIT_SEC = 3.0
 HELP_LINES = (
@@ -284,7 +284,7 @@ class DashboardUITest(unittest.TestCase):
     def tearDown(self):
         if self.thread is not None and self.thread.is_alive():
             try:
-                self.pipe.send_text("\x03")  # Ctrl+C exits whatever the input line holds
+                self.pipe.send_text("\x03")  # 입력 줄에 무엇이 있든 Ctrl+C 로 종료
             except Exception:
                 pass
             self.thread.join(timeout=WAIT_SEC)
@@ -362,9 +362,9 @@ class DashboardUITest(unittest.TestCase):
         self.assertEqual(self.handled, [])
 
     def test_closed_input_runs_the_eof_safety_before_teardown_output(self):
-        # Output blocks once the input has been seen closed, until the EOF
-        # callback (the conditional disarm) has run; every such write records
-        # whether the safety callback came first.
+        # 입력이 닫힌 것을 본 뒤부터 EOF 콜백(조건부 disarm)이 실행될 때까지
+        # 출력은 막힌다. 그동안의 쓰기는 모두 안전 콜백이 먼저 실행됐는지를
+        # 기록한다.
         from prompt_toolkit.output import DummyOutput
 
         disarmed = threading.Event()
@@ -560,10 +560,10 @@ class DashboardUITest(unittest.TestCase):
             self.ui.periodic("[STATUS] x")
         self.assertIn("synthetic redraw failure", err.getvalue())
 
-    # --- final review: interrupts, loop errors, snapshot pull, listen hold ---
+    # --- 최종 검토: interrupt, 루프 오류, snapshot pull, listen hold ---
 
     def _run_catching_interrupt(self, ui, *, on_eof=None):
-        """ui.run on this thread; a KeyboardInterrupt escaping it is a failure."""
+        """이 스레드에서 ui.run 을 실행한다. KeyboardInterrupt 가 밖으로 새면 실패다."""
         try:
             ui.run(self.handled.append,
                    lambda: self.calls.append("interrupt"),
@@ -589,13 +589,13 @@ class DashboardUITest(unittest.TestCase):
             self._run_catching_interrupt(self.ui)
         self.assertEqual(self.calls, ["interrupt"])
 
-    # Amendment (finding 2): an internal dashboard error is a fault, not an
-    # operator stop. The station's fault handler runs first (latch, RC stop,
-    # no disarm), then the UI falls back to line output and keeps running
-    # until the operator presses Ctrl+C.
+    # 수정안(finding 2): 대시보드 내부 오류는 운용자 정지가 아니라 fault 다.
+    # 스테이션의 fault handler 가 먼저 실행되고(latch, RC 정지,
+    # disarm 없음), 그다음 UI 는 줄 출력으로 넘어가 운용자가 Ctrl+C 를
+    # 누를 때까지 계속 돈다.
 
     def _run_fault_fallback(self, trigger, output=None):
-        """Start the dashboard, call ``trigger(app)``, then drive the fallback console."""
+        """대시보드를 띄우고 ``trigger(app)`` 를 부른 뒤 fallback 콘솔을 조작한다."""
         faults = []
         seen_at_fault = []
         console_lines = []
@@ -610,7 +610,7 @@ class DashboardUITest(unittest.TestCase):
             input_started.set()
             if not release_input.wait(timeout=WAIT_SEC):
                 raise AssertionError("fallback input was never released")
-            raise KeyboardInterrupt   # the operator's Ctrl+C on the line console
+            raise KeyboardInterrupt   # 줄 콘솔에서 운용자가 누른 Ctrl+C
 
         self.ui = DashboardUI(input=self.pipe, output=output or self._dummy_output())
         self.ui.set_fault_handler(on_fault)
@@ -632,12 +632,12 @@ class DashboardUITest(unittest.TestCase):
             self.assertTrue(_wait_until(lambda: self.ui._app.render_counter > 0))
             trigger(self.ui._app)
             self.assertTrue(input_started.wait(timeout=WAIT_SEC), "no console fallback")
-            self.assertEqual(self.calls, [])   # no on_interrupt / on_eof (no disarm)
+            self.assertEqual(self.calls, [])   # on_interrupt / on_eof 없음(disarm 없음)
             self.ui.event("[WARN] after the fallback")
             console_lines.append(out.getvalue())
             release_input.set()
             self._join()
-        self.assertEqual(self.calls, ["interrupt"])   # only the operator's Ctrl+C
+        self.assertEqual(self.calls, ["interrupt"])   # 운용자의 Ctrl+C 뿐
         self.assertNotIn("Press ENTER", err.getvalue())
         return faults, seen_at_fault, console_lines[0]
 
@@ -680,8 +680,8 @@ class DashboardUITest(unittest.TestCase):
         self.assertIn("[WARN] after the fallback", console)
 
     def test_interrupt_request_ends_the_running_dashboard_like_ctrl_c(self):
-        # SIGTERM path: the signal handler asks the running dashboard to stop.
-        self.assertFalse(self.ui.interrupt())  # not running yet: caller raises instead
+        # SIGTERM 경로: signal handler 가 실행 중인 대시보드에 정지를 요청한다.
+        self.assertFalse(self.ui.interrupt())  # 아직 실행 전: 대신 호출자가 예외를 낸다
         self._start()
         self.assertTrue(self.ui.interrupt())
         self._join()
@@ -699,13 +699,13 @@ class DashboardUITest(unittest.TestCase):
         self.ui.set_snapshot_provider(provider)
         self._start()
         self.assertTrue(_wait_until(lambda: pulls))
-        # a station-side change with no update() call reaches the panels
+        # update() 호출 없이 바뀐 스테이션 쪽 상태도 패널에 반영된다
         state.update(is_streaming=False, worker_fault="telemetry")
         self.assertTrue(_wait_until(
             lambda: self.ui._draw_snapshot().get("worker_fault") == "telemetry"
         ))
         self.assertTrue(_wait_until(lambda: "수신 스레드 오류" in self.ui._drawn_text()))
-        # pulled only from the app's own thread, never from the caller of update()
+        # app 자신의 스레드에서만 가져오고, update() 호출자 쪽에서는 가져오지 않는다
         self.assertEqual({t.name for t in pulls}, {self.thread.name})
 
     def test_output_methods_never_call_the_snapshot_provider(self):
@@ -723,7 +723,7 @@ class DashboardUITest(unittest.TestCase):
         self.assertEqual(err.getvalue(), "")
 
     def test_closed_input_with_a_reception_hold_keeps_running_until_interrupt(self):
-        # --listen: a closed terminal input must not end reception.
+        # --listen: 터미널 입력이 닫혀도 수신이 끝나면 안 된다.
         held = threading.Event()
         released = threading.Event()
 
@@ -766,14 +766,14 @@ class DashboardUITest(unittest.TestCase):
 
 
 class ConsoleHoldTest(unittest.TestCase):
-    """--listen with a closed or non-interactive stdin keeps receiving."""
+    """--listen 은 stdin 이 닫혔거나 비대화형이어도 계속 수신한다."""
 
     def test_eof_with_a_hold_waits_and_ends_through_on_interrupt(self):
         calls = []
 
         def hold():
             calls.append("hold")
-            raise KeyboardInterrupt  # SIGINT/SIGTERM while waiting
+            raise KeyboardInterrupt  # 대기 중 SIGINT/SIGTERM
 
         out = io.StringIO()
         with (
@@ -834,8 +834,8 @@ class MakeUITest(unittest.TestCase):
 
 class DashboardStyleContrastTest(unittest.TestCase):
     def test_no_style_uses_bright_black_foreground(self):
-        # ANSI bright black is the background colour in some terminal themes
-        # (kitty, 2026-11-03 bench): labels and event times became invisible.
+        # 일부 터미널 테마에서는 ANSI bright black 이 배경색이다
+        # (kitty, 2026-11-03 벤치). 라벨과 이벤트 시각이 보이지 않았다.
         from ground import station_ui
         for name, rule in station_ui._STYLE_RULES.items():
             with self.subTest(style=name):
@@ -844,8 +844,8 @@ class DashboardStyleContrastTest(unittest.TestCase):
 
 class DashboardEventWrapTest(unittest.TestCase):
     def test_long_event_wraps_instead_of_being_cut(self):
-        # 2026-11-03 bench: the [GAINS] reply ran past the right edge and the
-        # numbers after the edge were never shown.
+        # 2026-11-03 벤치: [GAINS] 응답이 오른쪽 끝을 넘어가
+        # 끝 뒤의 숫자가 표시되지 않았다.
         from prompt_toolkit.utils import get_cwidth
         from ground.station_ui import DashboardUI
         ui = DashboardUI()

@@ -62,6 +62,18 @@ inline uint32_t tick_limit = 0;
 
 struct TaskDelayExit {};
 
+// tools/native_tests/diff_harness 의 lockstep 스케줄러 훅. 기본은 모두 null 이고, 그러면
+// 다른 native 시험이 기대하는 동작 그대로다. sleep_us: 부른 태스크를 가상 시간으로 그만큼
+// 멈춘다(delay, delayMicroseconds, vTaskDelay). sleep_until_tick: 그 1 kHz tick 까지 멈춘다
+// (vTaskDelayUntil). task_created: xTaskCreatePinnedToCore 가 불렸다. ledc_write: 모든
+// ledcWrite 를 부른 순서대로.
+inline void (*lockstep_sleep_us)(uint64_t) = nullptr;
+inline void (*lockstep_sleep_until_tick)(TickType_t) = nullptr;
+inline void (*lockstep_task_created)(TaskFunction_t, const char *) = nullptr;
+inline void (*lockstep_ledc_write)(int, uint32_t) = nullptr;
+// 시리얼에 쓴 글자를 쓴 순간에 넘긴다(차분 하네스가 다른 출력과의 순서를 본다).
+inline void (*on_serial)(const std::string &) = nullptr;
+
 inline void reset() {
   serial_output.clear();
   serial1_rx.clear();
@@ -102,9 +114,13 @@ public:
     std::ostringstream stream;
     stream << value;
     arduino_fake::serial_output += stream.str();
+    if (arduino_fake::on_serial) arduino_fake::on_serial(stream.str());
   }
 
-  void println() { arduino_fake::serial_output.push_back('\n'); }
+  void println() {
+    arduino_fake::serial_output.push_back('\n');
+    if (arduino_fake::on_serial) arduino_fake::on_serial("\n");
+  }
 
   template <typename T>
   void println(const T &value) {
@@ -119,6 +135,9 @@ public:
     arduino_fake::appendFormatted(
         arduino_fake::serial_output, format, arguments);
     va_end(arguments);
+    if (arduino_fake::on_serial) {
+      arduino_fake::on_serial(arduino_fake::serial_output.substr(before));
+    }
     return static_cast<int>(arduino_fake::serial_output.size() - before);
   }
 };
@@ -145,8 +164,12 @@ inline FakeSerial1 Serial1;
 
 inline uint32_t millis() { return arduino_fake::millis_value; }
 inline uint32_t micros() { return arduino_fake::micros_value; }
-inline void delay(uint32_t) {}
-inline void delayMicroseconds(uint32_t) {}
+inline void delay(uint32_t ms) {
+  if (arduino_fake::lockstep_sleep_us) arduino_fake::lockstep_sleep_us(1000ULL * ms);
+}
+inline void delayMicroseconds(uint32_t us) {
+  if (arduino_fake::lockstep_sleep_us) arduino_fake::lockstep_sleep_us(us);
+}
 
 inline void pinMode(int pin, int mode) {
   arduino_fake::pin_mode_by_pin[pin] = mode;
@@ -163,6 +186,7 @@ inline bool ledcAttach(int pin, uint32_t, uint8_t) {
 
 inline bool ledcWrite(int pin, uint32_t duty) {
   arduino_fake::ledc_duty_by_pin[pin] = duty;
+  if (arduino_fake::lockstep_ledc_write) arduino_fake::lockstep_ledc_write(pin, duty);
   return true;
 }
 
@@ -174,8 +198,13 @@ inline TickType_t xTaskGetTickCount() {
   return arduino_fake::tick_count;
 }
 
-inline void vTaskDelayUntil(TickType_t *, TickType_t) {
+inline void vTaskDelayUntil(TickType_t *wake, TickType_t period) {
   using namespace arduino_fake;
+  if (lockstep_sleep_until_tick) {
+    *wake += period;
+    lockstep_sleep_until_tick(*wake);
+    return;
+  }
   if (pre_tick_hook) pre_tick_hook(tick_index);
   const uint64_t elapsed_us =
       static_cast<uint64_t>(micros_value % 1000U) + us_per_tick;
@@ -184,14 +213,19 @@ inline void vTaskDelayUntil(TickType_t *, TickType_t) {
   tick_index++;
   if (tick_limit && tick_index > tick_limit) throw TaskDelayExit{};
 }
-inline void vTaskDelay(TickType_t) {
+inline void vTaskDelay(TickType_t ticks) {
+  if (arduino_fake::lockstep_sleep_us) {
+    arduino_fake::lockstep_sleep_us(1000ULL * ticks);
+    return;
+  }
   if (arduino_fake::stop_on_task_delay) throw arduino_fake::TaskDelayExit{};
 }
 inline void portENTER_CRITICAL(portMUX_TYPE *) {}
 inline void portEXIT_CRITICAL(portMUX_TYPE *) {}
 
 inline BaseType_t xTaskCreatePinnedToCore(
-    TaskFunction_t, const char *, uint32_t, void *, uint32_t, void **,
+    TaskFunction_t task, const char *name, uint32_t, void *, uint32_t, void **,
     BaseType_t) {
+  if (arduino_fake::lockstep_task_created) arduino_fake::lockstep_task_created(task, name);
   return pdPASS;
 }

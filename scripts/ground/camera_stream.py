@@ -1,9 +1,9 @@
-"""Shared logic for the drone camera stream: MJPEG parsing, the recording index
-schema, recording summaries and camera-to-laptop clock alignment.
+"""드론 카메라 스트림 공용 로직: MJPEG 파싱, 녹화 index 스키마,
+녹화 요약, 카메라-노트북 시계 정렬.
 
-Standard library only. ``camera_record.py`` (recording) and ``camera_mp4.py``
-(post-processing) build on this module; the stream format is produced by
-``firmware/camera/esp32cam_stream``.
+표준 라이브러리만 쓴다. ``camera_record.py``(녹화)와 ``camera_mp4.py``
+(후처리)가 이 모듈 위에 있다. 스트림 형식은 ``firmware/camera/esp32cam_stream``이
+만든다.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 
 class StreamFormatError(ValueError):
-    """The byte stream does not follow the multipart/x-mixed-replace format."""
+    """바이트 스트림이 multipart/x-mixed-replace 형식을 따르지 않는다."""
 
 
 @dataclass(frozen=True)
@@ -23,10 +23,10 @@ class StreamPart:
     jpeg: bytes
     capture_s: float | None
     seq: int | None
-    # Value passed to the feed() call in which this part's HEADERS completed.
-    # The recorder passes the receive time here: the camera paces its sends at
-    # the byte-rate cap, so the last byte of a frame arrives up to ~100 ms after
-    # the header. Header arrival keeps that pacing delay out of clock alignment.
+    # 이 part의 HEADERS가 완성된 feed() 호출에 넘긴 값.
+    # 녹화기는 여기에 수신 시각을 넘긴다: 카메라가 byte-rate 상한에 맞춰 보내므로
+    # 프레임의 마지막 바이트는 헤더보다 최대 ~100 ms 늦게 도착한다. 헤더 도착
+    # 시각을 쓰면 그 지연이 시계 정렬에 들어가지 않는다.
     tag: object = None
 
 
@@ -42,9 +42,9 @@ INDEX_FIELDS = (
     "recv_time",
 )
 
-# Largest JPEG part accepted. Far above anything the ESP32-CAM frame buffer can
-# hold (UXGA at high quality is a few hundred kB); a larger Content-Length is a
-# corrupt header, and buffering it would swallow every later frame.
+# 받아들이는 JPEG part의 최대 크기. ESP32-CAM 프레임 버퍼가 담을 수 있는 어떤 것보다
+# 훨씬 크다(고화질 UXGA가 수백 kB). 이보다 큰 Content-Length는 깨진 헤더이고,
+# 그것을 버퍼링하면 뒤따르는 모든 프레임을 삼킨다.
 MAX_JPEG_BYTES = 1_000_000
 
 _BOUNDARY_RE = re.compile(r'boundary\s*=\s*"?([^";\s]+)"?', re.IGNORECASE)
@@ -58,22 +58,20 @@ def boundary_from_content_type(value: str) -> bytes:
 
 
 def format_recv_time(epoch_s: float) -> str:
-    """Same ``HH:MM:SS.mmm`` local-time form as the flight log ``Timestamp`` column."""
+    """비행 로그 ``Timestamp`` 열과 같은 ``HH:MM:SS.mmm`` 지역 시각 형식."""
     return datetime.datetime.fromtimestamp(epoch_s).strftime("%H:%M:%S.%f")[:-3]
 
 
 class MjpegParser:
-    """Incremental parser for the camera's multipart stream.
+    """카메라 multipart 스트림의 점진적 parser.
 
-    Bodies are read by ``Content-Length``, never by searching for the boundary,
-    so JPEG bytes that happen to contain the boundary are kept intact. The bytes
-    right after a body must be the next boundary; anything else means the length
-    lied and raises ``StreamFormatError``.
+    본문은 boundary를 찾지 않고 ``Content-Length``로 읽는다. 그래서 JPEG 바이트에
+    우연히 boundary가 들어 있어도 그대로 남는다. 본문 바로 뒤 바이트는 다음
+    boundary여야 하며, 아니면 길이가 거짓이었다는 뜻이므로 ``StreamFormatError``를 낸다.
 
-    A part is handed out only once that following boundary has been checked (or
-    at ``finish()``), so a part whose length lied is never returned, wherever
-    the chunks happen to split. Parts already checked in the same ``feed()``
-    call are returned first and the error is raised on the next call.
+    part는 뒤따르는 boundary를 확인한 뒤에야(또는 ``finish()``에서) 내준다. 그래서
+    chunk가 어디서 갈리든 길이가 거짓인 part는 돌려주지 않는다. 같은 ``feed()``
+    호출에서 이미 확인된 part를 먼저 돌려주고, 오류는 다음 호출에서 낸다.
     """
 
     _SEEK, _HEADERS, _BODY, _AFTER = range(4)
@@ -99,7 +97,7 @@ class MjpegParser:
             if self._state == self._SEEK:
                 at = self._buf.find(self._open)
                 if at < 0:
-                    # keep a tail that may be the start of a split boundary
+                    # 쪼개진 boundary의 앞부분일 수 있는 꼬리를 남긴다
                     keep = len(self._open) - 1
                     if len(self._buf) > keep:
                         del self._buf[: len(self._buf) - keep]
@@ -127,7 +125,7 @@ class MjpegParser:
                     self._tag,
                 )
                 self._state = self._AFTER
-            else:  # _AFTER: the next boundary must follow immediately
+            else:  # _AFTER: 다음 boundary가 바로 이어져야 한다
                 have = min(len(self._buf), len(self._delim))
                 if bytes(self._buf[:have]) != self._delim[:have]:
                     self._pending = None
@@ -146,10 +144,10 @@ class MjpegParser:
                 self._state = self._HEADERS
 
     def finish(self) -> tuple[list[StreamPart], bool]:
-        """Call when the connection ends.
+        """연결이 끝날 때 부른다.
 
-        Returns the last complete part still waiting for its trailing boundary,
-        and whether an incomplete part was dropped.
+        아직 뒤따르는 boundary를 기다리던 마지막 완전한 part와,
+        불완전한 part를 버렸는지를 돌려준다.
         """
         remaining = [self._pending] if self._pending is not None else []
         truncated = self._state == self._BODY or (self._state == self._HEADERS and len(self._buf) > 0)
@@ -188,7 +186,7 @@ def _optional_float(value):
         number = float(value)
     except ValueError:
         raise StreamFormatError(f"bad X-Timestamp {value!r}") from None
-    if not math.isfinite(number):  # nan / inf would break clock alignment later
+    if not math.isfinite(number):  # nan / inf는 나중에 시계 정렬을 망가뜨린다
         raise StreamFormatError(f"bad X-Timestamp {value!r}")
     return number
 
@@ -208,12 +206,12 @@ class RecordingSummary:
     segments: int
     seq_gaps: int
     effective_fps: float
-    longest_gap_s: float  # longest gap INSIDE a connection segment
-    reconnect_gaps_s: tuple[float, ...]  # last frame of segment k -> first of k+1
+    longest_gap_s: float  # 연결 구간 안에서의 최장 간격
+    reconnect_gaps_s: tuple[float, ...]  # 구간 k의 마지막 프레임 -> k+1의 첫 프레임
 
 
 def _segments(rows):
-    """Rows grouped by segment, in recording order."""
+    """구간별로 묶은 행. 녹화 순서대로."""
     groups: list[list[dict]] = []
     current = None
     for r in rows:
@@ -226,10 +224,10 @@ def _segments(rows):
 
 
 def summarize(rows) -> RecordingSummary:
-    """Summary of a recording index. Values may be CSV strings.
+    """녹화 index 요약. 값은 CSV 문자열일 수 있다.
 
-    Rates and gaps use the monotonic receive clock so a wall-clock jump (NTP)
-    during the recording does not distort them.
+    속도와 간격은 monotonic 수신 시계로 잰다. 그래서 녹화 중 벽시계가 뛰어도(NTP)
+    값이 왜곡되지 않는다.
     """
     groups = _segments(rows)
     seq_gaps = 0
@@ -267,11 +265,10 @@ def _capture(r):
 
 
 def estimate_offsets(rows) -> dict[int, float]:
-    """Per segment, ``min(recv_epoch_s - capture_s)``: camera clock -> laptop clock.
+    """구간마다 ``min(recv_epoch_s - capture_s)``: 카메라 시계 -> 노트북 시계.
 
-    The estimate is the true offset plus the smallest delivery delay in the
-    segment (a few ms on an idle AP). The flight log ``Timestamp`` is also a
-    receive time, so it carries a similar bias.
+    이 추정값은 실제 offset에 구간 안 최소 전달 지연(한가한 AP에서 수 ms)을
+    더한 값이다. 비행 로그 ``Timestamp``도 수신 시각이라 비슷한 편향을 가진다.
     """
     offsets: dict[int, float] = {}
     for r in rows:
@@ -286,9 +283,9 @@ def estimate_offsets(rows) -> dict[int, float]:
 
 
 def drift_report(rows, window_s: float = 60.0) -> dict[int, float | None]:
-    """Per segment, min offset of the last window minus min offset of the first.
+    """구간마다 마지막 창의 최소 offset에서 첫 창의 최소 offset을 뺀 값.
 
-    ``None`` when the segment is shorter than two windows.
+    구간이 창 두 개보다 짧으면 ``None``.
     """
     report: dict[int, float | None] = {}
     for group in _segments(rows):
@@ -305,7 +302,7 @@ def drift_report(rows, window_s: float = 60.0) -> dict[int, float | None]:
 
 
 def clock_jumps(rows, threshold_s: float = 0.5) -> list[int]:
-    """Frames where the laptop wall clock jumped against its monotonic clock."""
+    """노트북 벽시계가 monotonic 시계에 비해 뛴 프레임."""
     jumps: list[int] = []
     prev = None
     for r in rows:
@@ -317,7 +314,7 @@ def clock_jumps(rows, threshold_s: float = 0.5) -> list[int]:
 
 
 def aligned_rows(rows) -> list[dict]:
-    """Rows plus ``capture_epoch_s`` / ``capture_time`` on the laptop clock."""
+    """행에 노트북 시계 기준 ``capture_epoch_s`` / ``capture_time``을 더한 것."""
     offsets = estimate_offsets(rows)
     out: list[dict] = []
     for r in rows:
@@ -336,11 +333,10 @@ def aligned_rows(rows) -> list[dict]:
 
 
 def frame_durations(aligned: list[dict], last_s: float = 0.1, min_s: float = 0.001) -> list[float]:
-    """How long each frame stays on screen in an exported video.
+    """내보낸 영상에서 각 프레임이 화면에 머무는 시간.
 
-    The difference to the next frame's laptop-clock capture time, across
-    segment boundaries too (both sides are on the laptop clock). Rows without a
-    capture time fall back to the receive time.
+    다음 프레임의 노트북 시계 촬영 시각과의 차이. 구간 경계를 넘어서도 같다
+    (양쪽 모두 노트북 시계 기준). 촬영 시각이 없는 행은 수신 시각을 쓴다.
     """
     times = [
         float(r["capture_epoch_s"]) if r.get("capture_epoch_s", "") != "" else float(r["recv_epoch_s"])

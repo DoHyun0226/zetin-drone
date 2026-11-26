@@ -1,4 +1,4 @@
-"""Repository paths shared by the ground-station tools."""
+"""지상국 도구들이 같이 쓰는 저장소 경로."""
 
 from pathlib import Path
 

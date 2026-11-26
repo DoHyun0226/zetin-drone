@@ -1,9 +1,9 @@
-"""Live telemetry plot and CSV logger for ``drone_control.py --listen --plot``.
+"""``drone_control.py --listen --plot``용 실시간 텔레메트리 그래프와 CSV 기록기.
 
-Receive-only: sends the ``connect`` keepalive and nothing else, so it must not
-run next to another UDP tool (the firmware sends telemetry to the last sender).
-Importing this module has no side effects; ``main`` binds the socket, opens
-the CSV and builds the window.
+수신 전용이다: ``connect`` keepalive만 보내고 다른 것은 보내지 않는다. 그래도
+다른 UDP 도구와 같이 돌리면 안 된다(펌웨어는 마지막으로 보낸 쪽에 텔레메트리를
+보낸다). 이 모듈을 import해도 부작용이 없다. 소켓 bind, CSV 열기, 창 만들기는
+``main``이 한다.
 """
 
 import argparse
@@ -48,7 +48,7 @@ def optional_number(value):
 
 
 def open_new_log(log_dir, stamp):
-    """Create flight_log_<stamp>.csv exclusively; flight_log_<stamp>_<n> on collision."""
+    """flight_log_<stamp>.csv를 배타적으로 만든다. 이름이 겹치면 flight_log_<stamp>_<n>."""
     n = 1
     while True:
         name = f"flight_log_{stamp}" if n == 1 else f"flight_log_{stamp}_{n}"
@@ -83,7 +83,7 @@ def show_figure(fig, monitor):
 
 
 class Monitor:
-    """Telemetry state plus the per-frame update of the four panels."""
+    """텔레메트리 상태와 네 패널의 프레임별 갱신."""
 
     def __init__(self, sock, csv_file):
         self.sock = sock
@@ -111,7 +111,7 @@ class Monitor:
         self.last_handshake = 0.0
         self.packet_count = 0
         self.bad_packet_count = 0
-        self.raw_packet_count = 0   # ZIMU/ZCAL raw IMU datagrams: not telemetry, not recorded here
+        self.raw_packet_count = 0   # ZIMU/ZCAL raw IMU datagram: 텔레메트리가 아니므로 여기서 기록하지 않는다
         self.latest_sample = None
         self.animation = None
 

@@ -83,7 +83,7 @@ void checkRange(const ControlAllocation &allocation, int low, int high) {
 
 int main() {
   runCase("zero and pure-axis commands preserve the established motor signs", [] {
-    // Catches a motor-order or roll/pitch/yaw sign mutation.
+    // 모터 순서나 roll/pitch/yaw 부호가 바뀐 변이를 잡는다.
     ControlAllocation zero = allocateControl(0.0f, 0.0f, 0.0f, 1175, 1050, 1300);
     checkMotors(zero, 1175, 1175, 1175, 1175);
     CHECK_NEAR(zero.collective_us, 1175.0f, 1e-6f);
@@ -102,7 +102,7 @@ int main() {
   });
 
   runCase("unsaturated combined command retains the old integer mix", [] {
-    // Catches a changed unsaturated formula, float composition, or rounding behavior.
+    // 비포화 공식, float 합성, 반올림 동작이 바뀐 경우를 잡는다.
     ControlAllocation allocation =
         allocateControl(10.0f, 20.0f, 5.0f, 1175, 1050, 1300);
     checkMotors(allocation, 1160, 1180, 1150, 1210);
@@ -111,8 +111,8 @@ int main() {
     CHECK_NEAR(allocation.yaw_scale, 1.0f, 1e-6f);
     CHECK(!allocation.scaled);
 
-    // The legacy float mixer rounds M2 to 1179. Promoting these contributions
-    // to double before composition incorrectly rounds that motor to 1178.
+    // 옛 float 믹서는 M2 를 1179 로 반올림한다. 이 기여분을 합성 전에
+    // double 로 올리면 그 모터가 1178 로 잘못 반올림된다.
     ControlAllocation fractional =
         allocateControl(-0.351f, -5.178f, -8.327f, 1175, 1050, 1300);
     checkMotors(fractional, 1188, 1179, 1172, 1161);
@@ -123,7 +123,7 @@ int main() {
   });
 
   runCase("yaw saturation leaves allocated roll-pitch pair differences intact", [] {
-    // Catches the old uniform attitude scale or an allocator that gives yaw priority.
+    // 옛 균일 자세 스케일이나 yaw 에 우선순위를 주는 allocator 를 잡는다.
     ControlAllocation allocation =
         allocateControl(30.0f, 0.0f, 100.0f, 1100, 1000, 1200);
     checkMotors(allocation, 1060, 1000, 1140, 1200);
@@ -135,7 +135,7 @@ int main() {
   });
 
   runCase("roll-pitch is scaled only after its own span exceeds the motor range", [] {
-    // Catches a missing roll-pitch span scale or a yaw-only scale applied to RP.
+    // roll-pitch span 스케일 누락이나 yaw 전용 스케일을 RP 에 적용한 경우를 잡는다.
     ControlAllocation allocation =
         allocateControl(150.0f, 0.0f, 0.0f, 1100, 1000, 1200);
     checkMotors(allocation, 1200, 1000, 1000, 1200);
@@ -145,7 +145,7 @@ int main() {
   });
 
   runCase("positive and negative yaw saturate as diagonal-pair mirrors", [] {
-    // Catches asymmetric yaw pair signs or a one-sided yaw-scale solver.
+    // yaw 쌍의 비대칭 부호나 한쪽만 푸는 yaw 스케일 솔버를 잡는다.
     ControlAllocation positive =
         allocateControl(30.0f, 0.0f, 100.0f, 1100, 1000, 1200);
     ControlAllocation negative =
@@ -158,7 +158,7 @@ int main() {
   });
 
   runCase("collective moves into the feasible window before any scaling", [] {
-    // Catches scaling before collective movement or per-motor clipping.
+    // collective 이동 전 스케일링이나 모터별 클리핑을 잡는다.
     ControlAllocation allocation =
         allocateControl(30.0f, 0.0f, 0.0f, 1040, 1050, 1250);
     checkMotors(allocation, 1110, 1050, 1050, 1110);
@@ -169,7 +169,7 @@ int main() {
   });
 
   runCase("finite extremes and invalid limits always produce normalized in-range motors", [] {
-    // Catches missing limit normalization, missing final constrain, or non-finite spans.
+    // 한계 정규화 누락, 마지막 constrain 누락, 유한하지 않은 span 을 잡는다.
     const float extreme = std::numeric_limits<float>::max() / 4.0f;
     for (float sign : {-1.0f, 1.0f}) {
       ControlAllocation allocation = allocateControl(

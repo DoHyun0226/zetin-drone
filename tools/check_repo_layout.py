@@ -82,7 +82,7 @@ def check_sketch_names(repo):
     return errors
 
 
-def check_migration_map(repo, map_path, expected_rows=64):
+def check_migration_map(repo, map_path, expected_rows=62):
     errors = []
     rows = []
     for line_number, line in enumerate(
@@ -144,7 +144,9 @@ def stale_scan_files(repo):
         for path in maintained_markdown_files(repo)
         if path != repo / "docs/migration_map.md"
     ]
+    # 비행 스케치는 .ino + fc/*.h + logic/*.h 로 나뉜다. 전부 훑는다.
     files.extend(sorted((repo / "firmware/flight").rglob("*.ino")))
+    files.extend(sorted((repo / "firmware/flight").rglob("*.h")))
     files.extend(sorted((repo / "firmware/diagnostics").rglob("*.ino")))
     files.extend(sorted((repo / "scripts").rglob("*.py")))
     return files

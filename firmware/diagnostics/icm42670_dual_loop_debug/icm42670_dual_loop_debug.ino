@@ -1,13 +1,13 @@
 // ==========================================================
-// DUAL_IMU_PID_DEBUG — DIAGNOSTIC ONLY, NO FLIGHT CONTROL
+// DUAL_IMU_PID_DEBUG — 진단 전용, 비행 제어 없음
 // ----------------------------------------------------------
-// Purpose: collect evidence about loop rate, dt clamp behavior,
-// and adaptive-alpha usage during the dual-IMU + complementary
-// filter pipeline used by archive/legacy_flight/dual_imu_pid_pwm.
+// 목적: archive/legacy_flight/dual_imu_pid_pwm 이 쓰는
+// dual-IMU + 상보 필터 파이프라인에서 루프 주기, dt clamp 동작,
+// adaptive-alpha 사용에 대한 근거를 모은다.
 //
-// Safety: ESCs are held at 1000us (idle) for the whole run.
-// No PID, no motor mixing, no start/stop command.
-// Pair with scripts/archive/receive_dual_imu_debug.py
+// 안전: 실행 내내 ESC 를 1000us(idle)로 유지한다.
+// PID, 모터 믹싱, start/stop 명령이 없다.
+// scripts/archive/receive_dual_imu_debug.py 와 함께 쓴다.
 // ==========================================================
 
 #include <Arduino.h>
@@ -22,7 +22,7 @@ const char* WIFI_PASS    = "12345678";
 const int   UDP_PORT     = 4210;
 const int   WIFI_CHANNEL = 6;
 
-// ----- Pins (same as flight firmware) -----
+// ----- 핀 (비행 펌웨어와 같음) -----
 const int pinM1   = 4;
 const int pinM2   = 5;
 const int pinM3   = 6;
@@ -34,7 +34,7 @@ const int ESC_FREQ   = 400;
 const int ESC_RES    = 14;
 const int ESC_PERIOD = 2500;
 
-// ----- IMU scales -----
+// ----- IMU 스케일 -----
 const float GYRO_SCALE   = 1.0f / 16.4f;
 const float ACCEL_SCALE  = 1.0f / 2048.0f;
 
@@ -46,7 +46,7 @@ const int      BIAS_CALIB_SAMPLES         = 2000;
 const float    BIAS_CALIB_MOVEMENT_THRESH = 1.0f;
 const int      BIAS_CALIB_RETRIES         = 3;
 
-// ----- Filter params (identical to flight firmware) -----
+// ----- 필터 파라미터 (비행 펌웨어와 동일) -----
 const float LPF_ALPHA_ACC  = 1.00f;
 const float LPF_ALPHA_GYRO = 1.0f;
 
@@ -58,7 +58,7 @@ const float ALPHA_DYNAMIC  = 0.999f;
 
 const float YAW_DEADZONE = 0.3f;
 
-// ----- Globals -----
+// ----- 전역 변수 -----
 WiFiUDP   udp;
 IPAddress laptopIP;
 int       laptopPort            = 0;
@@ -76,8 +76,8 @@ float lpf_gx = 0.0f, lpf_gy = 0.0f, lpf_gz = 0.0f;
 float gyro_bias1[3] = {0.0f, 0.0f, 0.0f};
 float gyro_bias2[3] = {0.0f, 0.0f, 0.0f};
 
-// Diagnostic accumulators reset every 50ms telemetry tick.
-// 32-bit reads/writes on ESP32-S3 are atomic so we use plain volatiles.
+// 진단 누산기. 50ms 텔레메트리 tick 마다 리셋한다.
+// ESP32-S3 에서 32비트 읽기/쓰기는 원자적이므로 일반 volatile 을 쓴다.
 volatile uint32_t diag_loop_count  = 0;
 volatile uint32_t diag_max_dt_us   = 0;
 volatile uint32_t diag_sum_dt_us   = 0;
@@ -85,7 +85,7 @@ volatile uint32_t diag_clamp_count = 0;
 volatile float    diag_last_alpha  = 0.0f;
 
 // ==========================================================
-// Motor pins held at idle for safety
+// 안전을 위해 모터 핀을 idle 로 유지
 // ==========================================================
 void writeMotor(int pin, int us) {
   us = constrain(us, 1000, 2000);
@@ -101,7 +101,7 @@ void idleMotors() {
 }
 
 // ==========================================================
-// Adaptive complementary alpha (matches flight firmware)
+// 적응형 상보 필터 alpha (비행 펌웨어와 일치)
 // ==========================================================
 static inline float compute_alpha(float ax, float ay, float az) {
   float mag = sqrtf(ax*ax + ay*ay + az*az);
@@ -112,7 +112,7 @@ static inline float compute_alpha(float ax, float ay, float az) {
 }
 
 // ==========================================================
-// Startup bias calibration (matches flight firmware)
+// 시작 시 바이어스 보정 (비행 펌웨어와 일치)
 // ==========================================================
 static void measure_imu_bias(ICM42670 &imu, const float sign[3],
                              float bias_out[3], float stddev_out[3]) {
@@ -167,8 +167,8 @@ static void calibrate_bias() {
 }
 
 // ==========================================================
-// 1kHz attitude task (Core 1) — same data flow as flight code
-// minus PID / motor mixing, plus diagnostic counters.
+// 1kHz 자세 태스크 (Core 1) — 비행 코드와 같은 데이터 흐름에서
+// PID / 모터 믹싱을 빼고 진단 카운터를 더했다.
 // ==========================================================
 void attitude_task(void *pvParameters) {
   const unsigned long LOOP_INTERVAL = 1000;
@@ -221,8 +221,8 @@ void attitude_task(void *pvParameters) {
     lpf_gy = LPF_ALPHA_GYRO * raw_gy + (1.0f - LPF_ALPHA_GYRO) * lpf_gy;
     lpf_gz = LPF_ALPHA_GYRO * raw_gz + (1.0f - LPF_ALPHA_GYRO) * lpf_gz;
 
-    // Record real (un-clamped) dt for diagnosis, then apply same clamp
-    // as flight code so integration math is identical.
+    // 진단용으로 실제(clamp 전) dt 를 기록한 뒤, 적분 수학이 같도록
+    // 비행 코드와 같은 clamp 를 적용한다.
     uint32_t real_dt_us = (uint32_t)(now - lastTime);
     diag_loop_count++;
     diag_sum_dt_us += real_dt_us;
@@ -233,10 +233,10 @@ void attitude_task(void *pvParameters) {
     if (dt > 0.002f) dt = 0.001f;
     lastTime = now;
 
-    // Axis remap: sensor X <-> drone Y (pitch), sensor Y <-> drone X (roll), sensor Z negated for yaw.
-    // - angleX (roll, drone X)  uses sensor Y gyro (lpf_gy) and sensor X accel (-lpf_ax)
-    // - angleY (pitch, drone Y) uses sensor X gyro (lpf_gx) and sensor Y accel ( lpf_ay)
-    // - angleZ (yaw)            integrates -lpf_gz so CW from above is positive
+    // 축 재매핑: 센서 X <-> 드론 Y (pitch), 센서 Y <-> 드론 X (roll), yaw 는 센서 Z 부호 반전.
+    // - angleX (roll, 드론 X)  는 센서 Y 자이로(lpf_gy)와 센서 X 가속도(-lpf_ax)를 쓴다
+    // - angleY (pitch, 드론 Y) 는 센서 X 자이로(lpf_gx)와 센서 Y 가속도( lpf_ay)를 쓴다
+    // - angleZ (yaw)            는 -lpf_gz 를 적분해 위에서 볼 때 CW 가 양수다
     float accAngleX = atan2f(-lpf_ax, sqrtf(lpf_ay*lpf_ay + lpf_az*lpf_az)) * 180.0f / PI;
     float accAngleY = atan2f( lpf_ay, sqrtf(lpf_ax*lpf_ax + lpf_az*lpf_az)) * 180.0f / PI;
     float alpha = compute_alpha(lpf_ax, lpf_ay, lpf_az);
@@ -296,7 +296,7 @@ void setup() {
 }
 
 void loop() {
-  // Passively learn laptop IP from any incoming UDP packet
+  // 들어오는 아무 UDP 패킷에서나 노트북 IP 를 수동적으로 알아낸다
   int packetSize = udp.parsePacket();
   if (packetSize > 0) {
     laptopIP   = udp.remoteIP();
@@ -310,12 +310,12 @@ void loop() {
   if (millis() - lastSendTime < 50) { delay(1); return; }
   lastSendTime = millis();
 
-  // Re-affirm motors are idle every tick (belt + suspenders)
+  // 매 tick 모터가 idle 인지 다시 확정한다(이중 안전장치)
   idleMotors();
 
   if (!connectionEstablished) return;
 
-  // Snapshot + reset diagnostic accumulators
+  // 진단 누산기 스냅샷 + 리셋
   uint32_t loops    = diag_loop_count;  diag_loop_count  = 0;
   uint32_t max_dt   = diag_max_dt_us;   diag_max_dt_us   = 0;
   uint32_t sum_dt   = diag_sum_dt_us;   diag_sum_dt_us   = 0;
