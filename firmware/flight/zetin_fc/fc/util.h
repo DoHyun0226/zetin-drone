@@ -6,20 +6,29 @@
 // ==========================================================
 // 3. 유틸
 // ==========================================================
+// 1차 저역통과 필터(LPF): 빠르게 흔들리는 노이즈는 줄이고 느린 변화만 통과시킨다
+//  RC 회로와 같은 식: rc = 1/(2π·fc), alpha = dt/(rc+dt). 매 호출마다 출력이 입력 쪽으로 alpha 비율만큼 다가간다
+//  예) fc 80Hz, dt 1ms → alpha ≈ 0.33 / fc 40Hz → alpha ≈ 0.20 (차단 주파수가 낮을수록 더 부드럽고 더 늦다)
 class LowPassFilter {
 public:
+  // alpha: 반영 비율, last: 직전 출력(필터 상태)
   float alpha, last = 0.0f;
   LowPassFilter(float cutoff_hz, float dt) {
+    // cutoff_hz를 설정했을 때 RC 회로의 시정수(계산해보면 나옴)
     float rc = 1.0f / (2.0f * PI * cutoff_hz);
     alpha = dt / (rc + dt);
   }
+  // 새 입력을 넣고 필터 출력을 돌려준다
   float update(float in) { last += alpha * (in - last); return last; }
+  // 상태 초기화 (잠금/재시동 시 이전 값이 튀지 않게)
   void reset(float value = 0.0f) { last = value; }
 };
 
 // Arduino sketch preprocessor의 자동 함수 원형보다 먼저 보여야 하는 반환 타입.
+// 예전 이름(MotorMix)을 새 allocator 결과 구조체의 별칭으로 유지
 using MotorMix = ControlAllocation;
 
+// 텔레메트리용 IMU별 값 (IMU1 축 기준 → body 축으로 변환된 값). gyro는 dps, accel은 g
 struct ImuTelemetrySample {
   float imu1GyroX, imu1GyroY, imu1GyroZ;
   float imu1AccelX, imu1AccelY, imu1AccelZ;
@@ -29,18 +38,32 @@ struct ImuTelemetrySample {
 
 // IMU별 freeze 감시 (raw 레지스터 값이 멈췄는지)
 struct FreezeMon {
+  // 직전 tick 자이로 레지스터 원값
   int16_t  lastGyro[3] = {0, 0, 0};
+  // 직전 tick 가속도 레지스터 원값
   int16_t  lastAccel[3] = {0, 0, 0};
+  // 값 변화가 없기 시작한 시각 (0 = 지금 변하는 중)
   uint32_t since = 0;
+  // 첫 값을 받았는가
   bool     init  = false;
 };
 
+// [링 버퍼 lock-free 동작] 생산자(Core 1)는 head만, 소비자(Core 0)는 tail만 증가시킨다
+//  head, tail은 계속 커지는 카운터이고 실제 칸 위치는 & MASK로 구한다. (head - tail) = 들어 있는 개수
+//  __atomic_*: 두 코어가 동시에 읽고 쓰는 변수를 안전하게 다루는 GCC 내장 함수
+//   - RELEASE(쓰기): 이 저장 전에 한 메모리 쓰기(샘플 복사)가 다른 코어에 먼저 보이도록 보장
+//   - ACQUIRE(읽기): 이 읽기 뒤의 메모리 읽기가 상대가 RELEASE 전에 쓴 내용을 보도록 보장
+//   - RELAXED: 순서 보장 없이 값만 원자적으로 (자기 자신만 쓰는 변수나 통계 카운터)
+//  이 짝 덕분에 mutex 없이도 "샘플을 다 쓴 뒤에 head가 올라간 것"을 소비자가 보게 된다
+//
+// 링 버퍼에 쌓여 있는 샘플 수
 static inline uint32_t imuRawRingCount(const ImuRawRing &ring) {
   const uint32_t head = __atomic_load_n(&ring.head, __ATOMIC_ACQUIRE);
   const uint32_t tail = __atomic_load_n(&ring.tail, __ATOMIC_ACQUIRE);
   return head - tail;
 }
 
+// [생산자, Core 1] 샘플 1개를 넣는다. 가득 차 있으면 버리고 dropped를 1 올린다 (pid_task를 기다리게 하지 않음)
 static inline bool imuRawRingPush(
     ImuRawRing &ring, const ImuRawSample &sample, uint32_t sampleUs) {
   const uint32_t head = __atomic_load_n(&ring.head, __ATOMIC_RELAXED);
@@ -50,13 +73,17 @@ static inline bool imuRawRingPush(
     return false;
   }
   if (head == tail) {
+    // 비어 있던 버퍼의 첫 샘플이면 절대 시각을 기록 (소비자가 dt_us를 누적해 시각을 복원하는 기준점)
     __atomic_store_n(&ring.first_t_us, sampleUs, __ATOMIC_RELAXED);
   }
+  // 먼저 샘플을 복사하고
   ring.samples[head & IMU_RAW_RING_MASK] = sample;
+  // 그다음 head를 올려 공개한다
   __atomic_store_n(&ring.head, head + 1, __ATOMIC_RELEASE);
   return true;
 }
 
+// [소비자, Core 0] 샘플 1개를 꺼낸다. 비어 있으면 false
 static inline bool imuRawRingPop(ImuRawRing &ring, ImuRawSample &sample) {
   const uint32_t tail = __atomic_load_n(&ring.tail, __ATOMIC_RELAXED);
   if (tail == __atomic_load_n(&ring.head, __ATOMIC_ACQUIRE)) return false;
@@ -65,6 +92,7 @@ static inline bool imuRawRingPop(ImuRawRing &ring, ImuRawSample &sample) {
   return true;
 }
 
+// 두 IMU의 레지스터 원값(보정 전)과 시간 간격, 자동착륙 단계를 27B 샘플 하나로 묶는다
 static inline ImuRawSample makeImuRawSample(
     uint16_t dtUs, const inv_imu_sensor_event_t &e1,
     const inv_imu_sensor_event_t &e2, uint8_t failsafePhase) {
@@ -80,6 +108,7 @@ static inline ImuRawSample makeImuRawSample(
   return sample;
 }
 
+// 헤더(ZIMU)를 채우고 샘플 n개를 복사해 보낼 패킷을 만든다. 반환값 = 실제 보낼 바이트 수 (20 + 27×n)
 static inline size_t buildImuRawDatagram(
     ImuRawDatagram &datagram, uint32_t batchSeq, uint32_t baseTUs,
     uint32_t dropped, const ImuRawSample *samples, uint8_t nSamples) {
@@ -95,6 +124,8 @@ static inline size_t buildImuRawDatagram(
   return sizeof(ImuRawHeader) + nSamples * sizeof(ImuRawSample);
 }
 
+// IMU1 센서 축 값을 body 축(텔레메트리 기준)으로 바꾼다. pid_task의 bodyGx/bodyGy/bodyGz 변환과 같은 부호
+//  body x = 센서 y, body y = -센서 x, gyro z는 -센서 z (accel z는 +). accel은 여기서 ACCEL_SCALE을 곱해 g 단위로
 static inline ImuTelemetrySample makeImuTelemetrySample(
     const float g1[3], const float a1[3],
     const float g2[3], const float a2[3]) {
@@ -156,6 +187,8 @@ static void drainLatRing(LatRing &ring) {
   }
 }
 #endif
+// [IMU freeze 감시] 센서 값이 IMU_FROZEN_MS(300ms) 동안 사실상 안 변하면 true
+//  살아 있는 센서는 정지 상태에서도 노이즈로 값이 계속 조금씩 바뀐다 → 완전히 같은 값 반복 = SPI 통신 끊김/센서 정지
 static bool checkFreeze(FreezeMon &m, const inv_imu_sensor_event_t &e, uint32_t nowMs) {
   if (!m.init) {
     for (int k = 0; k < 3; k++) {

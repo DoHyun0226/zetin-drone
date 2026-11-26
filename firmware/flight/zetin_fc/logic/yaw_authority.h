@@ -11,12 +11,15 @@
 //  상태 전이: NORMAL --(scale ≤ 0.5가 150ms 지속)--> LIMITED --(scale ≥ 0.9이고 회전 멈춤)--> RECOVERING
 //             RECOVERING --(그 상태 500ms 유지)--> NORMAL,  RECOVERING --(조건 깨짐)--> LIMITED
 //  시동 꺼짐 / 자동착륙 중 / 스틱을 민 상태면 즉시 NORMAL로 초기화한다
-
+//
 // 텔레메트리 필드(yaw_authority_state)로 숫자 그대로 나간다. 지상국 해석과 맞춰야 하므로 값을 바꾸면 안 된다
 enum YawAuthorityState : int {
-  YAW_AUTH_NORMAL = 0,       // 정상: heading 잠금/스틱 명령을 그대로 사용
-  YAW_AUTH_LIMITED = 1,      // 권한 부족: 잠금 해제, 목표 = 현재 heading, 목표 각속도 0
-  YAW_AUTH_RECOVERING = 2,   // 회복 확인 중: 동작은 LIMITED와 같고, 500ms 버티면 NORMAL
+  // 정상: heading 잠금/스틱 명령을 그대로 사용
+  YAW_AUTH_NORMAL = 0,
+  // 권한 부족: 잠금 해제, 목표 = 현재 heading, 목표 각속도 0
+  YAW_AUTH_LIMITED = 1,
+  // 회복 확인 중: 동작은 LIMITED와 같고, 500ms 버티면 NORMAL
+  YAW_AUTH_RECOVERING = 2,
 };
 
 // 위 숫자가 바뀌면 컴파일을 실패시켜 텔레메트리 계약이 깨진 걸 알린다
@@ -25,25 +28,37 @@ static_assert(YAW_AUTH_LIMITED == 1, "yaw authority telemetry contract changed")
 static_assert(YAW_AUTH_RECOVERING == 2,
               "yaw authority telemetry contract changed");
 
-static constexpr float YAW_AUTH_ENTRY_SCALE = 0.5f;      // yaw_scale이 이 이하면 "권한 부족" 후보
-static constexpr uint32_t YAW_AUTH_ENTRY_MS = 150U;      // 후보 상태가 이만큼 계속돼야 LIMITED 진입 (순간 포화는 무시)
-static constexpr float YAW_AUTH_RECOVERY_SCALE = 0.9f;   // yaw_scale이 이 이상이어야 회복 후보 (진입 0.5와 간격을 둬 깜빡임 방지)
-static constexpr uint32_t YAW_AUTH_RECOVERY_MS = 500U;   // 회복 조건이 이만큼 유지돼야 NORMAL 복귀
+// yaw_scale이 이 이하면 "권한 부족" 후보
+static constexpr float YAW_AUTH_ENTRY_SCALE = 0.5f;
+// 후보 상태가 이만큼 계속돼야 LIMITED 진입 (순간 포화는 무시)
+static constexpr uint32_t YAW_AUTH_ENTRY_MS = 150U;
+// yaw_scale이 이 이상이어야 회복 후보 (진입 0.5와 간격을 둬 깜빡임 방지)
+static constexpr float YAW_AUTH_RECOVERY_SCALE = 0.9f;
+// 회복 조건이 이만큼 유지돼야 NORMAL 복귀
+static constexpr uint32_t YAW_AUTH_RECOVERY_MS = 500U;
 
 // 상태 머신이 tick 사이에 기억해야 하는 값
 struct YawAuthorityTracker {
-  YawAuthorityState state;      // 현재 상태
-  uint32_t entry_since_ms;      // 진입 후보(scale ≤ 0.5)가 시작된 시각
-  uint32_t recovery_since_ms;   // RECOVERING에 들어간 시각
-  bool entry_timing;            // 진입 후보 시간을 재는 중인가
-  bool recovery_timing;         // 회복 시간을 재는 중인가
+  // 현재 상태
+  YawAuthorityState state;
+  // 진입 후보(scale ≤ 0.5)가 시작된 시각
+  uint32_t entry_since_ms;
+  // RECOVERING에 들어간 시각
+  uint32_t recovery_since_ms;
+  // 진입 후보 시간을 재는 중인가
+  bool entry_timing;
+  // 회복 시간을 재는 중인가
+  bool recovery_timing;
 };
 
 // applyYawAuthority()의 결과 = 이번 tick 실제로 쓸 yaw 바깥 루프 명령
 struct YawAuthorityCommand {
-  float target_angle_deg;   // 목표 heading (°) → targetAngleZ
-  float target_rate_dps;    // 목표 yaw 각속도 (°/s) → 안쪽 각속도 PID로
-  bool hold;                // heading 잠금 여부 → yaw_hold_now
+  // 목표 heading (°) → targetAngleZ
+  float target_angle_deg;
+  // 목표 yaw 각속도 (°/s) → 안쪽 각속도 PID로
+  float target_rate_dps;
+  // heading 잠금 여부 → yaw_hold_now
+  bool hold;
 };
 
 // 모든 값을 처음 상태(NORMAL, 타이머 정지)로 되돌린다

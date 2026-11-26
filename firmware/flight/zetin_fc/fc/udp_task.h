@@ -5,6 +5,9 @@
 // ==========================================================
 // 9. UDP 태스크 (Core 0) — char* 파싱 (String heap 회피)
 // ==========================================================
+// [명령 파싱 공통] Arduino String은 힙 메모리를 계속 할당/해제해 장시간 실행 시 조각화될 수 있어,
+//  고정 버퍼(packetBuffer) 위에서 char* 포인터로 직접 자른다
+// 앞뒤 공백/개행을 제거한 문자열의 시작 포인터를 돌려준다 (버퍼를 직접 수정)
 static char *trimCommand(char *s) {
   while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
   char *end = s + strlen(s);
@@ -13,6 +16,7 @@ static char *trimCommand(char *s) {
   return s;
 }
 
+// 문자열 전체가 숫자일 때만 성공 ("1.5abc", "", "nan" 같은 입력은 거부). strtof가 멈춘 위치(end) 뒤에 공백 외 글자가 있으면 실패
 static bool parseFloatStrict(const char *text, float &out) {
   char *end;
   float value = strtof(text, &end);
@@ -23,6 +27,7 @@ static bool parseFloatStrict(const char *text, float &out) {
   return true;
 }
 
+// 정수 버전 (10진수)
 static bool parseIntStrict(const char *text, long &out) {
   char *end;
   long value = strtol(text, &end, 10);
@@ -33,9 +38,12 @@ static bool parseIntStrict(const char *text, long &out) {
   return true;
 }
 
+// rc/rcr이 받은 목표 자세를 반영하고 RC 워치독(lastRcMs)을 갱신한다
+//  x, y: 목표 roll/pitch (°), z: 목표 yaw 각도 (hasYaw일 때만)
 static bool setRcTargets(float x, float y, float z, bool hasYaw) {
   if (!isfinite(x) || !isfinite(y) || (hasYaw && !isfinite(z))) return false;
   if (fs_phase == FS_DESCENDING) {
+    // 하강 중엔 목표는 바꾸지 않고 "링크 살아 있음"만 기록 (resume 판정에 필요)
     lastRcMs = millis();
     return true;
   }
@@ -52,6 +60,7 @@ static bool setRcTargets(float x, float y, float z, bool hasYaw) {
 
 // 표준 형식: rc <seq> <roll> <pitch> <yaw>
 // 벤치 수동 테스트용으로 rc <roll> <pitch> [yaw]도 허용한다.
+// strtok_r: 문자열을 공백/탭 기준으로 하나씩 잘라 낸다. save에 다음 위치를 기억해 여러 번 이어서 호출
 static void handleRcCommand(char *buf) {
   char *save = nullptr;
   char *token = strtok_r(buf, " \t", &save); // "rc"
@@ -62,6 +71,7 @@ static void handleRcCommand(char *buf) {
   if (strtok_r(nullptr, " \t", &save) != nullptr) return; // 여분 필드 거부
 
   if (count == 4) {
+    // seq는 부호 없는 정수만. strtoul은 "-1"도 큰 양수로 바꿔 버리므로 부호 문자를 먼저 거부한다
     if (arg[0][0] == '-' || arg[0][0] == '+') return;
     char *seqEnd;
     errno = 0;
@@ -73,6 +83,8 @@ static void handleRcCommand(char *buf) {
     if (!parseFloatStrict(arg[1], x) || !parseFloatStrict(arg[2], y) ||
         !parseFloatStrict(arg[3], z)) return;
 
+    // [패킷 번호 검사] UDP는 순서가 뒤바뀌거나 중복될 수 있다 → 직전보다 큰 번호만 받아들인다
+    //  번호가 2 이상 건너뛰면 그 사이 개수만큼 손실로 센다
     uint32_t seq = (uint32_t)seqLong;
     rcTotalPkts = rcTotalPkts + 1;
     if (rcSeqValid) {
@@ -137,6 +149,7 @@ static void handleRcrCommand(char *buf) {
   targetYawRate = constrain(rate, -MAX_TARGET_RATE_YAW, MAX_TARGET_RATE_YAW);
 }
 
+// 게인 명령: 앞 2글자 = 어떤 게인, 나머지 = 값 (예: "rp0.6" → roll/pitch 각속도 Kp = 0.6). 0~100만 허용
 static void handleGainCommand(const char *buf) {
   if (strlen(buf) < 3) return;
   float value;
@@ -180,6 +193,7 @@ static void handleGainCommand(const char *buf) {
 // append-only로 보낸다. IMU별 값은 융합값과 같은 body frame이다.
 // 이 스케치는 인덱스 75~90 에 광류 위치·고도 유지 16개 필드를 더 붙인다
 // (Flow_Seq … FlowCal_Samples, scripts/ground/telemetry_schema.py).
+// 20Hz CSV 텔레메트리 한 줄 전송. Core 1이 쓰는 값은 먼저 스냅샷으로 복사한 뒤 출력한다
 static void sendTelemetry() {
   if (!connectionEstablished) return;
   bool criticalFault = (active_imus == 0) || fault_attitude || !calibration_ok;
@@ -252,6 +266,8 @@ static void sendTelemetry() {
   udp.endPacket();
 }
 
+// 링 버퍼에서 최대 50개를 꺼내 ZIMU 패킷 하나로 전송
+//  각 샘플의 절대 시각은 첫 샘플 시각(first_t_us)에 dt_us를 누적해 복원하고, 패킷 첫 샘플 시각을 헤더 base_t_us에 넣는다
 static bool sendImuRawBatch() {
   if (!connectionEstablished) return false;
   uint32_t queued = imuRawRingCount(imuRawRing);
@@ -287,6 +303,7 @@ static bool sendImuRawBatch() {
   return true;
 }
 
+// ZCAL 패킷 전송: PC가 ZIMU 원값을 물리 단위로 바꾸는 데 필요한 보정 상수
 static bool sendImuCalibration() {
   if (!connectionEstablished) return false;
   memcpy(imuCalDatagram.magic, "ZCAL", 4);
@@ -499,11 +516,14 @@ static inline __attribute__((always_inline)) void udpCmdStart() {
     lastRcSeq = 0;
     rcSeqValid = false;
     lastRcMs = millis();
+    // 시동 직후 낮은 스로틀 창 (이륙 전)
     base_throttle = 1100; min_throttle = 1050; max_throttle = 1250;
     targetAngleX = 0.0f;
     targetAngleY = 0.0f;
     targetAngleZ = 0.0f;
+    // 시동 순간 방향을 yaw 0°로
     angleZ = 0.0f;
+    // 자기계 기준도 새 0°에 맞춰 다시 잡는다
     requestMagReferenceUpdate();
     fs_probe_state = FS_PROBE_WAIT;
     fs_probe_no_response = 0;
@@ -752,12 +772,14 @@ static inline __attribute__((always_inline)) void udpCmdGains() {
 // 명령 하나를 처리한다. 비교 순서는 그대로 둔다(접두사가 겹친다: rcr/rc,
 // magcal/magc/mag, raw/rangeland). 나머지는 PID 게인 명령으로 넘긴다.
 static inline __attribute__((always_inline)) void udpDispatchCommand(char *buf) {
+  // "rcr"을 "rc"보다 먼저 검사해야 한다 ("rcr ..."도 앞 2글자는 "rc"라서)
   if (strncmp(buf, "rcr", 3) == 0 && (buf[3] == ' ' || buf[3] == '\t')) {
     handleRcrCommand(buf);
   }
   else if (strncmp(buf, "rc", 2) == 0 && (buf[2] == ' ' || buf[2] == '\t')) {
     handleRcCommand(buf);
   }
+  // start: 하강 중 / 이미 시동 / 센서·캘리브레이션 문제면 거부, 통과하면 비행 상태 초기화 후 시동 요청
   else if (strcmp(buf, "start") == 0) {
     udpCmdStart();
   }
@@ -767,24 +789,30 @@ static inline __attribute__((always_inline)) void udpDispatchCommand(char *buf) 
   else if (strcmp(buf, "resume") == 0) {
     udpCmdResume();
   }
+  // th<µs>: 스로틀 설정 (1000~1900). 모터 범위도 스로틀 ± CTRL_MARGIN으로 같이 옮긴다
   else if (strncmp(buf, "th", 2) == 0) {
     udpCmdThrottle(buf);
   }
   else if (strncmp(buf, "yaw", 3) == 0) {
     udpCmdYawHold(buf);
   }
+  // 비교 순서 주의: "magcal" → "magc" → "mag" (긴 이름부터 검사해야 짧은 이름에 잘못 걸리지 않는다)
   else if (strncmp(buf, "magcal", 6) == 0) {
     udpCmdMagcal(buf);
   }
+  // magc <x> <y> <z>: 모터 전류 자기 간섭 계수 설정 (µT/µs)
   else if (strncmp(buf, "magc", 4) == 0) {
     udpCmdMagComp(buf);
   }
+  // mag 0/1: 자기계 yaw 융합 끄기/켜기
   else if (strncmp(buf, "mag", 3) == 0) {
     udpCmdMag(buf);
   }
+  // raw 0/1: ZIMU 원시 스트림 끄기/켜기. 켤 때는 쌓여 있던 옛 샘플을 버리고(tail = head) 시각 기준을 새로 잡는다
   else if (strncmp(buf, "raw", 3) == 0) {
     udpCmdRaw(buf);
   }
+  // trim <roll> <pitch>: 기체 수평 보정 (±10°)
   else if (strncmp(buf, "trim", 4) == 0 &&
            (buf[4] == ' ' || buf[4] == '\t')) {
     udpCmdTrim(buf);
@@ -808,16 +836,19 @@ static inline __attribute__((always_inline)) void udpDispatchCommand(char *buf) 
   else if (strncmp(buf, "hg", 2) == 0 && (buf[2] == ' ' || buf[2] == '\t')) {
     handleHoldGainCommand(buf);
   }
+  // gains: 현재 PID 게인 12개를 한 줄로 회신
   else if (strcmp(buf, "gains") == 0) {
     udpCmdGains();
   }
   else {
+    // 위 어느 것도 아니면 게인 명령으로 해석 (모르는 접두어는 그냥 무시됨)
     handleGainCommand(buf);
   }
 }
 
 // 받은 패킷 하나: 보낸 쪽을 텔레메트리 목적지로 등록하고 명령을 처리한다.
 static inline __attribute__((always_inline)) void udpReceivePacket() {
+  // 보낸 쪽 주소를 기억 → 텔레메트리 목적지 (별도 접속 절차 없이 첫 패킷이 연결)
   laptopIP = udp.remoteIP();
   laptopPort = udp.remotePort();
   connectionEstablished = true;
@@ -841,6 +872,7 @@ static inline __attribute__((always_inline)) void udpPeriodicSends(uint32_t &las
   reportFlowCalResult();
   reportImuCalResult();
   bool sentImuPacket = false;
+  // ZIMU: 50개가 모였거나, 하나라도 있고 50ms가 지났으면 전송 / ZCAL: 1초마다
   if (now - lastRawCheck >= 10U) {
     lastRawCheck = now;
     bool sentRawPacket = false;
@@ -877,8 +909,14 @@ static inline __attribute__((always_inline)) void udpPeriodicSends(uint32_t &las
   }
 }
 
+// [udp_task 한 반복 흐름 정리] (Core 0, 약 1ms마다)
+//  1) UDP 명령 1개 수신 → 종류별 처리 (rc/rcr/start/stop/th/yaw/mag/raw/trim/gains/게인)
+//  2) 자기계 샘플링(50Hz), 광류/라이다 UART 폴링
+//  3) 10ms마다 ZIMU/ZCAL 바이너리 전송 검사 → 4) 50ms마다 CSV 텔레메트리 (한 반복에 패킷은 최대 1개)
 void udp_task(void *pv) {
+  // 마지막 CSV 텔레메트리 시각
   uint32_t lastSend = 0;
+  // 마지막 ZIMU 전송 검사 시각
   uint32_t lastRawCheck = 0;
 #if WIFI_LATENCY_DEBUG
   uint32_t prevTopUs = micros();
@@ -904,6 +942,7 @@ void udp_task(void *pv) {
       udpReceivePacket();
     }
     udpPeriodicSends(lastSend, lastRawCheck);
+    // 1 tick 양보 → 같은 코어의 WiFi 스택/idle 태스크가 돌 수 있게
     vTaskDelay(1);
   }
 }

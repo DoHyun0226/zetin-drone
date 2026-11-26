@@ -21,37 +21,61 @@ enum PidTickFlow : uint8_t { PID_TICK_GO_ON = 0, PID_TICK_ENDED = 1 };
 
 // pid_task 의 루프 밖 지역(태스크 수명 동안 유지).
 struct PidLoopState {
+  // TickType_t: FreeRTOS가 시간을 tick 수로 저장하는 정수 타입. ESP32에서는 uint32_t, Arduino 기본 설정에서 1 tick = 1ms
+  // xTaskGetTickCount(): 스케줄러 시작 후 지난 tick 수를 돌려준다. millis()와 비슷하며 정밀도는 1 tick (ISR 안에서는 FromISR 버전 사용)
+  // vTaskDelayUntil 기반 (busy-wait 제거). pdMS_TO_TICKS: ms → tick 변환
   const TickType_t period = pdMS_TO_TICKS(1);   // vTaskDelayUntil 기반 (busy-wait 제거)
+  // 다음 기상 시각을 계산할 기준. vTaskDelayUntil이 매번 갱신한다
   TickType_t wake = xTaskGetTickCount();
   const float dt = 0.001f;
 
+  // 아래 변수들은 이 태스크 안에서만 쓰는 지역 상태 (while 루프 동안 계속 유지된다)
+  // D항(미분) 노이즈 필터 40Hz
   LowPassFilter lpfD_Roll{40, dt}, lpfD_Pitch{40, dt}, lpfD_Yaw{40, dt};
+  // IMU1 자이로 x,y,z 80Hz
   LowPassFilter lpfG1[3] = {{GYRO_SW_LPF_HZ, dt}, {GYRO_SW_LPF_HZ, dt}, {GYRO_SW_LPF_HZ, dt}};
+  // IMU2 자이로 x,y,z 80Hz
   LowPassFilter lpfG2[3] = {{GYRO_SW_LPF_HZ, dt}, {GYRO_SW_LPF_HZ, dt}, {GYRO_SW_LPF_HZ, dt}};
+  // 직전 tick 각속도 (D항 미분용)
   float prevGyroX = 0.0f, prevGyroY = 0.0f, prevGyroZ = 0.0f;
 
+  // IMU별 freeze 감시 상태
   FreezeMon fm1, fm2;
+  // 두 IMU 불일치가 시작된 시각 (0 = 불일치 아님)
   uint32_t disagreeSince = 0;
   int altHoldAppliedPrevUs = 0;
   bool prevHoldNonZero = false;
   int lastFlowReject = FLOW_REJECT_FIRST;
   float lastFlowDtMs = 0.0f, lastFlowCRoll = 0.0f, lastFlowCPitch = 0.0f;
 
+  // 바깥 루프가 정한 목표 각속도 (dps)
   float targetRateRoll = 0, targetRatePitch = 0, targetRateYaw = 0;
+  // 0,1,2,3 순환. 0일 때만 바깥 루프 계산 → 1kHz/4 = 250Hz
   uint8_t outerCnt = 0;
+  // 자기계 융합용 별도 카운터 (잠금 중에도 250Hz 유지)
   uint8_t magFusionCnt = 0;
+  // 실제 dt 측정용
   uint32_t lastMicros = micros();
+  // pidLoopHz 계산용
   uint32_t loopCount = 0;
   uint32_t loopMarkerMs = millis();
+  // 직전 tick이 잠금 상태였나 → 잠금 해제 첫 tick 감지
   bool wasLocked = true;
+  // 자동착륙 착지 감지기 상태
   LandDetector landDet = {};
   LandProbeConfig landProbeConfig = FS_LAND_PROBE_CONFIG;
+  // 이번 하강에서 쓸 프로브 딥 크기
   int fs_probe_dip_us = FS_PROBE_DIP_MIN_US;
+  // 이번 자동착륙 진입 시각
   uint32_t fs_enter_ms = 0;
+  // 자동착륙 동안 유지할 heading
   float fs_hold_yaw = 0.0f;
+  // BLOCKED 경고를 하강당 한 번만 찍기 위한 플래그
   bool fs_probe_blocked_logged = false;
+  // yaw 권한 상태 머신
   YawAuthorityTracker yawAuthority = {};
 
+  // IMU 레지스터 읽기 결과 (원값)
   inv_imu_sensor_event_t e1 = {}, e2 = {};
 };
 
@@ -108,17 +132,23 @@ static inline __attribute__((always_inline)) void pidBeginTick(PidLoopState &L, 
   auto &nowUs = T.nowUs;
   auto &realDt = T.realDt;
   auto &rawDt = T.rawDt;
+  // 실제로 깨어난 시각. wake(예정 시각)와의 차이가 지연 시간
   TickType_t afterWake = xTaskGetTickCount();
+  // 부호 없는 정수 뺄셈이라 tick 카운터가 약 49.7일 만에 0으로 돌아가도 경과 tick이 맞게 나온다
   if ((TickType_t)(afterWake - wake) > period) {
     // 큰 지연 뒤 밀린 tick을 연속 실행하지 않는다(센서 stale read/D항 spike 방지).
     wake = afterWake;
   }
   nowMs = millis();
+  // 이번 tick 프로브 딥이 실제로 전달됐는지 확인해야 하나
   checkProbeDelivery = false;
+  // 딥을 빼기 전 하강 스로틀
   probeReferenceThrottle = 0;
   probeElapsedMs = 0;
   applyRangeLandRequest();
+  // 1) Core 0이 걸어 둔 start/stop 요청 반영
   applyPendingSafetyRequest();
+  // 1초마다 실제 루프 주파수 계산 (텔레메트리 pidLoopHz)
   loopCount++;
   uint32_t loopElapsedMs = nowMs - loopMarkerMs;
   if (loopElapsedMs >= 1000) {
@@ -127,6 +157,7 @@ static inline __attribute__((always_inline)) void pidBeginTick(PidLoopState &L, 
     loopMarkerMs = nowMs;
   }
   nowUs = micros();
+  // 실제 경과 시간 (초). 적분/미분에 dt 상수 대신 사용
   realDt = (nowUs - lastMicros) / 1e6f;
   // 광류 회전 상쇄는 실제 경과 시간이 필요하다. 아래 치환(>10 ms → 1 ms)을
   // 이력 적분에 쓰면 공백 동안의 회전을 잃는다.
@@ -171,11 +202,16 @@ static inline __attribute__((always_inline)) PidTickFlow pidReadImus(PidLoopStat
   auto &bodyAy = T.bodyAy;
   auto &bodyAz = T.bodyAz;
   // ---------- 센서 읽기 ----------
+  // 측정값은 참조 매개변수 e1/e2에 저장되고, 반환값(int)은 상태 코드다 (0 = 성공, 그 외 = 오류)
+  // 단 라이브러리의 spi_read()는 항상 0을 반환하므로 SPI 통신이 끊겨도 readStatus는 0이다
+  // → readStatus는 로그 출력용이고, 실질적인 통신 감시는 아래 checkFreeze()가 맡는다
   int readStatus1 = IMU1.getDataFromRegisters(e1);
   int readStatus2 = IMU2.getDataFromRegisters(e2);
   imuCalStep(readStatus1 == 0 && readStatus2 == 0, e1, e2);
 
   // 읽기 오류 시 event가 갱신되지 않으므로 동일 프레임으로 취급되어 freeze로 귀결된다.
+  //  - 데이터 준비 비트가 0 (MISO 0 고정 포함): event 갱신 안 됨 → 같은 값 반복
+  //  - MISO 1 고정 (모든 바이트 0xFF): event가 전부 -1로 갱신됨 → 역시 같은 값 반복
   // fault는 비행 중 자동 복구하지 않고 다음 수동 start 때만 재평가/해제한다.
   bool frozen1 = checkFreeze(fm1, e1, nowMs);
   bool frozen2 = checkFreeze(fm2, e2, nowMs);
@@ -195,6 +231,7 @@ static inline __attribute__((always_inline)) PidTickFlow pidReadImus(PidLoopStat
   }
 
   // IMU1 sensor frame 기준 각속도 (IMU2 축 정렬 + 개별 bias 보정)
+  // 실제값(dps) = 부호 × 원값 × GYRO_SCALE - bias
   float g1[3] = {
     e1.gyro[0]*GYRO_SCALE - gyro_bias1[0],
     e1.gyro[1]*GYRO_SCALE - gyro_bias1[1],
@@ -203,12 +240,18 @@ static inline __attribute__((always_inline)) PidTickFlow pidReadImus(PidLoopStat
     IMU2_SIGN_X*e2.gyro[0]*GYRO_SCALE - gyro_bias2[0],
     IMU2_SIGN_Y*e2.gyro[1]*GYRO_SCALE - gyro_bias2[1],
     IMU2_SIGN_Z*e2.gyro[2]*GYRO_SCALE - gyro_bias2[2] };
+  // 여기까지는 원시값 그대로. 이후는 LPF, body 변환, 융합, 자세 추정 등에서 쓰인다.
+
   // 소프트웨어 LPF. 제어와 IMU 불일치 판정 모두 필터된 각속도를 쓴다.
   // (진동으로 순간 차이가 15dps를 넘어 비행 중 disagree 컷이 나는 것을 방지)
   for (int k = 0; k < 3; k++) {
+    // LPF 적용 후 g1[k]에 갱신
     g1[k] = lpfG1[k].update(g1[k]);
+    // LPF 적용 후 g2[k]에 갱신
     g2[k] = lpfG2[k].update(g2[k]);
   }
+  // 가속도는 아직 LSB 단위 (× 부팅 배율 보정만). g 변환(ACCEL_SCALE)은 body 변환할 때 한다
+  //  accel_scale은 약 1.0인 단위 없는 배율이라 곱해도 LSB 단위가 유지된다. a2에는 축 부호(IMU2_SIGN)도 함께 곱한다
   float a1[3] = {
     (float)e1.accel[0] * accel_scale1,
     (float)e1.accel[1] * accel_scale1,
@@ -228,13 +271,17 @@ static inline __attribute__((always_inline)) PidTickFlow pidReadImus(PidLoopStat
   bool disagreeSample = false;
   if (!frozen1 && !frozen2) {
     for (int k = 0; k < 3; k++) {
+      // fabsf: float 절댓값 (<math.h>). 어느 IMU가 더 크든 차이의 크기만 비교한다
       if (fabsf(g1[k] - g2[k]) > GYRO_DISAGREE_DPS) disagreeSample = true;
     }
   }
   imu_disagree_now = disagreeSample;
 
   // latch된 센서는 비행 중 값이 다시 움직여도 자동 재투입하지 않는다.
+  // h = healthy (사용 가능)
   bool h1 = !fault_imu1, h2 = !fault_imu2;
+
+  // 여기까지 읽었어
 
   // ---------- IMU 융합 (진짜 redundancy) ----------
   // 둘 다 정상: 불일치 검사 후 평균 / 하나만 정상: 그것만 / 중재 불가: fault
@@ -252,6 +299,7 @@ static inline __attribute__((always_inline)) PidTickFlow pidReadImus(PidLoopStat
     disagreeSince = 0;
   }
 
+  // 융합(fused) 자이로/가속도 (IMU1 센서 축)
   float fg[3], fa[3];
   if (h1 && h2 && !fault_disagree) {
     for (int k = 0; k < 3; k++) { fg[k] = (g1[k]+g2[k])*0.5f; fa[k] = (a1[k]+a2[k])*0.5f; }
@@ -290,8 +338,13 @@ static inline __attribute__((always_inline)) PidTickFlow pidReadImus(PidLoopStat
     motorOut[0] = 1000; motorOut[1] = 1000; motorOut[2] = 1000; motorOut[3] = 1000;
     tgtRate[0] = 0.0f; tgtRate[1] = 0.0f; tgtRate[2] = 0.0f;
     stopMotors();
+    // 이번 tick의 나머지(자세 추정, PID)는 건너뛴다
     return PID_TICK_ENDED;
   }
+
+  // [센서 축 → body 축 변환] IMU1 센서 축과 기체(body) 축이 서로 달라 축을 바꿔 부른다
+  //  body x(roll) = 센서 y, body y(pitch) = -센서 x, body z(yaw) = -센서 z (gyro). accel z는 + 그대로
+  //  gyro z만 부호가 반대인 이유는 아래 주석 참고 (yaw 부호는 벤치 재검증 전까지 그대로 둠)
 
   // roll/pitch 자이로는 검증한 가속도 변환과 부호를 맞췄다. 뒤집힌 부호가 추정 지연과
   // 각속도 루프의 역감쇠를 일으켰었다.
@@ -330,8 +383,10 @@ static inline __attribute__((always_inline)) void pidEstimateAttitude(PidLoopSta
   auto &bodyAy = T.bodyAy;
   auto &bodyAz = T.bodyAz;
   // ---------- 자세 추정 (상보필터) ----------
+  // ① 자이로 적분: 각도 += 각속도 × dt (빠르고 부드럽지만 bias 때문에 천천히 틀어진다)
   angleX += bodyGx * realDt;
   angleY += bodyGy * realDt;
+  // yaw는 가속도로 보정할 수 없어 아주 작은 값은 버림
   if (fabsf(bodyGz) > YAW_DEADZONE) angleZ += bodyGz * realDt;
 
   // 위치 유지 중에는 광류로 잰 수평 가속도를 가속도계 값에서 빼서 기울기를
@@ -341,9 +396,11 @@ static inline __attribute__((always_inline)) void pidEstimateAttitude(PidLoopSta
     tiltAx += flowAccel.ax_ms2 / 9.81f;
     tiltAy += flowAccel.ay_ms2 / 9.81f;
   }
+  // ② 가속도로 구한 기울기: 정지 시 가속도 = 중력 방향 → atan2로 roll/pitch 계산 (안 틀어지지만 진동에 약하다)
   float alpha = compute_alpha(tiltAx, tiltAy, bodyAz);
   float accAngleX = atan2f(tiltAy, sqrtf(tiltAx*tiltAx + bodyAz*bodyAz)) * 180.0f / PI;
   float accAngleY = atan2f(-tiltAx, sqrtf(tiltAy*tiltAy + bodyAz*bodyAz)) * 180.0f / PI;
+  // ③ 섞기: 대부분(alpha ≈ 0.999)은 자이로, 아주 조금만 가속도 쪽으로 끌어당겨 드리프트를 없앤다
   angleX = alpha * angleX + (1.0f - alpha) * accAngleX;
   angleY = alpha * angleY + (1.0f - alpha) * accAngleY;
 
@@ -355,12 +412,14 @@ static inline __attribute__((always_inline)) void pidEstimateAttitude(PidLoopSta
         // 코어0 갱신이 코어1의 nowMs보다 미래일 수 있어 부호 있는 차이로 비교한다.
         && (int32_t)(nowMs - mag.sample_ms) <= (int32_t)MAG_STALE_MS
         && mag.x*mag.x + mag.y*mag.y + mag.z*mag.z > 1e-6f) {
+      // 모터 전류 자기 간섭 보정 (스로틀에 비례하는 성분 빼기)
       const float magThrDelta =
           (float)(base_throttle + altHoldAppliedPrevUs - MAG_THROTTLE_REF_US);
       mag.x -= mag_comp_x * magThrDelta;
       mag.y -= mag_comp_y * magThrDelta;
       mag.z -= mag_comp_z * magThrDelta;
       publishMagTelemetry(mag.x, mag.y, mag.z, false);
+      // 기울기 보정 heading → 기준 오프셋 적용 → angleZ를 K_MAG만큼 그쪽으로 끌어당김
       float heading = tiltCompensatedMagHeadingDeg(
           mag.x, mag.y, mag.z, angleX, angleY);
       if (isfinite(heading)) {
@@ -401,11 +460,13 @@ static inline __attribute__((always_inline)) void pidSafetyAndResume(PidLoopStat
   auto &bodyGy = T.bodyGy;
   auto &bodyGz = T.bodyGz;
   // ---------- 안전 검사 ----------
+  // 과도 기울기(60° 초과): 뒤집히는 중으로 보고 즉시 잠금. fault_attitude는 다음 start까지 유지
   if (fabsf(angleX) > SAFETY_ANGLE || fabsf(angleY) > SAFETY_ANGLE) {
     if (!fault_attitude) Serial.printf("[FAULT] OVER-TILT R:%.1f P:%.1f\n", angleX, angleY);
     fault_attitude = true;
     safety_lock = true;
   }
+  // resume: 하강을 멈추고 호버 스로틀로 조종을 돌려준다 (스로틀 창도 호버 ± CTRL_MARGIN으로 재설정)
   if (takeFailsafeResumeRequest()) {
     const ResumeRefusalReason refusal = resumeRefusalReason(nowMs);
     if (refusal != RESUME_ALLOWED) {
@@ -690,6 +751,8 @@ static inline __attribute__((always_inline)) void pidHoverAndFailsafe(PidLoopSta
   auto &heightFresh = T.heightFresh;
   auto &rlAltUs = T.rlAltUs;
   auto &rlHoldScale = T.rlHoldScale;
+  // 호버 스로틀 학습: 시동 중 + 정상 비행 + 수평 + 수직 가속 없음(|a|≈1g) + 이륙 스로틀 이상일 때만 샘플로 인정
+  // |accel| (g)
   const float accelMag =
       sqrtf(accX*accX + accY*accY + accZ*accZ);
   // 고도 유지가 collective 를 바꾸므로 hover 추정은 실제 collective 로 한다
@@ -737,6 +800,7 @@ static inline __attribute__((always_inline)) void pidHoverAndFailsafe(PidLoopSta
                             (int)lroundf(hover_est), FS_DESCENT_DELTA_US),
                         rl_base_ceiling);
   };
+  // [RC 끊김 처리 3갈래] 호버 추정 없음 → 즉시 컷 / 스로틀 ≤ 1150 (지상) → 즉시 컷 / 그 외 → 자동착륙 진입
   if (fs_phase == FS_NONE && !safety_lock && rcTimedOut(nowMs, lastRcMs)) {
     fault_rc = true;
     // resume 인계 중의 낮은 base 는 지상이라서가 아니라 인계 중이라서다. 그 base 로
@@ -752,6 +816,7 @@ static inline __attribute__((always_inline)) void pidHoverAndFailsafe(PidLoopSta
       safety_lock = true;
       Serial.println("[FAULT] RC TIMEOUT -> GROUND CUT");  // 한 번만
     } else {
+      // 자동착륙 진입: 현재 heading 유지, 진입 시각 기록, 착지 감지기 초기화, 프로브 딥 크기 계산
       fs_phase = FS_DESCENDING;
       fs_hold_yaw = angleZ;
       if (!fs_first_enter_valid) {
@@ -785,6 +850,7 @@ static inline __attribute__((always_inline)) void pidHoverAndFailsafe(PidLoopSta
   rlAltUs = 0;
   rlHoldScale = 1.0f;
   if (fs_phase == FS_DESCENDING) {
+    // 목표 자세 = 수평(트림만큼) + 진입 때 heading, yaw 회전 명령 없음
     targetAngleX = trim_roll;
     targetAngleY = trim_pitch;
     targetAngleZ = fs_hold_yaw;
@@ -992,6 +1058,7 @@ static inline __attribute__((always_inline)) PidTickFlow pidSafetyGate(PidLoopSt
   auto &bodyGx = T.bodyGx;
   auto &bodyGy = T.bodyGy;
   auto &bodyGz = T.bodyGz;
+  // [잠금 상태] 모든 제어 상태(적분, 목표, 필터)를 비우고 모터 정지. 다음 시동 때 이전 값이 튀지 않게 한다
   if (safety_lock) {
     if (fs_phase == FS_DESCENDING) fs_phase = FS_CUT_ABORT;
     mixer_scaled = false;
@@ -1030,12 +1097,14 @@ static inline __attribute__((always_inline)) void pidOuterLoop(PidLoopState &L, 
   // ---------- Outer loop (250Hz): 각도 -> 목표 각속도 ----------
   // yaw는 각속도 명령 + 자동 heading 잠금. hold가 아닌 동안 setpoint를
   // 매 tick 현재 heading으로 슬레이빙해 stale setpoint를 원천 차단한다.
+  // ① yaw 권한 감시: 직전 tick의 yaw_scale로 상태 갱신. 여기까지 왔으면 시동 중·잠금 아님이라 armed=true, locked=false
   updateYawAuthority(
       yawAuthority, mixer_yaw_scale, targetYawRate, bodyGz,
       true, fs_phase != FS_NONE, false, nowMs,
       YAW_RATE_DEADZONE, YAW_HOLD_SETTLE_DPS);
   yaw_authority_state = static_cast<int>(yawAuthority.state);
 
+  // ② 정상 yaw 명령(잠금/각속도) 계산 → ③ 권한 상태가 NORMAL이 아니면 "회전 멈추기"로 대체
   const YawOuter yawOuter = updateYawOuter(
       targetYawRate, bodyGz, angleZ, targetAngleZ,
       yaw_hold_now, yaw_hold_override,
@@ -1049,6 +1118,9 @@ static inline __attribute__((always_inline)) void pidOuterLoop(PidLoopState &L, 
   yaw_hold_now = yawCommand.hold;
 
   if (forceOuterRecompute) outerCnt = 0;
+  // 4 tick에 한 번(250Hz): 각도 오차 × Kp_Angle = 목표 각속도 (±300dps 제한)
+  //  예) 목표 0°, 현재 5° 기울어짐, Kp 6 → -30dps로 되돌리라는 명령
+  // 권한 부족 상태에서는 나머지 tick에서도 yaw 목표 각속도를 0으로 유지한다
   if (outerCnt == 0) {
     // 위치 유지 보정은 조종+트림 목표에 같은 부호로 더한다(flow_hold.h).
     const float rollTarget = constrain(targetAngleX + holdRollDeg,
@@ -1092,6 +1164,7 @@ static inline __attribute__((always_inline)) void pidInnerLoop(PidLoopState &L, 
   auto &pidPitch = T.pidPitch;
   auto &pidYaw = T.pidYaw;
   // ---------- Inner loop (1kHz): 각속도 PID ----------
+  // 오차 = 목표 각속도 - 실제 각속도 (dps)
   eRoll  = targetRateRoll  - bodyGx;
   ePitch = targetRatePitch - bodyGy;
   eYaw   = targetRateYaw   - bodyGz;
@@ -1102,9 +1175,11 @@ static inline __attribute__((always_inline)) void pidInnerLoop(PidLoopState &L, 
   float dYaw   = lpfD_Yaw.update((bodyGz - prevGyroZ) / realDt);
   prevGyroX = bodyGx; prevGyroY = bodyGy; prevGyroZ = bodyGz;
 
+  // 이번 tick 출력에 쓰는 I항 (적분 갱신은 allocator 결과를 본 뒤 아래에서 한다)
   iRollUsed = iTermRoll;
   iPitchUsed = iTermPitch;
   iYawUsed = iTermYaw;
+  // PID 출력(µs) = Kp × 오차 + I항 - Kd × (각속도 변화율). D는 오차가 아니라 측정값 미분이라 부호가 -
   pidRoll  = Kp_Rate_Roll *eRoll  + iRollUsed  - Kd_Rate_Roll *dRoll;
   pidPitch = Kp_Rate_Pitch*ePitch + iPitchUsed - Kd_Rate_Pitch*dPitch;
   // yaw 각도 유지가 꺼져 있어도 rate 감쇠(target 0)는 항상 동작한다.
@@ -1141,14 +1216,17 @@ static inline __attribute__((always_inline)) PidTickFlow pidMixAndOutput(PidLoop
   const int throttle = base_throttle + altHoldUs;
   const int mixMin = constrain(min_throttle + altHoldUs, 1050, 1900);
   const int mixMax = constrain(max_throttle + altHoldUs, 1050, 1900);
+  // PID 출력 3개 + 스로틀 → 모터 4개 (범위를 넘으면 roll/pitch > yaw > 스로틀 순으로 지킨다)
   MotorMix mix = mixAndDesaturate(pidRoll, pidPitch, pidYaw,
                                   throttle, mixMin, mixMax);
+  // 다음 tick updateYawAuthority()의 입력
   mixer_yaw_scale = mix.yaw_scale;
   rl_requested_collective_us = throttle;
   rl_delivered_collective_us = mix.collective_us;
   publishAllocationTelemetry(
       mix, pidRoll, pidPitch, pidYaw,
       iRollUsed, iPitchUsed, iYawUsed, yaw_authority_state, throttle);
+  // 프로브 딥 중이면: 실제로 내려간 스로틀(기준 - 적용 collective)이 요청 딥의 80% 이상인지 확인
   if (checkProbeDelivery) {
     const float deliveredUs =
         (float)probeReferenceThrottle - mix.collective_us;
@@ -1188,6 +1266,7 @@ static inline __attribute__((always_inline)) PidTickFlow pidMixAndOutput(PidLoop
     enterLockedState(wasLocked);
     return PID_TICK_ENDED;
   }
+  // 최종 PWM 출력 (FL, RR, FR, RL) + 텔레메트리용 복사
   writeMotor(pinM1, mix.motor[0]);
   writeMotor(pinM2, mix.motor[1]);
   writeMotor(pinM3, mix.motor[2]);
@@ -1198,17 +1277,30 @@ static inline __attribute__((always_inline)) PidTickFlow pidMixAndOutput(PidLoop
   return PID_TICK_GO_ON;
 }
 
+// [pid_task 한 tick(1ms) 흐름 정리]
+//  1) 대기 중인 start/stop 요청 반영 → 2) 두 IMU 읽기, freeze 검사, 원시값 게시
+//  3) bias/부호/LPF 보정 → 두 IMU 융합(평균 또는 한쪽만) → body 축 변환
+//  4) 자세 추정(상보필터) + 250Hz로 자기계 yaw 보정
+//  5) 안전 검사(과도 기울기, resume, RC 끊김 → 자동착륙) → 잠금이면 모터 끄고 다음 tick
+//  6) 바깥 루프(250Hz): 각도 오차 → 목표 각속도 / yaw 잠금·권한 감시
+//  7) 안쪽 루프(1kHz): 각속도 PID → allocator로 모터 분배 → 조건부 적분 → PWM 출력
 void pid_task(void *pv) {
   // 모터 정지 수단(stopMotors, RC timeout 검사)이 모두 이 태스크 안에 있으므로,
   // SPI 행업 등으로 태스크가 블로킹되면 모터가 마지막 PWM으로 고정된다.
   // 태스크 워치독이 panic 재부팅을 강제하고, 재부팅 후 ESC는 PWM 신호
   // 소실로 정지하며 setup()의 stopMotors()가 정지 신호를 복원한다.
+  // [비행 중 발동 시] 모터가 멈춰 기체는 그대로 떨어진다. 재부팅 후에도 safety_lock=true로 시작하고
+  // 비행 상태를 복구하는 로직이 없어 자동착륙도 하지 않는다. 멈춘 태스크를 살리는 장치가 아니라
+  // 제어 없이 모터가 계속 도는 것을 막는 안전장치다. 설정은 setup()의 wdt_config 참고
+  // 현재 태스크(NULL = 자기 자신)를 감시 대상으로 등록. 루프의 esp_task_wdt_reset()이 500ms 끊기면 발동
   esp_task_wdt_add(NULL);
 
   PidLoopState L;
 
   while (true) {
+    // 직전 기상 시각 + 1ms까지 잠든다 → 실행 시간과 무관하게 일정한 1kHz
     vTaskDelayUntil(&L.wake, L.period);
+    // 워치독에 "살아 있음" 보고. 500ms 동안 못 하면 재부팅
     esp_task_wdt_reset();
     PidTick T;
     pidBeginTick(L, T);

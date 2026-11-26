@@ -6,6 +6,11 @@
 // 6. Gyro bias 캘리브레이션
 // ==========================================================
 // sign[]은 각 IMU를 drone(IMU1) frame으로 맞추는 부호.
+// 정지 상태에서 1ms 간격으로 2000개를 읽어
+//  bias_out       : 축별 자이로 평균 (정지 중이면 진짜 각속도는 0이므로 평균 = 영점 오차)
+//  sd_out         : 축별 표준편차 (크면 캘리브레이션 중 기체가 움직였다는 뜻)
+//  accel_mean_out : |accel| 평균 (정지 중이면 1g여야 함 → 가속도 배율 보정에 사용)
+// 분산 = E[x²] - (E[x])² 으로 한 번 훑으면서 평균과 표준편차를 같이 구한다
 static bool measure_imu_bias(ICM42670 &imu, const float sign[3],
                              float bias_out[3], float sd_out[3],
                              float &accel_mean_out) {
@@ -46,6 +51,7 @@ static bool measure_imu_bias(ICM42670 &imu, const float sign[3],
   return true;
 }
 
+// 정지 시 |accel| 평균이 1g가 되도록 하는 배율 = 1 / 평균. 0.8~1.2g 밖이면 센서 이상으로 보고 보정하지 않음(1.0)
 static float guarded_accel_scale(float accel_mean_g, const char *imu_name) {
   if (accel_mean_g < ACCEL_CAL_MIN_G || accel_mean_g > ACCEL_CAL_MAX_G) {
     Serial.printf(
@@ -56,6 +62,8 @@ static float guarded_accel_scale(float accel_mean_g, const char *imu_name) {
   return 1.0f / accel_mean_g;
 }
 
+// 부팅 시 두 IMU의 자이로 bias와 가속도 배율을 측정. 움직임(표준편차 > 1dps)이 감지되면 최대 3번 다시 시도
+// 실패하면 calibration_ok = false → start 명령이 거부된다
 static bool calibrate_bias() {
   float sd1[3], sd2[3];
   accel_scale1 = 1.0f;

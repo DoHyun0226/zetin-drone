@@ -5,10 +5,16 @@
 // ==========================================================
 // 4. 시스템 변수
 // ==========================================================
+// [코어 분담] Core 1 = pid_task(1kHz 제어), Core 0 = udp_task(명령 수신/텔레메트리/자기계/광류)
+//  두 코어가 같이 쓰는 변수는 volatile 또는 portMUX(임계구역)로 보호한다
+// UDP 소켓 (udp_task만 사용)
 WiFiUDP   udp;
+// 받은 명령 문자열 버퍼
 char      packetBuffer[256];
+// 마지막으로 명령을 보낸 노트북 주소 → 텔레메트리 목적지
 IPAddress laptopIP;
 int       laptopPort            = 0;
+// 노트북에서 패킷을 한 번이라도 받았는가 (그 전엔 보낼 곳이 없음)
 volatile bool connectionEstablished = false;
 
 // startGyro/startAccel은 ODR·FSR만 설정하고 UI 필터 대역폭은 칩 전원
@@ -25,6 +31,8 @@ public:
   }
 };
 
+// 같은 SPI 버스, CS 핀으로 구분
 ICM42670WithLPF IMU1(SPI, SPI_CS1);
 ICM42670WithLPF IMU2(SPI, SPI_CS2);
+// BMM350 자기계, I2C 주소 0x14
 DFRobot_BMM350_I2C bmm(&Wire, 0x14);

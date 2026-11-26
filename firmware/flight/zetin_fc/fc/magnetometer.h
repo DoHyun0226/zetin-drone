@@ -3,25 +3,41 @@
 // 것을 그대로 쓰므로 단독으로 include 하지 않는다. 순서와 모듈 지도는 zetin_fc/README.md.
 #pragma once
 // Core 0 writer -> Core 1 reader. 짝수 seq만 완성된 벡터다.
+// "mag 1": 자기계를 yaw 융합에 사용
 volatile bool  mag_enabled = false;
+// BMM350 초기화 완료
 volatile bool  mag_ready = false;
+// "magcal 1": 캘리브레이션용 원시값 수집 중
 volatile bool  mag_calibrating = false;
+// 보정된 최신 자기장 (Core 0 → Core 1)
 volatile float magFieldX = 0.0f, magFieldY = 0.0f, magFieldZ = 0.0f;
+// 마지막 기울기 보정 heading (텔레메트리)
 volatile float magHeading = 0.0f;
+// 텔레메트리로 보낼 자기장
 volatile float magTelemX = 0.0f, magTelemY = 0.0f, magTelemZ = 0.0f;
+// 위 값이 캘리브레이션용 원시값인가
 volatile bool magTelemCalActive = false;
+// 최신 자기장 측정 시각
 volatile uint32_t magSampleMs = 0;
+// 한 번이라도 측정값이 들어왔는가
 volatile bool magSampleValid = false;
+// 다음 융합 때 기준 오프셋을 다시 잡아라
 volatile bool mag_reference_pending = true;
 
+// 자기계 관련 공유 변수 보호
 portMUX_TYPE magSnapshotMux = portMUX_INITIALIZER_UNLOCKED;
+// 나침반 heading(자북 기준)을 angleZ 기준으로 옮기는 오프셋 = angleZ - heading (기준을 잡는 순간 값)
+//  mag을 켜거나 start로 angleZ를 0으로 만들 때 다시 잡는다 → 그 순간 오차가 0이라 갑자기 북쪽으로 도는 일이 없다
 float magYawReferenceOffset = 0.0f;
 
+// 캘리브레이션 중 축별 최소/최대 (span 출력용. 실제 보정값은 PC의 magcal_fit.py가 계산)
 float magCalMin[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
 float magCalMax[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
 uint32_t magCalSampleCount = 0;
+// 마지막 BMM350 읽기 시각 (20ms 간격 유지)
 uint32_t lastMagReadMs = 0;
 
+// [Core 0 → Core 1] 보정된 자기장 최신값을 게시 / 읽기 (publish = 쓰는 쪽, read = 읽는 쪽)
 static inline void publishMagSample(
     float x, float y, float z, uint32_t sample_ms) {
   // I2C 읽기는 이 잠금 전에 끝난다. 임계구역은 네 워드만 게시하므로 pid_task 가
@@ -46,6 +62,7 @@ static inline bool readMagSnapshot(MagSnapshot &snapshot) {
   return valid;
 }
 
+// 텔레메트리로 보낼 자기장 값을 게시. calibration_raw=true면 캘리브레이션용 원시값, false면 간섭 보정까지 끝난 값
 static inline void publishMagTelemetry(
     float x, float y, float z, bool calibration_raw) {
   portENTER_CRITICAL(&magSnapshotMux);
@@ -70,6 +87,7 @@ static inline void readMagTelemetry(
   portEXIT_CRITICAL(&magSnapshotMux);
 }
 
+// 다음 자기계 융합 때 magYawReferenceOffset을 다시 잡으라고 요청 / 그 요청을 꺼내며 지우기
 static inline void requestMagReferenceUpdate() {
   portENTER_CRITICAL(&magSnapshotMux);
   mag_reference_pending = true;
@@ -84,11 +102,14 @@ static inline bool takeMagReferenceRequest() {
   return requested;
 }
 
+// BMM350 자기계 초기화 (처음 한 번만). delay(100)와 I2C 통신으로 블로킹되므로 Core 0에서, 가능하면 시동 해제 상태에서 호출
 static bool initMagnetometer() {
   if (mag_ready) return true;
 
   pinMode(LDO_SHD, OUTPUT);
+  // 자기계 전원 켜기
   digitalWrite(LDO_SHD, HIGH);
+  // 전원 안정화 대기
   delay(100);
   Wire.begin(BMM_SDA, BMM_SCL);
   uint8_t status = bmm.begin();
@@ -99,11 +120,14 @@ static bool initMagnetometer() {
   bmm.setOperationMode(eBmm350NormalMode);
   bmm.setRate(BMM350_DATA_RATE_50HZ);
   mag_ready = true;
+  // 다음 udp_task 반복에서 바로 첫 샘플을 읽도록
   lastMagReadMs = millis() - MAG_SAMPLE_PERIOD_MS;
   Serial.println("[MAG] BMM350 ready @50Hz");
   return true;
 }
 
+// "magcal 1": 캘리브레이션 시작. 융합을 끄고 원시값을 텔레메트리로 내보낸다
+//  기체를 여러 방향으로 돌린 뒤 "magcal 0" → PC에서 CSV를 magcal_fit.py로 타원 피팅해 MAG_HARD_IRON/SOFT_IRON을 구한다
 static void startMagCalibration() {
   portENTER_CRITICAL(&magSnapshotMux);
   const bool alreadyActive = mag_calibrating;
@@ -127,6 +151,7 @@ static void startMagCalibration() {
   Serial.println("[MAGCAL] logging raw XYZ; rotate drone, then send 'magcal 0'");
 }
 
+// "magcal 0": 캘리브레이션 종료. 텔레메트리를 보정값으로 되돌리고 축별 span(최대-최소)을 출력한다
 static void stopMagCalibration() {
   MagSnapshot calibrated = {};
   const bool have_sample =
@@ -161,6 +186,8 @@ static void stopMagCalibration() {
       "[MAGCAL] save the telemetry CSV and run scripts/drone_logs.py magcal <flight_log.csv>");
 }
 
+// 자기계 보정: out = body_sign × (SOFT_IRON 행렬 × (raw - HARD_IRON))
+//  1) hard-iron을 빼 타원의 중심을 원점으로 옮기고  2) soft-iron 행렬로 타원을 구로 편 뒤  3) 축 부호를 body에 맞춘다
 static inline void applyMagCalibration(
     const float raw[3], const float hard_iron[3],
     const float soft_iron[3][3], float out[3]) {
@@ -181,6 +208,7 @@ static inline void applyMagCalibration(
   }
 }
 
+// [Core 0] 20ms(50Hz)마다 BMM350을 읽어 보정 후 Core 1에 게시. 캘리브레이션 중이면 원시값도 함께 내보낸다
 static void sampleMagnetometer(uint32_t now_ms) {
   if (!mag_ready || now_ms - lastMagReadMs < MAG_SAMPLE_PERIOD_MS) return;
   lastMagReadMs = now_ms;

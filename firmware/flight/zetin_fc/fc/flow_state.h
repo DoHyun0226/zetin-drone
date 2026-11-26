@@ -3,12 +3,17 @@
 // 것을 그대로 쓰므로 단독으로 include 하지 않는다. 순서와 모듈 지도는 zetin_fc/README.md.
 #pragma once
 // 3901-L0X 상태. udp_task 만 쓰고 sendTelemetry 가 읽는다(같은 코어).
+// UART 바이트 파서 상태
 MspSensorParser mspSensor;
+// 라이다 거리 (mm)
 volatile int32_t msp_range_mm = 0;
 volatile int     msp_range_quality = -1;   // -1 = 신선한 프레임 없음
+// 광류 이동량
 volatile int32_t msp_flow_x = 0, msp_flow_y = 0;
 volatile int     msp_flow_quality = -1;
+// 마지막 라이다 프레임 수신 시각 (신선도 판단)
 uint32_t msp_last_range_ms = 0;
+// 마지막 광류 프레임 수신 시각
 uint32_t msp_last_flow_ms = 0;
 uint16_t msp_reported_unknown = 0;         // 같은 ID 를 반복해 찍지 않기 위해
 

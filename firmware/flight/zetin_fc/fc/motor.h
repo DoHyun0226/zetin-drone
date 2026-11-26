@@ -5,11 +5,14 @@
 // ==========================================================
 // 5. 모터
 // ==========================================================
+// 펄스 폭(µs)을 LEDC 듀티 값으로 바꿔 출력. 예) 1500µs → 1500 × 16383 / 2500 ≈ 9830
 void writeMotor(int pin, int us) {
+  // ESC가 이해하는 범위 밖은 자른다
   us = constrain(us, 1000, 2000);
   uint32_t duty = ((uint32_t)us * ESC_MAXDUTY) / ESC_PERIOD;
   ledcWrite(pin, duty);
 }
+// 모터 4개 모두 1000µs(정지 신호)
 void stopMotors() {
   writeMotor(pinM1, 1000); writeMotor(pinM2, 1000);
   writeMotor(pinM3, 1000); writeMotor(pinM4, 1000);

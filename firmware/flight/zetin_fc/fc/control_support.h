@@ -5,6 +5,9 @@
 // ==========================================================
 // 7. 자세 추정용 적응 alpha (가속도 신뢰도 기반)
 // ==========================================================
+// [상보필터 alpha] angle = alpha × (자이로 적분 각도) + (1 - alpha) × (가속도로 계산한 각도)
+//  가속도는 중력 방향을 알려 주지만 기체가 가감속하면 틀린다 → |accel|이 1g에서 멀수록 가속도를 덜 믿는다
+//  |accel| - 1g 편차 < 0.10g : ALPHA_STATIC / < 0.30g : ALPHA_NORMAL / 그 이상 : ALPHA_DYN (가속도 거의 무시)
 const float ACC_DEV_SOFT = 0.10f, ACC_DEV_HARD = 0.30f;
 // 1kHz 루프 기준 시정수 tau ≈ dt/(1-alpha): 0.999→1s, 0.9995→2s, 0.9998→5s.
 // 이전 값(0.99, tau 0.1s)은 250Hz legacy 루프에서 온 것으로, 1kHz에서는
@@ -24,6 +27,7 @@ static inline void enterLockedState(bool &wasLocked) {
   wasLocked = true;
 }
 
+// allocator 텔레메트리를 "포화 없음" 기본값으로 되돌린다 (잠금/고장 시)
 static inline void resetAllocationTelemetry() {
   portENTER_CRITICAL(&allocationTelemetryMux);
   mixer_scaled = false;
@@ -34,6 +38,7 @@ static inline void resetAllocationTelemetry() {
   portEXIT_CRITICAL(&allocationTelemetryMux);
 }
 
+// [Core 1 → Core 0] 이번 tick allocator 결과와 PID 값을 텔레메트리 스냅샷으로 게시
 static inline void publishAllocationTelemetry(
     const MotorMix &mix, float pidRoll, float pidPitch, float pidYaw,
     float iRoll, float iPitch, float iYaw, int yawAuthorityState,
